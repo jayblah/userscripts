@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Goon View
 // @namespace    http://tampermonkey.net/
-// @version      1.3.2
+// @version      1.2.0
 // @description  Streamlined media viewing experience for SimpCity.cr with tooltips, floating control panel, and built-in gallery.
 // @author       JR
 // @match        *://simpcity.*/threads/*
@@ -39,7 +39,7 @@
     isExpanded: false,
     shadow: null,
     isDragging: false,
-    focusInterval: null,
+    focusInterval: null, // Restored
     _lastWheel: 0,
 
     refreshMediaList() {
@@ -149,7 +149,6 @@
       s.getElementById("btn-gallery").onclick = () => this.openGallery(0);
 
       const overlay = s.getElementById("overlay");
-
       overlay.onclick = (e) => {
         if (e.target === overlay || e.target.id === "media-container")
           this.closeGallery();
@@ -162,14 +161,12 @@
           (hovered.tagName === "VIDEO" || hovered.tagName === "IFRAME")
         )
           return;
-
         e.preventDefault();
         const now = Date.now();
         if (now - this._lastWheel < 180) return;
         this._lastWheel = now;
         this.openGallery(e.deltaY > 0 ? 1 : -1);
       };
-
       overlay.addEventListener("wheel", handleWheel, { passive: false });
 
       const dragHdr = s.getElementById("gv-drag");
@@ -208,6 +205,7 @@
       overlay.style.display = "flex";
       document.body.classList.add("gv-noscroll");
 
+      // RESTORED FOCUS TRAP
       if (!this.focusInterval) {
         this.focusInterval = setInterval(() => {
           const trap = this.shadow.getElementById("sc-focus-trap");
@@ -215,7 +213,15 @@
         }, 200);
       }
 
+      // Cleanup logic
+      const oldVideo = container.querySelector("video");
+      if (oldVideo) {
+        oldVideo.pause();
+        oldVideo.src = "";
+        oldVideo.load();
+      }
       container.innerHTML = "";
+
       let el;
       if (current.tagName === "IMG") {
         el = new Image();
@@ -241,10 +247,20 @@
     },
 
     closeGallery() {
-      clearInterval(this.focusInterval);
-      this.focusInterval = null;
+      if (this.focusInterval) {
+        clearInterval(this.focusInterval);
+        this.focusInterval = null;
+      }
+      const container = this.shadow.getElementById("media-container");
+      const video = container.querySelector("video");
+      if (video) {
+        video.pause();
+        video.src = "";
+        video.load();
+      }
+
       this.shadow.getElementById("overlay").style.display = "none";
-      this.shadow.getElementById("media-container").innerHTML = "";
+      container.innerHTML = "";
       document.body.classList.remove("gv-noscroll");
       window.focus();
     },
