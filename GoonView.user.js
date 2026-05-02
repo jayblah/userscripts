@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Goon View
 // @namespace    http://tampermonkey.net/
-// @version      1.3.4
-// @description  Streamlined media viewing experience for SimpCity.cr.
+// @version      1.4.0
+// @description  Streamlined media viewing experience for SimpCity.cr with Mobile & Keyboard updates.
 // @author       JR
 // @match        *://simpcity.*/threads/*
 // @exclude      *://simpcity.com/*
@@ -20,10 +20,6 @@
     panelLeft: "gv_p_left",
   };
 
-  /**
-   * PERSISTENCE LAYER
-   * Proxy handles automatic saving to Tampermonkey storage and UI syncing
-   */
   const settings = new Proxy(
     {
       includeVideos: GM_getValue(SETTINGS_MAP.includeVideos, true),
@@ -47,6 +43,7 @@
     shadow: null,
     _lastWheel: 0,
     _wheelThrottle: 180,
+    _touchStart: { x: 0, y: 0 },
 
     init() {
       this.injectGlobalStyles();
@@ -104,7 +101,7 @@
         #overlay {
           position: fixed; inset: 0; background: rgba(0,0,0,0.98); display: none;
           align-items: center; justify-content: center; z-index: 10000;
-          backdrop-filter: blur(4px); outline: none;
+          backdrop-filter: blur(4px); outline: none; touch-action: none;
         }
         .z-hint {
           position: absolute; color: var(--teal); font-size: 11px; font-weight: 900;
@@ -140,7 +137,7 @@
         </div>
         <div id="overlay" tabindex="-1">
           <button id="focus-trap"></button>
-          <div class="z-hint">[A / ←] PREV | [D / →] NEXT | [WHEEL] NAV | [W / ESC] EXIT</div>
+          <div class="z-hint">[A / ←] PREV | [D / →] NEXT | [W / ↑ / ESC] EXIT</div>
           <div id="media-container"></div>
           <div class="counter" id="gv-counter"></div>
         </div>
@@ -151,12 +148,10 @@
       const btnExpand = this.shadow.getElementById("btn-expand");
       const btnVideo = this.shadow.getElementById("btn-video");
 
-      // Update Expand Button
       btnExpand.innerHTML = this.isExpanded
         ? "COLLAPSE ALL"
         : "E<u>X</u>PAND ALL";
 
-      // Update Video Button while preserving underlining
       btnVideo.innerHTML = `<u>V</u>IDEO: ${settings.includeVideos ? "ON" : "OFF"}`;
       btnVideo.classList.toggle("active", settings.includeVideos);
     },
@@ -187,9 +182,34 @@
       this.updateUI();
     },
 
+    // Mobile Swipe Handling
+    handleTouchStart(e) {
+      this._touchStart.x = e.changedTouches[0].screenX;
+      this._touchStart.y = e.changedTouches[0].screenY;
+    },
+
+    handleTouchEnd(e) {
+      const xEnd = e.changedTouches[0].screenX;
+      const yEnd = e.changedTouches[0].screenY;
+      const dx = xEnd - this._touchStart.x;
+      const dy = yEnd - this._touchStart.y;
+      const threshold = 50;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (Math.abs(dx) > threshold) {
+          this.openGallery(dx > 0 ? -1 : 1);
+        }
+      } else {
+        if (Math.abs(dy) > threshold) {
+          this.closeGallery();
+        }
+      }
+    },
+
     bindInternalEvents() {
       const s = this.shadow;
       const panel = s.getElementById("gv-panel");
+      const overlay = s.getElementById("overlay");
 
       s.addEventListener("click", (e) => {
         const btn = e.target.closest(".btn");
@@ -211,6 +231,7 @@
           this.closeGallery();
       });
 
+      // Panel Dragging
       const dragHdr = s.getElementById("gv-drag");
       dragHdr.addEventListener("pointerdown", (e) => {
         const startX = e.clientX - panel.offsetLeft;
@@ -230,7 +251,8 @@
         dragHdr.addEventListener("pointerup", up);
       });
 
-      s.getElementById("overlay").addEventListener(
+      // Gallery Scroll Nav
+      overlay.addEventListener(
         "wheel",
         (e) => {
           const hovered = s.elementFromPoint(e.clientX, e.clientY);
@@ -243,6 +265,14 @@
         },
         { passive: false },
       );
+
+      // Mobile Touch Listeners
+      overlay.addEventListener("touchstart", (e) => this.handleTouchStart(e), {
+        passive: true,
+      });
+      overlay.addEventListener("touchend", (e) => this.handleTouchEnd(e), {
+        passive: true,
+      });
     },
 
     async openGallery(dir = 0) {
@@ -276,6 +306,8 @@
         el.controls = true;
         el.loop = true;
         el.autoplay = true;
+        el.muted = false;
+        el.setAttribute("playsinline", ""); // Essential for mobile autoplay
       } else {
         el = document.createElement("iframe");
         let src =
@@ -318,7 +350,6 @@
             this.shadow.getElementById("overlay").style.display === "flex";
           const key = e.key.toLowerCase();
 
-          // Standard Global Actions
           if (key === "g") {
             e.preventDefault();
             this.openGallery(0);
@@ -335,11 +366,11 @@
             return;
           }
 
-          // Gallery Navigation
           if (isVisible) {
             const actions = {
               escape: () => this.closeGallery(),
               w: () => this.closeGallery(),
+              arrowup: () => this.closeGallery(), // UP TO CLOSE
               a: () => this.openGallery(-1),
               arrowleft: () => this.openGallery(-1),
               d: () => this.openGallery(1),
@@ -356,7 +387,6 @@
         true,
       );
 
-      // Focus Sentinel to combat video/iframe focus theft
       window.addEventListener("blur", () => {
         const overlay = this.shadow.getElementById("overlay");
         if (overlay?.style.display === "flex") {

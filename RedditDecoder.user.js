@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Reddit Binary and NATO Decoder
 // @namespace    http://tampermonkey.net/
-// @version      1.0.2
+// @version      1.0.3
 // @description  Decodes NATO and Binary codes in Reddit comments with one-click search for Instagram, TikTok, OnlyFans, Fansly, and SimpCity.
 // @author       JR
 // @license      MIT
@@ -65,7 +65,6 @@
     space: " ",
   };
 
-  // Pre-sort keys by length descending to prevent partial matching (e.g., matching "alfa" before "alfabet")
   const NATO_WORDS = Object.keys(NATO_ALPHABET).sort(
     (a, b) => b.length - a.length,
   );
@@ -74,7 +73,13 @@
     `\\b(?:${NATO_WORDS.join("|")})(?:[\\s,.-]+(?:${NATO_WORDS.join("|")}))*\\b`,
     "gi",
   );
-  const binaryPattern = /(?:\b[01]{8}\b[\s]*){2,}/g;
+
+  /**
+   * UPDATED REGEX:
+   * Looks for sequences of 0s and 1s that are multiples of 8.
+   * Handles both spaced binary (01100001 01100010) and mashed binary (0110000101100010).
+   */
+  const binaryPattern = /\b(?:[01]{8}[\s]?){2,}\b/g;
 
   function buildSocialSearchURL(q) {
     const query = `${q} (site:instagram.com OR site:tiktok.com OR site:onlyfans.com OR site:fansly.com OR site:simpcity.cr)`;
@@ -166,14 +171,22 @@
   }
 
   function binaryToText(b) {
+    // Remove all whitespace for processing
     const clean = b.replace(/\s/g, "");
     if (clean.length % 8 !== 0) return null;
+
     let res = "";
     for (let i = 0; i < clean.length; i += 8) {
-      const char = parseInt(clean.substr(i, 8), 2);
-      if ((char >= 32 && char <= 126) || [9, 10, 13].includes(char)) {
-        res += String.fromCharCode(char);
-      } else return null;
+      const charCode = parseInt(clean.substr(i, 8), 2);
+      // Only include printable ASCII characters
+      if (
+        (charCode >= 32 && charCode <= 126) ||
+        [9, 10, 13].includes(charCode)
+      ) {
+        res += String.fromCharCode(charCode);
+      } else {
+        return null; // Invalid character for standard text codes
+      }
     }
     return res;
   }
@@ -186,11 +199,12 @@
     if (binMatches) {
       binMatches.forEach((m) => {
         const decoded = binaryToText(m);
-        if (decoded)
+        if (decoded && decoded.trim().length > 0) {
           node.parentNode.insertBefore(
             createTranslationComponent("binary", decoded),
             node.nextSibling,
           );
+        }
       });
     }
 
@@ -198,11 +212,12 @@
     const natoMatches = text.match(natoPattern);
     if (natoMatches) {
       const decoded = natoToText(natoMatches.join(" "));
-      if (decoded)
+      if (decoded) {
         node.parentNode.insertBefore(
           createTranslationComponent("nato", decoded),
           node.nextSibling,
         );
+      }
     }
   }
 
@@ -222,12 +237,10 @@
     nodes.forEach(processTextNode);
   }
 
-  // Efficient scanning using MutationObserver
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       mutation.addedNodes.forEach((node) => {
         if (node.nodeType === 1) {
-          // ELEMENT_NODE
           COMMENT_SELECTORS.forEach((selector) => {
             const paragraphs = node.matches?.(selector)
               ? node.querySelectorAll("p")
@@ -241,10 +254,8 @@
 
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Handle Selection Popup
   let selectionPopup = null;
   document.addEventListener("mouseup", (e) => {
-    // Small delay to let the browser finalize the selection
     setTimeout(() => {
       const selection = window.getSelection();
       const selText = selection.toString().trim();
@@ -254,7 +265,6 @@
         COMMENT_SELECTORS.some((s) => e.target.closest(s))
       ) {
         if (!selectionPopup) selectionPopup = createSelectionPopup();
-
         const range = selection.getRangeAt(0);
         const rect = range.getBoundingClientRect();
 
@@ -272,7 +282,6 @@
     }, 50);
   });
 
-  // Initial manual scan for comments already on page
   const initialScan = () => {
     COMMENT_SELECTORS.forEach((s) =>
       document.querySelectorAll(`${s} p`).forEach(scanParagraph),
@@ -280,5 +289,5 @@
   };
   initialScan();
 
-  console.log("Reddit Multi Code Decoder Loaded (Observer Mode)");
+  console.log("Reddit Multi Code Decoder Loaded (v1.0.3)");
 })();
