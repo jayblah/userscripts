@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name         Goon Finder - Cross-Platform Leak Seeker
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
-// @description  Cross-checks profiles on OF, Fansly, IG, and TikTok against SimpCity and Coomer.
+// @version      1.0.2
+// @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SimpCity and Coomer.
 // @author       JR
 // @match        https://onlyfans.com/*
 // @match        https://fansly.com/*
 // @match        https://fantrie.com/*
 // @match        https://www.instagram.com/*
 // @match        https://www.tiktok.com/*
+// @match        https://app.fanfix.io/*
 // @match        *://*.coomer.st/*
 // @grant        GM.xmlHttpRequest
 // @grant        GM_addStyle
@@ -38,6 +39,9 @@
       "about",
       "legal",
       "p",
+      "feed",
+      "messages",
+      "discover",
     ]),
   };
 
@@ -94,10 +98,14 @@
     const parts = pathname.split("/").filter(Boolean);
     if (!parts.length || CONFIG.IGNORED_PATHS.has(parts[0])) return null;
 
-    if (hostname.includes("tiktok.com"))
+    // Fanfix and TikTok often use @username
+    if (hostname.includes("tiktok.com") || hostname.includes("fanfix.io")) {
       return parts[0].startsWith("@") ? parts[0].slice(1) : parts[0];
+    }
+
     if (hostname.includes("fansly.com"))
       return pathname.match(/^\/(?:profile\/)?([^/]+)/)?.[1];
+
     return parts[0];
   };
 
@@ -230,6 +238,7 @@
     checkers.performSearch(username, list, "simpcity", "SimpCity");
     checkers.performSearch(username, list, "coomer", "Coomer");
 
+    // Instagram Name logic
     if (window.location.hostname.includes("instagram.com")) {
       let foundNames = new Set();
       let attempts = 0;
@@ -259,6 +268,7 @@
       activeIntervals.push(igInterval);
     }
 
+    // Fansly ID logic
     if (window.location.hostname.includes("fansly.com")) {
       try {
         const res = await request(
