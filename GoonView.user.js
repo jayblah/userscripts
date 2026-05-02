@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Goon View
 // @namespace    http://tampermonkey.net/
-// @version      1.3.3
-// @description  Streamlined media viewing experience for SimpCity.
+// @version      1.3.4
+// @description  Streamlined media viewing experience for SimpCity.cr.
 // @author       JR
 // @match        *://simpcity.*/threads/*
 // @exclude      *://simpcity.com/*
@@ -136,7 +136,7 @@
           </div>
           <div class="btn" data-action="expand" id="btn-expand">EXPAND ALL</div>
           <div class="btn" data-action="gallery"><u>G</u>ALLERY</div>
-          <div class="btn" data-action="video" id="btn-video">VIDEO: ON</div>
+          <div class="btn" data-action="video" id="btn-video"><u>V</u>IDEO: ON</div>
         </div>
         <div id="overlay" tabindex="-1">
           <button id="focus-trap"></button>
@@ -150,10 +150,14 @@
     updateUI() {
       const btnExpand = this.shadow.getElementById("btn-expand");
       const btnVideo = this.shadow.getElementById("btn-video");
+
+      // Update Expand Button
       btnExpand.innerHTML = this.isExpanded
         ? "COLLAPSE ALL"
         : "E<u>X</u>PAND ALL";
-      btnVideo.textContent = `VIDEO: ${settings.includeVideos ? "ON" : "OFF"}`;
+
+      // Update Video Button while preserving underlining
+      btnVideo.innerHTML = `<u>V</u>IDEO: ${settings.includeVideos ? "ON" : "OFF"}`;
       btnVideo.classList.toggle("active", settings.includeVideos);
     },
 
