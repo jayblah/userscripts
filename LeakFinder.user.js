@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Leak Finder Overlay
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  Optimized leak finder with cleaner logic and better performance.
-// @author       Gemini (Refined for Best Practices)
+// @version      1.0/0
+// @description  Leak finder with SimpCity prioritized at the top.
+// @author       JR
 // @match        https://onlyfans.com/*
 // @match        https://fansly.com/*
 // @match        https://fantrie.com/*
@@ -94,22 +94,6 @@
 
   // --- Core Checkers ---
   const checkers = {
-    async coomer(service, username, list, note = "") {
-      const id = `coomer-${service}-${note || "main"}`;
-      const url = `https://${CONFIG.COOMER_DOMAIN}/${service}/user/${username}`;
-      addLinkToUI(list, `Coomer${note ? ` (${note})` : ""}`, url, id);
-
-      try {
-        const res = await request(
-          `https://${CONFIG.COOMER_DOMAIN}/api/v1/${service}/user/${username}/profile`,
-          { headers: { Accept: "text/css" } },
-        );
-        updateUIStatus(id, res.status === 200);
-      } catch {
-        updateUIStatus(id, false);
-      }
-    },
-
     async simpcity(username, list, note = "") {
       const id = `simpcity-${note || "main"}`;
       const url = `https://simpcity.cr/search/1/?q=${username}&o=relevance`;
@@ -121,6 +105,22 @@
           id,
           res.status === 200 && !res.responseText.includes("No results found"),
         );
+      } catch {
+        updateUIStatus(id, false);
+      }
+    },
+
+    async coomer(service, username, list, note = "") {
+      const id = `coomer-${service}-${note || "main"}`;
+      const url = `https://${CONFIG.COOMER_DOMAIN}/${service}/user/${username}`;
+      addLinkToUI(list, `Coomer${note ? ` (${note})` : ""}`, url, id);
+
+      try {
+        const res = await request(
+          `https://${CONFIG.COOMER_DOMAIN}/api/v1/${service}/user/${username}/profile`,
+          { headers: { Accept: "text/css" } },
+        );
+        updateUIStatus(id, res.status === 200);
       } catch {
         updateUIStatus(id, false);
       }
@@ -145,13 +145,14 @@
 
     const host = window.location.hostname;
 
-    // 1. Always check SimpCity
+    // 1. Prioritize SimpCity (Appears first in the list)
     checkers.simpcity(username, list);
 
     // 2. Platform Specifics
     if (host.includes("onlyfans.com")) {
       checkers.coomer("onlyfans", username, list);
     } else if (host.includes("fansly.com")) {
+      // Check Fansly ID for Coomer
       try {
         const res = await request(
           `https://apiv3.fansly.com/api/v1/account?usernames=${username}`,
@@ -164,13 +165,15 @@
         console.error("Fansly API failed", e);
       }
 
-      // Social check logic
+      // Social check logic for SimpCity
       setTimeout(() => {
         const insta = document
           .querySelector('a[href*="instagram.com"]')
           ?.href.match(/instagram\.com\/([a-zA-Z0-9_.]+)/)?.[1];
         if (insta) checkers.simpcity(insta, list, "Insta");
       }, 2000);
+    } else if (host.includes("fantrie.com")) {
+      // SimpCity is already called globally above
     }
   }
 
@@ -189,7 +192,6 @@
     }
   };
 
-  // Optimized Observer: Only care about URL changes
   const observer = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
@@ -197,6 +199,6 @@
     }
   });
 
-  observer.observe(document.head, { childList: true }); // Faster than body for SPA URL changes
+  observer.observe(document.head, { childList: true });
   setTimeout(main, 1000);
 })();
