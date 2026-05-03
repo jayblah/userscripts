@@ -1,16 +1,16 @@
 // ==UserScript==
 // @name         Goon View
 // @namespace    http://tampermonkey.net/
-// @version      1.6.0
+// @version      1.6.2
 // @description  Streamlined media viewing experience for SimpCity.cr with Mobile & Keyboard updates.
 // @author       JR
 // @match        *://simpcity.*/threads/*
 // @exclude      *://simpcity.com/*
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @run-at       document-end
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
 // ==/UserScript==
 
 (function () {
@@ -58,6 +58,10 @@
     // Pinch tracking
     _pinchDist: null, // last known distance between two fingers
     _isPinching: false, // true while 2+ fingers are on screen
+    // Pan state (active while zoomed in)
+    _panOffset: { x: 0, y: 0 },
+    _panStart: { x: 0, y: 0 }, // finger position at pan gesture start
+    _isPanning: false,
 
     init() {
       this.injectGlobalStyles();
@@ -226,19 +230,50 @@
       );
     },
 
+    _applyTransform() {
+      const img = this._getZoomTarget();
+      if (!img) return;
+      if (this._scale === 1) {
+        img.style.transform = "";
+      } else {
+        img.style.transform = `translate(${this._panOffset.x}px, ${this._panOffset.y}px) scale(${this._scale})`;
+      }
+      img.classList.toggle("zoomed", this._scale > 1);
+    },
+
     _applyZoom(newScale) {
       this._scale = Math.min(
         this._maxScale,
         Math.max(this._minScale, newScale),
       );
+      // Clamp pan whenever scale changes so image can't escape its bounds
+      this._clampPan();
+      this._applyTransform();
+    },
+
+    _clampPan() {
       const img = this._getZoomTarget();
       if (!img) return;
-      img.style.transform = this._scale === 1 ? "" : `scale(${this._scale})`;
-      img.classList.toggle("zoomed", this._scale > 1);
+      // Maximum pan distance in each axis: how much of the image overflows the viewport
+      const maxX = Math.max(
+        0,
+        (img.naturalWidth * this._scale - window.innerWidth) / 2 / this._scale,
+      );
+      const maxY = Math.max(
+        0,
+        (img.naturalHeight * this._scale - window.innerHeight) /
+          2 /
+          this._scale,
+      );
+      this._panOffset.x = Math.min(maxX, Math.max(-maxX, this._panOffset.x));
+      this._panOffset.y = Math.min(maxY, Math.max(-maxY, this._panOffset.y));
     },
 
     _resetZoom() {
       this._scale = 1;
+      this._panOffset.x = 0;
+      this._panOffset.y = 0;
+      this._isPanning = false;
       const img = this._getZoomTarget();
       if (img) {
         img.style.transform = "";
@@ -246,11 +281,12 @@
       }
     },
 
-    // ── Touch handlers (swipe + pinch-to-zoom + double-tap reset) ─
+    // ── Touch handlers (swipe + pinch-to-zoom + pan + double-tap reset) ─
     handleTouchStart(e) {
       if (e.touches.length === 2) {
-        // Two fingers — begin pinch tracking
+        // Two fingers — begin pinch tracking; cancel any active pan
         this._isPinching = true;
+        this._isPanning = false;
         const [a, b] = e.touches;
         this._pinchDist = Math.hypot(
           b.clientX - a.clientX,
@@ -258,57 +294,82 @@
         );
       } else if (e.touches.length === 1) {
         this._isPinching = false;
-        this._touchStart.x = e.changedTouches[0].screenX;
-        this._touchStart.y = e.changedTouches[0].screenY;
+        const t = e.changedTouches[0];
+        this._touchStart.x = t.screenX;
+        this._touchStart.y = t.screenY;
 
-        // Double-tap detection — reset zoom
+        // Double-tap detection — always resets zoom regardless of current scale
         const now = Date.now();
         if (now - (this._lastTap ?? 0) < 300) {
           this._resetZoom();
           this._lastTap = 0;
+          return; // don't also start a pan/swipe on the second tap
         } else {
           this._lastTap = now;
+        }
+
+        if (this._scale > 1) {
+          // Zoomed in — this touch will pan, not swipe
+          this._isPanning = true;
+          this._panStart.x = t.clientX - this._panOffset.x;
+          this._panStart.y = t.clientY - this._panOffset.y;
+        } else {
+          this._isPanning = false;
         }
       }
     },
 
     handleTouchMove(e) {
-      if (e.touches.length !== 2 || this._pinchDist === null) return;
-      e.preventDefault(); // prevent page zoom/scroll during pinch
-      const [a, b] = e.touches;
-      const newDist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
-      const ratio = newDist / this._pinchDist;
-      this._pinchDist = newDist;
-      this._applyZoom(this._scale * ratio);
+      if (e.touches.length === 2 && this._pinchDist !== null) {
+        // Pinch zoom
+        e.preventDefault();
+        const [a, b] = e.touches;
+        const newDist = Math.hypot(
+          b.clientX - a.clientX,
+          b.clientY - a.clientY,
+        );
+        const ratio = newDist / this._pinchDist;
+        this._pinchDist = newDist;
+        this._applyZoom(this._scale * ratio);
+      } else if (e.touches.length === 1 && this._isPanning) {
+        // Single-finger pan while zoomed
+        e.preventDefault();
+        const t = e.touches[0];
+        this._panOffset.x = t.clientX - this._panStart.x;
+        this._panOffset.y = t.clientY - this._panStart.y;
+        this._clampPan();
+        this._applyTransform();
+      }
     },
 
     handleTouchEnd(e) {
       if (this._isPinching) {
-        // End of pinch — reset tracking but don't treat as a swipe
         if (e.touches.length < 2) {
           this._isPinching = false;
           this._pinchDist = null;
+          // If still zoomed, the next single touch should pan
+          if (this._scale > 1) this._isPanning = true;
         }
         return;
       }
 
+      if (this._isPanning) {
+        // Pan gesture ended — don't treat as a swipe
+        if (e.touches.length === 0) this._isPanning = false;
+        return;
+      }
+
+      // At 1× — evaluate swipe for navigation
       const xEnd = e.changedTouches[0].screenX;
       const yEnd = e.changedTouches[0].screenY;
       const dx = xEnd - this._touchStart.x;
       const dy = yEnd - this._touchStart.y;
       const threshold = 50;
 
-      // Only swipe-navigate when not zoomed in
-      if (this._scale <= 1) {
-        if (Math.abs(dx) > Math.abs(dy)) {
-          if (Math.abs(dx) > threshold) {
-            this.openGallery(dx > 0 ? -1 : 1);
-          }
-        } else {
-          if (Math.abs(dy) > threshold) {
-            this.closeGallery();
-          }
-        }
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (Math.abs(dx) > threshold) this.openGallery(dx > 0 ? -1 : 1);
+      } else {
+        if (Math.abs(dy) > threshold) this.closeGallery();
       }
     },
 
