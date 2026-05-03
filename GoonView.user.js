@@ -1,7 +1,9 @@
 // ==UserScript==
-// @name         Goon View
+// @name         Goon View™
 // @version      1.6.3
 // @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
+// @author       JR
+// @license      MIT
 // @match        *://simpcity.*/threads/*
 // @exclude      *://simpcity.com/*
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js

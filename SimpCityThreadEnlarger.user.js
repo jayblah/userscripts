@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         SimpCity Move and Enlarge Thumbnails
-// @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.1.1
 // @description  Moves thread thumbnails to appear before the thread titles on SimpCity forums and makes them larger.
 // @author       JR
-// @match        https://simpcity.cr/*
+// @license      MIT
+// @match        *://simpcity.*/
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SimpCityThreadEnlarger.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SimpCityThreadEnlarger.user.js
 // @grant        none
 // @license      MIT
 // ==/UserScript==

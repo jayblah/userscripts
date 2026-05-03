@@ -1,12 +1,12 @@
 // ==UserScript==
-// @name         Reddit Binary and NATO Decoder
-// @namespace    http://tampermonkey.net/
-// @version      1.0.3
+// @name         Goon Seek™ - Binary & NATO Decoder
+// @version      1.0.4
 // @description  Decodes NATO and Binary codes in Reddit comments with one-click search for Instagram, TikTok, OnlyFans, Fansly, and SimpCity.
 // @author       JR
 // @license      MIT
-// @match        https://www.reddit.com/*
-// @match        https://old.reddit.com/*
+// @match        https://*.reddit.com/*
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/RedditDecoder.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/RedditDecoder.user.js
 // @grant        none
 // ==/UserScript==
 

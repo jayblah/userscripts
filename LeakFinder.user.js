@@ -1,19 +1,19 @@
 // ==UserScript==
-// @name         Goon Finder - Cross-Platform Leak Seeker
-// @namespace    http://tampermonkey.net/
-// @version      1.0.2
+// @name         Goon Finder™ - Cross-Platform Leak Seeker
+// @version      1.0.3
 // @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SimpCity and Coomer.
 // @author       JR
+// @license      MIT
 // @match        https://onlyfans.com/*
 // @match        https://fansly.com/*
 // @match        https://fantrie.com/*
 // @match        https://www.instagram.com/*
 // @match        https://www.tiktok.com/*
 // @match        https://app.fanfix.io/*
-// @match        *://*.coomer.st/*
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/LeakFinder.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/LeakFinder.user.js
 // @grant        GM.xmlHttpRequest
 // @grant        GM_addStyle
-// @license      MIT
 // ==/UserScript==
 
 (function () {
