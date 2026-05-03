@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         SimpCity Enlarge Thumbnails
-// @version      1.1.2
+// @version      1.1.3
 // @description  Moves thread thumbnails to appear before the thread titles on SimpCity forums and makes them larger.
 // @author       JR
 // @license      MIT
-// @match        *://simpcity.*/
+// @match        *://simpcity.*/*
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SimpCityThreadEnlarger.user.js
 // @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SimpCityThreadEnlarger.user.js
 // @grant        none
