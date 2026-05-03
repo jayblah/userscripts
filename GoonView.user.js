@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Goon View
 // @namespace    http://tampermonkey.net/
-// @version      1.4.0
+// @version      1.5.1
 // @description  Streamlined media viewing experience for SimpCity.cr with Mobile & Keyboard updates.
 // @author       JR
 // @match        *://simpcity.*/threads/*
@@ -30,6 +30,7 @@
       set(target, prop, value) {
         target[prop] = value;
         if (SETTINGS_MAP[prop]) GM_setValue(SETTINGS_MAP[prop], value);
+        // Defer to avoid coupling to App before it exists
         if (prop === "includeVideos") App.updateUI();
         return true;
       },
@@ -44,6 +45,11 @@
     _lastWheel: 0,
     _wheelThrottle: 180,
     _touchStart: { x: 0, y: 0 },
+    // Track in-flight decode so we can abort on rapid navigation
+    _decodeAbort: null,
+    // True on narrow/touch viewports (iPhone etc.)
+    isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
+      .matches,
 
     init() {
       this.injectGlobalStyles();
@@ -93,6 +99,7 @@
           font-weight: 700; color: #aaa; font-size: 11px; transition: all 0.2s ease;
         }
         .btn:hover { border-color: var(--teal); color: #fff; background: #2a2a2a; }
+        .btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
         .btn.active { background: #0e3a40; color: var(--teal); border-color: var(--teal); }
         .row { display: flex; gap: 6px; }
         .row .btn { flex: 1; }
@@ -114,29 +121,43 @@
           color: var(--teal); font-weight: 800; background: rgba(0,0,0,0.8);
           padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
         }
-        #focus-trap { position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; border: none; }
+        /* Mobile: slim panel, no scroll buttons */
+        @media (max-width: 600px) and (pointer: coarse) {
+          .panel { width: 120px; padding: 8px; gap: 7px; }
+          .header { font-size: 10px; padding-bottom: 5px; }
+          .btn { height: 30px; font-size: 10px; }
+          .row.scroll-row { display: none; }
+        }
       `);
       this.shadow.adoptedStyleSheets = [sheet];
 
+      // renderBase must come before updateUI so DOM elements exist
       this.renderBase();
       this.updateUI();
       this.bindInternalEvents();
     },
 
     renderBase() {
+      // On mobile, default the panel to top-left so it doesn't obscure content
+      const defaultTop = this.isMobile
+        ? GM_getValue(SETTINGS_MAP.panelTop, "80px")
+        : settings.panelTop;
+      const defaultLeft = this.isMobile
+        ? GM_getValue(SETTINGS_MAP.panelLeft, "10px")
+        : settings.panelLeft;
+
       this.shadow.innerHTML = `
-        <div class="panel" id="gv-panel" style="top: ${settings.panelTop}; left: ${settings.panelLeft}">
+        <div class="panel" id="gv-panel" style="top: ${defaultTop}; left: ${defaultLeft}">
           <div class="header" id="gv-drag">Goon View™</div>
-          <div class="row">
-            <div class="btn" data-action="top" title="Scroll to top">▴ TOP</div>
-            <div class="btn" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
+          <div class="row scroll-row">
+            <div class="btn" role="button" tabindex="0" data-action="top" title="Scroll to top">▴ TOP</div>
+            <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
           </div>
-          <div class="btn" data-action="expand" id="btn-expand">EXPAND ALL</div>
-          <div class="btn" data-action="gallery"><u>G</u>ALLERY</div>
-          <div class="btn" data-action="video" id="btn-video"><u>V</u>IDEO: ON</div>
+          <div class="btn" role="button" tabindex="0" data-action="expand" id="btn-expand">EXPAND ALL</div>
+          <div class="btn" role="button" tabindex="0" data-action="gallery"><u>G</u>ALLERY</div>
+          <div class="btn" role="button" tabindex="0" data-action="video" id="btn-video"><u>V</u>IDEO: ON</div>
         </div>
         <div id="overlay" tabindex="-1">
-          <button id="focus-trap"></button>
           <div class="z-hint">[A / ←] PREV | [D / →] NEXT | [W / ↑ / ESC] EXIT</div>
           <div id="media-container"></div>
           <div class="counter" id="gv-counter"></div>
@@ -211,24 +232,35 @@
       const panel = s.getElementById("gv-panel");
       const overlay = s.getElementById("overlay");
 
+      // Unified click + keyboard (Enter/Space) handler for .btn elements
+      const btnActionHandlers = {
+        top: () => window.scrollTo({ top: 0, behavior: "smooth" }),
+        bottom: () =>
+          window.scrollTo({
+            top: document.body.scrollHeight,
+            behavior: "smooth",
+          }),
+        expand: () => this.toggleExpand(),
+        gallery: () => this.openGallery(0),
+        video: () => (settings.includeVideos = !settings.includeVideos),
+      };
+
       s.addEventListener("click", (e) => {
         const btn = e.target.closest(".btn");
-        if (btn) {
-          const handlers = {
-            top: () => window.scrollTo({ top: 0, behavior: "smooth" }),
-            bottom: () =>
-              window.scrollTo({
-                top: document.body.scrollHeight,
-                behavior: "smooth",
-              }),
-            expand: () => this.toggleExpand(),
-            gallery: () => this.openGallery(0),
-            video: () => (settings.includeVideos = !settings.includeVideos),
-          };
-          handlers[btn.dataset.action]?.();
-        }
+        if (btn) btnActionHandlers[btn.dataset.action]?.();
         if (["overlay", "media-container"].includes(e.target.id))
           this.closeGallery();
+      });
+
+      // Keyboard activation for div.btn (Enter / Space)
+      s.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          const btn = e.target.closest(".btn");
+          if (btn) {
+            e.preventDefault();
+            btnActionHandlers[btn.dataset.action]?.();
+          }
+        }
       });
 
       // Panel Dragging
@@ -251,7 +283,7 @@
         dragHdr.addEventListener("pointerup", up);
       });
 
-      // Gallery Scroll Nav
+      // Gallery Scroll Nav — guard against null hovered element
       overlay.addEventListener(
         "wheel",
         (e) => {
@@ -285,21 +317,33 @@
 
       const overlay = this.shadow.getElementById("overlay");
       const container = this.shadow.getElementById("media-container");
-      const trap = this.shadow.getElementById("focus-trap");
 
       overlay.style.display = "flex";
       document.body.classList.add("gv-noscroll");
+      overlay.focus();
 
-      trap.focus();
+      // Cancel any prior in-flight image decode
+      if (this._decodeAbort) {
+        this._decodeAbort.abort();
+        this._decodeAbort = null;
+      }
+
       container.replaceChildren();
 
       let el;
       if (current.tagName === "IMG") {
         el = new Image();
         el.src = current.src;
+        const controller = new AbortController();
+        this._decodeAbort = controller;
         try {
           await el.decode();
-        } catch {}
+          // If aborted before decode finished, bail — a newer call is already running
+          if (controller.signal.aborted) return;
+        } catch {
+          // Decode failed or aborted; continue with partially-loaded image
+        }
+        this._decodeAbort = null;
       } else if (current.tagName === "VIDEO") {
         el = document.createElement("video");
         el.src = current.src || current.querySelector("source")?.src;
@@ -328,8 +372,14 @@
 
     closeGallery() {
       const container = this.shadow.getElementById("media-container");
-      const media = container.querySelector("video, iframe");
-      if (media) media.src = "";
+      // Stop active media before removing from DOM
+      const video = container.querySelector("video");
+      if (video) {
+        video.pause();
+        video.src = "";
+      }
+      const iframe = container.querySelector("iframe");
+      if (iframe) iframe.src = "";
       container.replaceChildren();
       this.shadow.getElementById("overlay").style.display = "none";
       document.body.classList.remove("gv-noscroll");
@@ -370,7 +420,7 @@
             const actions = {
               escape: () => this.closeGallery(),
               w: () => this.closeGallery(),
-              arrowup: () => this.closeGallery(), // UP TO CLOSE
+              arrowup: () => this.closeGallery(),
               a: () => this.openGallery(-1),
               arrowleft: () => this.openGallery(-1),
               d: () => this.openGallery(1),
@@ -387,13 +437,11 @@
         true,
       );
 
+      // Only re-focus the overlay when it is actually open
       window.addEventListener("blur", () => {
         const overlay = this.shadow.getElementById("overlay");
         if (overlay?.style.display === "flex") {
-          setTimeout(
-            () => this.shadow.getElementById("focus-trap").focus(),
-            100,
-          );
+          setTimeout(() => overlay.focus(), 100);
         }
       });
     },
