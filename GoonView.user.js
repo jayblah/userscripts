@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Goon View
 // @namespace    http://tampermonkey.net/
-// @version      1.5.1
+// @version      1.6.0
 // @description  Streamlined media viewing experience for SimpCity.cr with Mobile & Keyboard updates.
 // @author       JR
 // @match        *://simpcity.*/threads/*
@@ -9,6 +9,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @run-at       document-end
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
 // ==/UserScript==
 
 (function () {
@@ -42,14 +44,20 @@
     zoomIdx: 0,
     isExpanded: false,
     shadow: null,
-    _lastWheel: 0,
-    _wheelThrottle: 180,
     _touchStart: { x: 0, y: 0 },
     // Track in-flight decode so we can abort on rapid navigation
     _decodeAbort: null,
     // True on narrow/touch viewports (iPhone etc.)
     isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
       .matches,
+    // Zoom state
+    _scale: 1,
+    _minScale: 1,
+    _maxScale: 5,
+    _zoomStep: 0.15,
+    // Pinch tracking
+    _pinchDist: null, // last known distance between two fingers
+    _isPinching: false, // true while 2+ fingers are on screen
 
     init() {
       this.injectGlobalStyles();
@@ -116,6 +124,13 @@
         }
         #media-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
         #media-container :is(img, video, iframe) { max-width: 96%; max-height: 96%; object-fit: contain; }
+        #media-container img {
+          transform-origin: center center;
+          transition: transform 0.12s ease;
+          cursor: zoom-in;
+          will-change: transform;
+        }
+        #media-container img.zoomed { cursor: zoom-out; }
         .counter {
           position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
           color: var(--teal); font-weight: 800; background: rgba(0,0,0,0.8);
@@ -158,7 +173,7 @@
           <div class="btn" role="button" tabindex="0" data-action="video" id="btn-video"><u>V</u>IDEO: ON</div>
         </div>
         <div id="overlay" tabindex="-1">
-          <div class="z-hint">[A / ←] PREV | [D / →] NEXT | [W / ↑ / ESC] EXIT</div>
+          <div class="z-hint">[A/←] PREV · [D/→] NEXT · [W/↑/ESC] EXIT · [SCROLL] ZOOM</div>
           <div id="media-container"></div>
           <div class="counter" id="gv-counter"></div>
         </div>
@@ -203,26 +218,96 @@
       this.updateUI();
     },
 
-    // Mobile Swipe Handling
+    // ── Zoom helpers ──────────────────────────────────────────────
+    _getZoomTarget() {
+      return (
+        this.shadow.getElementById("media-container")?.querySelector("img") ??
+        null
+      );
+    },
+
+    _applyZoom(newScale) {
+      this._scale = Math.min(
+        this._maxScale,
+        Math.max(this._minScale, newScale),
+      );
+      const img = this._getZoomTarget();
+      if (!img) return;
+      img.style.transform = this._scale === 1 ? "" : `scale(${this._scale})`;
+      img.classList.toggle("zoomed", this._scale > 1);
+    },
+
+    _resetZoom() {
+      this._scale = 1;
+      const img = this._getZoomTarget();
+      if (img) {
+        img.style.transform = "";
+        img.classList.remove("zoomed");
+      }
+    },
+
+    // ── Touch handlers (swipe + pinch-to-zoom + double-tap reset) ─
     handleTouchStart(e) {
-      this._touchStart.x = e.changedTouches[0].screenX;
-      this._touchStart.y = e.changedTouches[0].screenY;
+      if (e.touches.length === 2) {
+        // Two fingers — begin pinch tracking
+        this._isPinching = true;
+        const [a, b] = e.touches;
+        this._pinchDist = Math.hypot(
+          b.clientX - a.clientX,
+          b.clientY - a.clientY,
+        );
+      } else if (e.touches.length === 1) {
+        this._isPinching = false;
+        this._touchStart.x = e.changedTouches[0].screenX;
+        this._touchStart.y = e.changedTouches[0].screenY;
+
+        // Double-tap detection — reset zoom
+        const now = Date.now();
+        if (now - (this._lastTap ?? 0) < 300) {
+          this._resetZoom();
+          this._lastTap = 0;
+        } else {
+          this._lastTap = now;
+        }
+      }
+    },
+
+    handleTouchMove(e) {
+      if (e.touches.length !== 2 || this._pinchDist === null) return;
+      e.preventDefault(); // prevent page zoom/scroll during pinch
+      const [a, b] = e.touches;
+      const newDist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      const ratio = newDist / this._pinchDist;
+      this._pinchDist = newDist;
+      this._applyZoom(this._scale * ratio);
     },
 
     handleTouchEnd(e) {
+      if (this._isPinching) {
+        // End of pinch — reset tracking but don't treat as a swipe
+        if (e.touches.length < 2) {
+          this._isPinching = false;
+          this._pinchDist = null;
+        }
+        return;
+      }
+
       const xEnd = e.changedTouches[0].screenX;
       const yEnd = e.changedTouches[0].screenY;
       const dx = xEnd - this._touchStart.x;
       const dy = yEnd - this._touchStart.y;
       const threshold = 50;
 
-      if (Math.abs(dx) > Math.abs(dy)) {
-        if (Math.abs(dx) > threshold) {
-          this.openGallery(dx > 0 ? -1 : 1);
-        }
-      } else {
-        if (Math.abs(dy) > threshold) {
-          this.closeGallery();
+      // Only swipe-navigate when not zoomed in
+      if (this._scale <= 1) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          if (Math.abs(dx) > threshold) {
+            this.openGallery(dx > 0 ? -1 : 1);
+          }
+        } else {
+          if (Math.abs(dy) > threshold) {
+            this.closeGallery();
+          }
         }
       }
     },
@@ -283,24 +368,25 @@
         dragHdr.addEventListener("pointerup", up);
       });
 
-      // Gallery Scroll Nav — guard against null hovered element
+      // Desktop: scroll wheel zooms the current image (skips video/iframe)
       overlay.addEventListener(
         "wheel",
         (e) => {
           const hovered = s.elementFromPoint(e.clientX, e.clientY);
           if (hovered?.matches("video, iframe")) return;
           e.preventDefault();
-          const now = Date.now();
-          if (now - this._lastWheel < this._wheelThrottle) return;
-          this._lastWheel = now;
-          this.openGallery(e.deltaY > 0 ? 1 : -1);
+          const delta = e.deltaY < 0 ? this._zoomStep : -this._zoomStep;
+          this._applyZoom(this._scale + delta);
         },
         { passive: false },
       );
 
-      // Mobile Touch Listeners
+      // Mobile Touch Listeners — touchmove must be non-passive to call preventDefault during pinch
       overlay.addEventListener("touchstart", (e) => this.handleTouchStart(e), {
         passive: true,
+      });
+      overlay.addEventListener("touchmove", (e) => this.handleTouchMove(e), {
+        passive: false,
       });
       overlay.addEventListener("touchend", (e) => this.handleTouchEnd(e), {
         passive: true,
@@ -329,6 +415,7 @@
       }
 
       container.replaceChildren();
+      this._resetZoom(); // always start each item at 1×
 
       let el;
       if (current.tagName === "IMG") {
@@ -371,6 +458,7 @@
     },
 
     closeGallery() {
+      this._resetZoom();
       const container = this.shadow.getElementById("media-container");
       // Stop active media before removing from DOM
       const video = container.querySelector("video");
