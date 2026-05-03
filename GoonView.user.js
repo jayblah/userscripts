@@ -1,9 +1,7 @@
 // ==UserScript==
 // @name         Goon View
-// @namespace    http://tampermonkey.net/
-// @version      1.6.2
-// @description  Streamlined media viewing experience for SimpCity.cr with Mobile & Keyboard updates.
-// @author       JR
+// @version      1.6.3
+// @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
 // @match        *://simpcity.*/threads/*
 // @exclude      *://simpcity.com/*
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
