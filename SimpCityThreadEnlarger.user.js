@@ -1,6 +1,6 @@
 // ==UserScript==
-// @name         SimpCity Move and Enlarge Thumbnails
-// @version      1.1.1
+// @name         SimpCity Enlarge Thumbnails
+// @version      1.1.2
 // @description  Moves thread thumbnails to appear before the thread titles on SimpCity forums and makes them larger.
 // @author       JR
 // @license      MIT
