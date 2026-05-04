@@ -36,7 +36,7 @@
 // ==UserScript==
 // @name             Reddit++ Mobile
 // @description      Force-removes News, Explore, Games, Resources, and Best of from mobile nav.
-// @version          1.2.0
+// @version          1.2.1
 // @match            *://*.reddit.com/*
 // @grant            none
 // @run-at           document-idle
@@ -47,59 +47,57 @@
 (function () {
   "use strict";
 
-  // List of hrefs and labels to kill
-  const targets = [
-    "/topic/news/", // News
-    "/recap/", // Explore
-    "/gaming/", // Games
-    "/best/", // Best of Reddit
-    "content-policy", // Content Policy
-  ];
+  const purgeRedditNav = () => {
+    // 1. Target "Games on Reddit" via its specific tracker noun
+    const gamesSection = document.querySelector(
+      'faceplate-tracker[noun="games_drawer"]',
+    );
+    if (gamesSection) gamesSection.remove();
 
-  const labels = ["Explore", "Games", "Resources", "News"];
+    // 2. Target "News" and "Explore" via the top section attributes
+    const topSection = document.querySelector("left-nav-top-section");
+    if (topSection) {
+      // These are handled as attributes in your DOM
+      topSection.removeAttribute("news");
+      topSection.removeAttribute("explore");
 
-  const cleanNav = () => {
-    // 1. Target by href
-    targets.forEach((link) => {
-      const elements = document.querySelectorAll(
-        `shreddit-nav-item[href*="${link}"], a[href*="${link}"]`,
-      );
-      elements.forEach((el) => el.closest("li")?.remove() || el.remove());
-    });
+      // If they are rendered as links inside, find and kill them
+      topSection
+        .querySelectorAll('a[href*="/topic/news/"], a[href*="/recap/"]')
+        .forEach((el) => {
+          el.closest("li")?.remove() || el.remove();
+        });
+    }
 
-    // 2. Target by text content/attributes
-    labels.forEach((text) => {
-      const elements = document.querySelectorAll(
-        `shreddit-nav-item[content="${text}"]`,
-      );
-      elements.forEach((el) => el.closest("li")?.remove() || el.remove());
-    });
-
-    // 3. Target specific IDs and containers
-    const extras = [
-      "#more-info-accordion-content",
-      'faceplate-tracker[source="content_policy_menu"]',
-      'shreddit-nav-item[content="Resources"]',
-    ];
-
-    extras.forEach((selector) => {
-      document.querySelectorAll(selector).forEach((el) => {
-        // Remove the parent <li> to ensure the spacing is cleaned up too
-        el.closest("li")?.remove() || el.remove();
+    // 3. Target "Resources" and "Content Policy"
+    // In the mobile DOM, these are often inside faceplate-expandable-section-helper
+    document
+      .querySelectorAll("faceplate-expandable-section-helper")
+      .forEach((section) => {
+        const text = section.textContent.toLowerCase();
+        if (text.includes("resources") || text.includes("content policy")) {
+          section.remove();
+        }
       });
+
+    // 4. Cleanup any lingering HR (separators) that become redundant
+    document.querySelectorAll("hr").forEach((hr) => {
+      if (hr.nextElementSibling?.tagName === "HR" || !hr.nextElementSibling) {
+        hr.remove();
+      }
     });
   };
 
-  // Run immediately
-  cleanNav();
-
-  // Run every time the user opens the side menu or scrolls
-  const observer = new MutationObserver(() => {
-    cleanNav();
+  // Use a robust observer to catch elements as they are lazy-loaded
+  const observer = new MutationObserver((mutations) => {
+    purgeRedditNav();
   });
 
-  observer.observe(document.body, {
+  observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
   });
+
+  // Initial run
+  purgeRedditNav();
 })();
