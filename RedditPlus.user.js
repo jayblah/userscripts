@@ -36,61 +36,87 @@
 // ==UserScript==
 // @name             Reddit++ Mobile
 // @description      Force-removes News, Explore, Games, Resources, and Best of from mobile nav.
-// @version          1.2.1
+// @version          1.2.2
 // @match            *://*.reddit.com/*
 // @grant            none
 // @run-at           document-idle
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/LeakFinder.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/LeakFinder.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  const purgeRedditNav = () => {
-    // 1. Target "Games on Reddit" via its specific tracker noun
-    const gamesSection = document.querySelector(
-      'faceplate-tracker[noun="games_drawer"]',
-    );
-    if (gamesSection) gamesSection.remove();
+  const purgeWithSeparators = (selector) => {
+    const element = document.querySelector(selector);
+    if (element) {
+      // Check for a separator immediately before or after the element
+      const prev = element.previousElementSibling;
+      const next = element.nextElementSibling;
 
-    // 2. Target "News" and "Explore" via the top section attributes
-    const topSection = document.querySelector("left-nav-top-section");
-    if (topSection) {
-      // These are handled as attributes in your DOM
-      topSection.removeAttribute("news");
-      topSection.removeAttribute("explore");
+      if (
+        prev &&
+        (prev.tagName === "HR" ||
+          prev.classList.contains("border-neutral-border-weak"))
+      ) {
+        prev.remove();
+      } else if (
+        next &&
+        (next.tagName === "HR" ||
+          next.classList.contains("border-neutral-border-weak"))
+      ) {
+        next.remove();
+      }
 
-      // If they are rendered as links inside, find and kill them
-      topSection
-        .querySelectorAll('a[href*="/topic/news/"], a[href*="/recap/"]')
-        .forEach((el) => {
-          el.closest("li")?.remove() || el.remove();
-        });
+      element.remove();
     }
+  };
 
-    // 3. Target "Resources" and "Content Policy"
-    // In the mobile DOM, these are often inside faceplate-expandable-section-helper
+  const runPurge = () => {
+    // 1. Target specific tracked sections and their lines[cite: 1]
+    purgeWithSeparators('faceplate-tracker[noun="games_drawer"]');
+
+    // 2. Target Expandable sections (Resources/Policy) and their lines[cite: 1]
     document
       .querySelectorAll("faceplate-expandable-section-helper")
       .forEach((section) => {
         const text = section.textContent.toLowerCase();
         if (text.includes("resources") || text.includes("content policy")) {
-          section.remove();
+          // Remove the section and its adjacent line[cite: 1]
+          purgeWithSeparators(
+            `faceplate-expandable-section-helper:nth-of-type(${[...section.parentNode.children].indexOf(section) + 1})`,
+          );
         }
       });
 
-    // 4. Cleanup any lingering HR (separators) that become redundant
-    document.querySelectorAll("hr").forEach((hr) => {
-      if (hr.nextElementSibling?.tagName === "HR" || !hr.nextElementSibling) {
-        hr.remove();
-      }
-    });
+    // 3. Clean up the top section attributes[cite: 1]
+    const topSection = document.querySelector("left-nav-top-section");
+    if (topSection) {
+      topSection.removeAttribute("news");
+      topSection.removeAttribute("explore");
+      topSection.removeAttribute("best");
+    }
+
+    // 4. Final Sweep: Remove double separators or separators at the very end of a section[cite: 1]
+    document
+      .querySelectorAll("hr, .border-neutral-border-weak")
+      .forEach((hr) => {
+        const next = hr.nextElementSibling;
+        // Remove if it's a double line or if it's the last thing in the container[cite: 1]
+        if (
+          (next &&
+            (next.tagName === "HR" ||
+              next.classList.contains("border-neutral-border-weak"))) ||
+          !next
+        ) {
+          hr.remove();
+        }
+      });
   };
 
-  // Use a robust observer to catch elements as they are lazy-loaded
-  const observer = new MutationObserver((mutations) => {
-    purgeRedditNav();
+  // Use a robust observer to catch elements as they are lazy-loaded[cite: 1]
+  const observer = new MutationObserver(() => {
+    runPurge();
   });
 
   observer.observe(document.documentElement, {
@@ -99,5 +125,5 @@
   });
 
   // Initial run
-  purgeRedditNav();
+  runPurge();
 })();
