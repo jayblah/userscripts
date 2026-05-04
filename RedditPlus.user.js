@@ -35,48 +35,71 @@
 
 // ==UserScript==
 // @name             Reddit++ Mobile
-// @description      Removes specific mobile navigation menu items.
-// @version          1.1.0
+// @description      Force-removes News, Explore, Games, Resources, and Best of from mobile nav.
+// @version          1.2.0
 // @match            *://*.reddit.com/*
 // @grant            none
-// @run-at           document-start
+// @run-at           document-idle
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/LeakFinder.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/LeakFinder.user.js
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  const style = document.createElement("style");
-  style.innerHTML = `
-        /* Target navigation items by their internal href or label content */
+  // List of hrefs and labels to kill
+  const targets = [
+    "/topic/news/", // News
+    "/recap/", // Explore
+    "/gaming/", // Games
+    "/best/", // Best of Reddit
+    "content-policy", // Content Policy
+  ];
 
-        /* News */
-        shreddit-nav-item[href="/topic/news/"],
+  const labels = ["Explore", "Games", "Resources", "News"];
 
-        /* Explore */
-        shreddit-nav-item[href="/recap/"],
-        shreddit-nav-item[content="Explore"],
+  const cleanNav = () => {
+    // 1. Target by href
+    targets.forEach((link) => {
+      const elements = document.querySelectorAll(
+        `shreddit-nav-item[href*="${link}"], a[href*="${link}"]`,
+      );
+      elements.forEach((el) => el.closest("li")?.remove() || el.remove());
+    });
 
-        /* Games on Reddit */
-        shreddit-nav-item[href="/gaming/"],
-        shreddit-nav-item[content="Games"],
+    // 2. Target by text content/attributes
+    labels.forEach((text) => {
+      const elements = document.querySelectorAll(
+        `shreddit-nav-item[content="${text}"]`,
+      );
+      elements.forEach((el) => el.closest("li")?.remove() || el.remove());
+    });
 
-        /* Resources */
-        #more-info-accordion-content,
-        shreddit-nav-item[content="Resources"],
+    // 3. Target specific IDs and containers
+    const extras = [
+      "#more-info-accordion-content",
+      'faceplate-tracker[source="content_policy_menu"]',
+      'shreddit-nav-item[content="Resources"]',
+    ];
 
-        /* Best of Reddit */
-        shreddit-nav-item[href="/best/"],
+    extras.forEach((selector) => {
+      document.querySelectorAll(selector).forEach((el) => {
+        // Remove the parent <li> to ensure the spacing is cleaned up too
+        el.closest("li")?.remove() || el.remove();
+      });
+    });
+  };
 
-        /* Content Policy Menu */
-        shreddit-nav-item[href*="content-policy"],
-        a[href*="content-policy"] {
-            display: none !important;
-        }
+  // Run immediately
+  cleanNav();
 
-        /* General cleanup for the content policy menu container */
-        faceplate-tracker[source="content_policy_menu"] {
-            display: none !important;
-        }
-    `;
-  document.head.appendChild(style);
+  // Run every time the user opens the side menu or scrolls
+  const observer = new MutationObserver(() => {
+    cleanNav();
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
 })();
