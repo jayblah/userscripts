@@ -32,14 +32,13 @@
 //     Modular Architecture: The repo is built using a modular structure where each feature (e.g., "Hiding Promoted Posts" or "Decoding") is its own isolated file for easier maintenance.
 
 //     Build Pipeline: Uses Webpack to bundle these modules into a single, functional userscript
-
 // ==UserScript==
 // @name             Reddit++ Mobile
 // @description      Force-removes News, Explore, Games, Resources, and Best of from mobile nav.
-// @version          1.2.2
+// @version          1.2.3
 // @match            *://*.reddit.com/*
 // @grant            none
-// @run-at           document-idle
+// @run-at           document-start
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
 // @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
 // ==/UserScript==
@@ -47,83 +46,69 @@
 (function () {
   "use strict";
 
-  const purgeWithSeparators = (selector) => {
-    const element = document.querySelector(selector);
-    if (element) {
-      // Check for a separator immediately before or after the element
-      const prev = element.previousElementSibling;
-      const next = element.nextElementSibling;
-
-      if (
-        prev &&
-        (prev.tagName === "HR" ||
-          prev.classList.contains("border-neutral-border-weak"))
-      ) {
-        prev.remove();
-      } else if (
-        next &&
-        (next.tagName === "HR" ||
-          next.classList.contains("border-neutral-border-weak"))
-      ) {
-        next.remove();
-      }
-
-      element.remove();
-    }
-  };
-
-  const runPurge = () => {
-    // 1. Target specific tracked sections and their lines[cite: 1]
-    purgeWithSeparators('faceplate-tracker[noun="games_drawer"]');
-
-    // 2. Target Expandable sections (Resources/Policy) and their lines[cite: 1]
-    document
-      .querySelectorAll("faceplate-expandable-section-helper")
-      .forEach((section) => {
-        const text = section.textContent.toLowerCase();
-        if (text.includes("resources") || text.includes("content policy")) {
-          // Remove the section and its adjacent line[cite: 1]
-          purgeWithSeparators(
-            `faceplate-expandable-section-helper:nth-of-type(${[...section.parentNode.children].indexOf(section) + 1})`,
-          );
-        }
-      });
-
-    // 3. Clean up the top section attributes[cite: 1]
+  const purgeLogic = () => {
+    // 1. Target the Top Section attributes (News/Explore/Best)
     const topSection = document.querySelector("left-nav-top-section");
     if (topSection) {
-      topSection.removeAttribute("news");
-      topSection.removeAttribute("explore");
-      topSection.removeAttribute("best");
+      if (topSection.hasAttribute("news")) topSection.removeAttribute("news");
+      if (topSection.hasAttribute("explore"))
+        topSection.removeAttribute("explore");
+      if (topSection.hasAttribute("best")) topSection.removeAttribute("best");
     }
 
-    // 4. Final Sweep: Remove double separators or separators at the very end of a section[cite: 1]
-    document
-      .querySelectorAll("hr, .border-neutral-border-weak")
-      .forEach((hr) => {
-        const next = hr.nextElementSibling;
-        // Remove if it's a double line or if it's the last thing in the container[cite: 1]
-        if (
-          (next &&
-            (next.tagName === "HR" ||
-              next.classList.contains("border-neutral-border-weak"))) ||
-          !next
-        ) {
-          hr.remove();
-        }
-      });
+    // 2. Target Games section by its tracker noun
+    const games = document.querySelector(
+      'faceplate-tracker[noun="games_drawer"]',
+    );
+    if (games) {
+      removeWithSeparator(games);
+    }
+
+    // 3. Target Resources and Content Policy by text content inside expandable helpers
+    const helpers = document.querySelectorAll(
+      "faceplate-expandable-section-helper",
+    );
+    helpers.forEach((helper) => {
+      const text = helper.textContent.toLowerCase();
+      if (text.includes("resources") || text.includes("content policy")) {
+        removeWithSeparator(helper);
+      }
+    });
   };
 
-  // Use a robust observer to catch elements as they are lazy-loaded[cite: 1]
+  const removeWithSeparator = (element) => {
+    // Remove adjacent HR or separator-classed lines[cite: 1]
+    const prev = element.previousElementSibling;
+    const next = element.nextElementSibling;
+
+    if (
+      prev &&
+      (prev.tagName === "HR" ||
+        prev.classList.contains("border-neutral-border-weak"))
+    ) {
+      prev.remove();
+    } else if (
+      next &&
+      (next.tagName === "HR" ||
+        next.classList.contains("border-neutral-border-weak"))
+    ) {
+      next.remove();
+    }
+    element.remove();
+  };
+
+  // Use a high-frequency observer to catch the menu content as it is injected[cite: 1]
   const observer = new MutationObserver(() => {
-    runPurge();
+    purgeLogic();
   });
 
+  // Observe the entire document to ensure we catch elements inside various faceplate-loaders[cite: 1]
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
   });
 
-  // Initial run
-  runPurge();
+  // Execute immediately and on DOMContentLoaded
+  purgeLogic();
+  window.addEventListener("DOMContentLoaded", purgeLogic);
 })();
