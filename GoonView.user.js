@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Goon View™
-// @version      1.6.3
+// @version      1.6.9
 // @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -10,6 +10,7 @@
 // @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
 // @run-at       document-end
 // ==/UserScript==
 
@@ -17,14 +18,12 @@
   "use strict";
 
   const SETTINGS_MAP = {
-    includeVideos: "gv_include_vids",
     panelTop: "gv_p_top",
     panelLeft: "gv_p_left",
   };
 
   const settings = new Proxy(
     {
-      includeVideos: GM_getValue(SETTINGS_MAP.includeVideos, true),
       panelTop: GM_getValue(SETTINGS_MAP.panelTop, "120px"),
       panelLeft: GM_getValue(SETTINGS_MAP.panelLeft, "calc(100% - 175px)"),
     },
@@ -32,8 +31,6 @@
       set(target, prop, value) {
         target[prop] = value;
         if (SETTINGS_MAP[prop]) GM_setValue(SETTINGS_MAP[prop], value);
-        // Defer to avoid coupling to App before it exists
-        if (prop === "includeVideos") App.updateUI();
         return true;
       },
     },
@@ -45,22 +42,18 @@
     isExpanded: false,
     shadow: null,
     _touchStart: { x: 0, y: 0 },
-    // Track in-flight decode so we can abort on rapid navigation
     _decodeAbort: null,
-    // True on narrow/touch viewports (iPhone etc.)
+    _galleryMode: "main",
     isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
       .matches,
-    // Zoom state
     _scale: 1,
     _minScale: 1,
     _maxScale: 5,
     _zoomStep: 0.15,
-    // Pinch tracking
-    _pinchDist: null, // last known distance between two fingers
-    _isPinching: false, // true while 2+ fingers are on screen
-    // Pan state (active while zoomed in)
+    _pinchDist: null,
+    _isPinching: false,
     _panOffset: { x: 0, y: 0 },
-    _panStart: { x: 0, y: 0 }, // finger position at pan gesture start
+    _panStart: { x: 0, y: 0 },
     _isPanning: false,
 
     init() {
@@ -112,7 +105,6 @@
         }
         .btn:hover { border-color: var(--teal); color: #fff; background: #2a2a2a; }
         .btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
-        .btn.active { background: #0e3a40; color: var(--teal); border-color: var(--teal); }
         .row { display: flex; gap: 6px; }
         .row .btn { flex: 1; }
         u { text-decoration: underline; text-decoration-color: var(--teal); text-underline-offset: 3px; }
@@ -140,7 +132,6 @@
           color: var(--teal); font-weight: 800; background: rgba(0,0,0,0.8);
           padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
         }
-        /* Mobile: slim panel, no scroll buttons */
         @media (max-width: 600px) and (pointer: coarse) {
           .panel { width: 120px; padding: 8px; gap: 7px; }
           .header { font-size: 10px; padding-bottom: 5px; }
@@ -150,14 +141,12 @@
       `);
       this.shadow.adoptedStyleSheets = [sheet];
 
-      // renderBase must come before updateUI so DOM elements exist
       this.renderBase();
       this.updateUI();
       this.bindInternalEvents();
     },
 
     renderBase() {
-      // On mobile, default the panel to top-left so it doesn't obscure content
       const defaultTop = this.isMobile
         ? GM_getValue(SETTINGS_MAP.panelTop, "80px")
         : settings.panelTop;
@@ -173,8 +162,8 @@
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
           </div>
           <div class="btn" role="button" tabindex="0" data-action="expand" id="btn-expand">EXPAND ALL</div>
-          <div class="btn" role="button" tabindex="0" data-action="gallery"><u>G</u>ALLERY</div>
-          <div class="btn" role="button" tabindex="0" data-action="video" id="btn-video"><u>V</u>IDEO: ON</div>
+          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery">IMAGE&nbsp;<u>G</u>ALLERY</div>
+          <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery"><u>V</u>IDEO GALLERY</div>
         </div>
         <div id="overlay" tabindex="-1">
           <div class="z-hint">[A/←] PREV · [D/→] NEXT · [W/↑/ESC] EXIT · [SCROLL] ZOOM</div>
@@ -186,25 +175,18 @@
 
     updateUI() {
       const btnExpand = this.shadow.getElementById("btn-expand");
-      const btnVideo = this.shadow.getElementById("btn-video");
-
       btnExpand.innerHTML = this.isExpanded
         ? "COLLAPSE ALL"
         : "E<u>X</u>PAND ALL";
-
-      btnVideo.innerHTML = `<u>V</u>IDEO: ${settings.includeVideos ? "ON" : "OFF"}`;
-      btnVideo.classList.toggle("active", settings.includeVideos);
     },
 
     refreshMediaList() {
-      const selector =
-        'img.bbImage, video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
+      // Filter strictly for images for the main gallery
+      const selector = "img.bbImage";
       this.mediaList = Array.from(document.querySelectorAll(selector)).filter(
         (el) => {
           const rect = el.getBoundingClientRect();
-          const isVisible =
-            rect.width > 0 || rect.height > 0 || el.tagName === "DIV";
-          return isVisible && (settings.includeVideos || el.tagName === "IMG");
+          return rect.width > 0 || rect.height > 0;
         },
       );
     },
@@ -222,7 +204,45 @@
       this.updateUI();
     },
 
-    // ── Zoom helpers ──────────────────────────────────────────────
+    _fetchTurboCDNSrc(iframeEl) {
+      return new Promise((resolve) => {
+        const src = iframeEl?.getAttribute("src");
+        if (!src) return resolve(null);
+        const id = src.split("/embed/")[1]?.split("?")[0];
+        if (!id) return resolve(null);
+
+        GM_xmlhttpRequest({
+          method: "GET",
+          url: `https://turbo.cr/api/sign?v=${id}`,
+          headers: {
+            Referer: `https://turbo.cr/embed/${id}`,
+            Origin: "https://turbo.cr",
+          },
+          anonymous: false,
+          timeout: 8000,
+          onload(resp) {
+            try {
+              const data = JSON.parse(resp.responseText);
+              const url =
+                data.url ||
+                data.src ||
+                data.signed_url ||
+                data.stream ||
+                Object.values(data).find(
+                  (v) => typeof v === "string" && v.includes("http"),
+                );
+              resolve(url || null);
+            } catch {
+              const match = resp.responseText.match(/https?:\/\/\S+/);
+              resolve(match?.[0] ?? null);
+            }
+          },
+          onerror: () => resolve(null),
+          ontimeout: () => resolve(null),
+        });
+      });
+    },
+
     _getZoomTarget() {
       return (
         this.shadow.getElementById("media-container")?.querySelector("img") ??
@@ -233,11 +253,10 @@
     _applyTransform() {
       const img = this._getZoomTarget();
       if (!img) return;
-      if (this._scale === 1) {
-        img.style.transform = "";
-      } else {
-        img.style.transform = `translate(${this._panOffset.x}px, ${this._panOffset.y}px) scale(${this._scale})`;
-      }
+      img.style.transform =
+        this._scale === 1
+          ? ""
+          : `translate(${this._panOffset.x}px, ${this._panOffset.y}px) scale(${this._scale})`;
       img.classList.toggle("zoomed", this._scale > 1);
     },
 
@@ -246,7 +265,6 @@
         this._maxScale,
         Math.max(this._minScale, newScale),
       );
-      // Clamp pan whenever scale changes so image can't escape its bounds
       this._clampPan();
       this._applyTransform();
     },
@@ -254,7 +272,6 @@
     _clampPan() {
       const img = this._getZoomTarget();
       if (!img) return;
-      // Maximum pan distance in each axis: how much of the image overflows the viewport
       const maxX = Math.max(
         0,
         (img.naturalWidth * this._scale - window.innerWidth) / 2 / this._scale,
@@ -281,10 +298,8 @@
       }
     },
 
-    // ── Touch handlers (swipe + pinch-to-zoom + pan + double-tap reset) ─
     handleTouchStart(e) {
       if (e.touches.length === 2) {
-        // Two fingers — begin pinch tracking; cancel any active pan
         this._isPinching = true;
         this._isPanning = false;
         const [a, b] = e.touches;
@@ -297,31 +312,23 @@
         const t = e.changedTouches[0];
         this._touchStart.x = t.screenX;
         this._touchStart.y = t.screenY;
-
-        // Double-tap detection — always resets zoom regardless of current scale
         const now = Date.now();
         if (now - (this._lastTap ?? 0) < 300) {
           this._resetZoom();
           this._lastTap = 0;
-          return; // don't also start a pan/swipe on the second tap
-        } else {
-          this._lastTap = now;
-        }
+          return;
+        } else this._lastTap = now;
 
         if (this._scale > 1) {
-          // Zoomed in — this touch will pan, not swipe
           this._isPanning = true;
           this._panStart.x = t.clientX - this._panOffset.x;
           this._panStart.y = t.clientY - this._panOffset.y;
-        } else {
-          this._isPanning = false;
-        }
+        } else this._isPanning = false;
       }
     },
 
     handleTouchMove(e) {
       if (e.touches.length === 2 && this._pinchDist !== null) {
-        // Pinch zoom
         e.preventDefault();
         const [a, b] = e.touches;
         const newDist = Math.hypot(
@@ -332,7 +339,6 @@
         this._pinchDist = newDist;
         this._applyZoom(this._scale * ratio);
       } else if (e.touches.length === 1 && this._isPanning) {
-        // Single-finger pan while zoomed
         e.preventDefault();
         const t = e.touches[0];
         this._panOffset.x = t.clientX - this._panStart.x;
@@ -347,30 +353,25 @@
         if (e.touches.length < 2) {
           this._isPinching = false;
           this._pinchDist = null;
-          // If still zoomed, the next single touch should pan
           if (this._scale > 1) this._isPanning = true;
         }
         return;
       }
-
       if (this._isPanning) {
-        // Pan gesture ended — don't treat as a swipe
         if (e.touches.length === 0) this._isPanning = false;
         return;
       }
-
-      // At 1× — evaluate swipe for navigation
       const xEnd = e.changedTouches[0].screenX;
       const yEnd = e.changedTouches[0].screenY;
       const dx = xEnd - this._touchStart.x;
       const dy = yEnd - this._touchStart.y;
       const threshold = 50;
-
       if (Math.abs(dx) > Math.abs(dy)) {
-        if (Math.abs(dx) > threshold) this.openGallery(dx > 0 ? -1 : 1);
-      } else {
-        if (Math.abs(dy) > threshold) this.closeGallery();
-      }
+        if (Math.abs(dx) > threshold)
+          this._galleryMode === "video"
+            ? this.openVideoGallery(dx > 0 ? -1 : 1)
+            : this.openGallery(dx > 0 ? -1 : 1);
+      } else if (Math.abs(dy) > threshold) this.closeGallery();
     },
 
     bindInternalEvents() {
@@ -378,7 +379,6 @@
       const panel = s.getElementById("gv-panel");
       const overlay = s.getElementById("overlay");
 
-      // Unified click + keyboard (Enter/Space) handler for .btn elements
       const btnActionHandlers = {
         top: () => window.scrollTo({ top: 0, behavior: "smooth" }),
         bottom: () =>
@@ -388,7 +388,7 @@
           }),
         expand: () => this.toggleExpand(),
         gallery: () => this.openGallery(0),
-        video: () => (settings.includeVideos = !settings.includeVideos),
+        vgallery: () => this.openVideoGallery(0),
       };
 
       s.addEventListener("click", (e) => {
@@ -398,7 +398,6 @@
           this.closeGallery();
       });
 
-      // Keyboard activation for div.btn (Enter / Space)
       s.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") {
           const btn = e.target.closest(".btn");
@@ -409,7 +408,6 @@
         }
       });
 
-      // Panel Dragging
       const dragHdr = s.getElementById("gv-drag");
       dragHdr.addEventListener("pointerdown", (e) => {
         const startX = e.clientX - panel.offsetLeft;
@@ -429,20 +427,19 @@
         dragHdr.addEventListener("pointerup", up);
       });
 
-      // Desktop: scroll wheel zooms the current image (skips video/iframe)
       overlay.addEventListener(
         "wheel",
         (e) => {
           const hovered = s.elementFromPoint(e.clientX, e.clientY);
           if (hovered?.matches("video, iframe")) return;
           e.preventDefault();
-          const delta = e.deltaY < 0 ? this._zoomStep : -this._zoomStep;
-          this._applyZoom(this._scale + delta);
+          this._applyZoom(
+            this._scale + (e.deltaY < 0 ? this._zoomStep : -this._zoomStep),
+          );
         },
         { passive: false },
       );
 
-      // Mobile Touch Listeners — touchmove must be non-passive to call preventDefault during pinch
       overlay.addEventListener("touchstart", (e) => this.handleTouchStart(e), {
         passive: true,
       });
@@ -455,77 +452,110 @@
     },
 
     async openGallery(dir = 0) {
+      this._galleryMode = "main";
       this.refreshMediaList();
       if (!this.mediaList.length) return;
-
       this.zoomIdx =
         (this.zoomIdx + dir + this.mediaList.length) % this.mediaList.length;
       const current = this.mediaList[this.zoomIdx];
+      this._renderMedia(current, this.zoomIdx, this.mediaList.length);
+    },
 
+    async openVideoGallery(dir = 0) {
+      this._galleryMode = "video";
+      const videoSelector =
+        'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
+      this._videoList = Array.from(
+        document.querySelectorAll(videoSelector),
+      ).filter((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 || rect.height > 0 || el.tagName === "DIV";
+      });
+      if (!this._videoList.length) return;
+      this._videoIdx =
+        ((this._videoIdx ?? 0) + dir + this._videoList.length) %
+        this._videoList.length;
+      this._renderMedia(
+        this._videoList[this._videoIdx],
+        this._videoIdx,
+        this._videoList.length,
+      );
+    },
+
+    async _renderMedia(current, idx, total) {
       const overlay = this.shadow.getElementById("overlay");
       const container = this.shadow.getElementById("media-container");
-
       overlay.style.display = "flex";
       document.body.classList.add("gv-noscroll");
       overlay.focus();
 
-      // Cancel any prior in-flight image decode
-      if (this._decodeAbort) {
-        this._decodeAbort.abort();
-        this._decodeAbort = null;
-      }
-
+      if (this._decodeAbort) this._decodeAbort.abort();
       container.replaceChildren();
-      this._resetZoom(); // always start each item at 1×
+      this._resetZoom();
 
-      let el;
       if (current.tagName === "IMG") {
-        el = new Image();
+        const el = new Image();
         el.src = current.src;
         const controller = new AbortController();
         this._decodeAbort = controller;
         try {
           await el.decode();
-          // If aborted before decode finished, bail — a newer call is already running
           if (controller.signal.aborted) return;
-        } catch {
-          // Decode failed or aborted; continue with partially-loaded image
-        }
+        } catch {}
         this._decodeAbort = null;
-      } else if (current.tagName === "VIDEO") {
-        el = document.createElement("video");
-        el.src = current.src || current.querySelector("source")?.src;
-        el.controls = true;
-        el.loop = true;
-        el.autoplay = true;
-        el.muted = false;
-        el.setAttribute("playsinline", ""); // Essential for mobile autoplay
+        container.appendChild(el);
       } else {
-        el = document.createElement("iframe");
-        let src =
-          current.tagName === "DIV"
-            ? current.getAttribute("onclick")?.match(/'([^']+)'/)?.[1]
-            : current.src;
-        if (src?.startsWith("//")) src = "https:" + src;
-        el.src = src || "";
-        el.style.cssText =
-          "width: 85vw; height: 85vh; border: none; background: #000;";
-        el.allow = "fullscreen; autoplay";
+        const directSrc =
+          current.tagName !== "DIV"
+            ? await this._fetchTurboCDNSrc(current)
+            : null;
+        if (directSrc || current.tagName === "VIDEO") {
+          const el = document.createElement("video");
+          el.src =
+            directSrc || current.src || current.querySelector("source")?.src;
+          el.controls = true;
+          el.loop = true;
+          el.autoplay = true;
+          el.setAttribute("playsinline", "");
+          el.addEventListener(
+            "canplay",
+            () => {
+              el.muted = false;
+            },
+            { once: true },
+          );
+          container.appendChild(el);
+        } else {
+          const el = document.createElement("iframe");
+          let src =
+            current.tagName === "DIV"
+              ? current.getAttribute("onclick")?.match(/'([^']+)'/)?.[1]
+              : current.src;
+          if (src?.startsWith("//")) src = "https:" + src;
+          el.style.cssText =
+            "width: 85vw; height: 85vh; border: none; background: #000;";
+          el.allow = "fullscreen; autoplay";
+          el.setAttribute("allowfullscreen", "");
+          container.appendChild(el);
+          if (src) {
+            const url = new URL(src);
+            url.searchParams.set("autoplay", "1");
+            el.src = url.toString();
+          }
+        }
       }
-
-      container.appendChild(el);
       this.shadow.getElementById("gv-counter").textContent =
-        `${this.zoomIdx + 1} / ${this.mediaList.length}`;
+        `${idx + 1} / ${total}`;
     },
 
     closeGallery() {
       this._resetZoom();
       const container = this.shadow.getElementById("media-container");
-      // Stop active media before removing from DOM
       const video = container.querySelector("video");
       if (video) {
         video.pause();
-        video.src = "";
+        video.removeAttribute("src");
+        video.load();
       }
       const iframe = container.querySelector("iframe");
       if (iframe) iframe.src = "";
@@ -544,7 +574,6 @@
             document.activeElement.isContentEditable
           )
             return;
-
           const isVisible =
             this.shadow.getElementById("overlay").style.display === "flex";
           const key = e.key.toLowerCase();
@@ -561,21 +590,25 @@
           }
           if (key === "v") {
             e.preventDefault();
-            settings.includeVideos = !settings.includeVideos;
+            this.openVideoGallery(0);
             return;
           }
 
           if (isVisible) {
+            const isV = this._galleryMode === "video";
             const actions = {
               escape: () => this.closeGallery(),
               w: () => this.closeGallery(),
+              s: () => this.closeGallery(),
               arrowup: () => this.closeGallery(),
-              a: () => this.openGallery(-1),
-              arrowleft: () => this.openGallery(-1),
-              d: () => this.openGallery(1),
-              arrowright: () => this.openGallery(1),
+              arrowdown: () => this.closeGallery(),
+              a: () => (isV ? this.openVideoGallery(-1) : this.openGallery(-1)),
+              arrowleft: () =>
+                isV ? this.openVideoGallery(-1) : this.openGallery(-1),
+              d: () => (isV ? this.openVideoGallery(1) : this.openGallery(1)),
+              arrowright: () =>
+                isV ? this.openVideoGallery(1) : this.openGallery(1),
             };
-
             if (actions[key]) {
               e.preventDefault();
               e.stopImmediatePropagation();
@@ -585,14 +618,6 @@
         },
         true,
       );
-
-      // Only re-focus the overlay when it is actually open
-      window.addEventListener("blur", () => {
-        const overlay = this.shadow.getElementById("overlay");
-        if (overlay?.style.display === "flex") {
-          setTimeout(() => overlay.focus(), 100);
-        }
-      });
     },
   };
 
