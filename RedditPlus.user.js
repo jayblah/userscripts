@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name             Reddit++ Mobile
+// @name             Reddit Mobile Enhancements
 // @description      Force-removes News, Explore, Games, Resources, and Best of. Adds post unwrapping, shadow-piercing highlights, and hides subreddit banners/stats/icons.
-// @version          1.5.1
+// @version          1.5.2
 // @match            *://*.reddit.com/*
 // @grant            none
 // @run-at           document-start
