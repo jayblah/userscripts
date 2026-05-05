@@ -1,12 +1,12 @@
 // ==UserScript==
-// @name             Reddit Mobile
-// @description      Force-removes News, Explore, Games, Resources, and Best of. Adds post unwrapping, shadow-piercing highlights, and an integrated image zoom viewer.
-// @version          1.6.0
-// @match            *://*.reddit.com/*
-// @grant            none
-// @run-at           document-start
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
+// @name            Reddit Mobile
+// @description     Force-removes News, Explore, Games, Resources, and Best of. Adds post unwrapping, shadow-piercing highlights, and an integrated image zoom viewer.
+// @version         1.6.0
+// @match           *://*.reddit.com/*
+// @grant           none
+// @run-at          document-start
+// @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
+// @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
 // ==/UserScript==
 
 (function () {
