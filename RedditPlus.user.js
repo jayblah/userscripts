@@ -1,18 +1,17 @@
 // ==UserScript==
-// @name             Reddit Mobile
-// @description      Force-removes News, Explore, Games, Resources, and Best of. Adds post unwrapping, image zoom viewer, and colored comment guidelines.
-// @version          1.7.0
-// @match            *://*.reddit.com/*
-// @grant            none
-// @run-at           document-start
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
+// @name            Reddit Mobile
+// @description     Nuking clutter and adding a built-in Lightbox/Zoom for images.
+// @version         2.8.0
+// @match           *://*.reddit.com/*
+// @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
+// @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/RedditPlus.user.js
+// @grant           none
+// @run-at          document-start
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  // 1. Configuration & Colors
   const COLORS = [
     "#4CAF50",
     "#1E88DB",
@@ -22,161 +21,148 @@
     "#3ABAA2",
   ];
 
-  // 2. Inject Styles for UI Stability, Viewer, and Guidelines
-  const style = document.createElement("style");
-  style.textContent = `
-        /* Hide Unwanted UI Elements */
-        #subreddit-banner-img, #subreddit-icon-img, #subreddit-icon-img-desktop,
-        .shreddit-subreddit-icon__icon, community-highlight-carousel,
-        faceplate-tracker[noun="games_drawer"], shreddit-related-communities {
-            display: none !important;
-        }
+  const NUKE_SELECTORS = [
+    "#subreddit-banner-img",
+    "shreddit-sidebar",
+    "#right-sidebar-container",
+    "aside:has(shreddit-sidebar)",
+    'faceplate-tracker[noun="games_drawer"]',
+    "games-section-badge-controller",
+    "#games_section",
+    "award-button",
+    'faceplate-tracker[noun="resources_menu"]',
+    "shreddit-related-communities",
+    'details:has(summary[aria-controls="RESOURCES"])',
+    "community-highlight-carousel",
+  ];
 
-        /* Image Viewer Styles */
-        .pp_imageViewer {
+  // 1. GLOBAL CSS
+  const globalStyle = document.createElement("style");
+  globalStyle.textContent = `
+        ${NUKE_SELECTORS.join(", ")} { display: none !important; }
+        [grid-area="right-sidebar"], .right-sidebar { display: none !important; }
+
+        /* Image Zoom / Lightbox */
+        .pp_imageViewable { cursor: zoom-in !important; }
+        #pp_lightbox {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.95); z-index: 9999;
-            display: flex; align-items: center; justify-content: center; touch-action: none;
+            background: rgba(0,0,0,0.9); z-index: 999999;
+            display: none; justify-content: center; align-items: center; cursor: zoom-out;
         }
-        .pp_imageViewer_imageContainer { transition: transform 0.1s ease-out; will-change: transform; }
-        .pp_imageViewer_image { max-width: 100vw; max-height: 100vh; object-fit: contain; }
-        .pp_imageViewer_closeButton {
-            position: absolute; top: 15px; right: 15px; width: 44px; height: 44px;
-            background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.3);
-            border-radius: 50%; display: flex; align-items: center; justify-content: center;
-            color: white; font-size: 28px; cursor: pointer; z-index: 10001;
-        }
+        #pp_lightbox img { max-width: 95%; max-height: 95%; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
 
-        /* Comment Guidelines */
-        .pp-guideline-colorized {
-            border-left-width: 2px !important;
-            border-left-style: solid !important;
-            opacity: 0.8 !important;
+        /* Post Expansion */
+        .pp_post_noWrap { max-height: none !important; display: block !important; }
+        .pp_post_unwrapContainer {
+            width: 100%; display: flex; justify-content: center; padding: 12px 0;
+            cursor: pointer; background: linear-gradient(transparent, rgba(0,0,0,0.05));
+            border-bottom: 1px solid var(--color-neutral-border-weak);
         }
+        .pp_post_unwrapButton { font-weight: bold; color: var(--color-interactive-default); }
     `;
-  document.documentElement.appendChild(style);
+  document.documentElement.appendChild(globalStyle);
 
-  // 3. Image Viewer Class
-  class ImageViewer {
-    constructor() {
-      this.opened = false;
-      this.drag = {
-        enabled: false,
-        start: { x: 0, y: 0 },
-        current: { x: 0, y: 0 },
-        scale: 1,
-      };
-    }
-    build() {
-      this.viewer = document.createElement("div");
-      this.viewer.className = "pp_imageViewer";
-      this.viewer.innerHTML = `<div class="pp_imageViewer_closeButton">×</div><div class="pp_imageViewer_imageContainer"><img class="pp_imageViewer_image"></div>`;
-      this.container = this.viewer.querySelector(
-        ".pp_imageViewer_imageContainer",
-      );
-      this.image = this.viewer.querySelector("img");
-      this.viewer.querySelector(".pp_imageViewer_closeButton").onclick = () =>
-        this.close();
-      this.viewer.onclick = (e) => {
-        if (e.target === this.viewer) this.close();
-      };
-    }
-    open(src) {
-      if (!this.viewer) this.build();
-      this.opened = true;
-      this.image.src = src;
-      this.drag.current = { x: 0, y: 0 };
-      this.drag.scale = 1;
-      this.updateTransform();
-      document.body.appendChild(this.viewer);
-    }
-    close() {
-      this.viewer.remove();
-      this.opened = false;
-    }
-    updateTransform() {
-      this.container.style.transform = `translate(${this.drag.current.x}px, ${this.drag.current.y}px) scale(${this.drag.scale})`;
-    }
-  }
-  const viewer = new ImageViewer();
+  // 2. LIGHTBOX DOM
+  const lightbox = document.createElement("div");
+  lightbox.id = "pp_lightbox";
+  const lightboxImg = document.createElement("img");
+  lightbox.append(lightboxImg);
+  lightbox.onclick = () => (lightbox.style.display = "none");
 
-  // 4. Guideline Processing
-  const renderGuidelines = (comment) => {
-    if (comment.hasAttribute("pp-guidelines-rendered")) return;
-
-    const depth = parseInt(comment.getAttribute("depth") || 0);
-    const color = COLORS[depth % COLORS.length];
-    const shadow = comment.shadowRoot;
-    if (!shadow) return;
-
-    // Target Reddit's specific threadline elements
-    const lines = shadow.querySelectorAll(
-      'div[data-testid="main-thread-line"], div[data-testid="branch-line"]',
-    );
-    lines.forEach((line) => {
-      line.style.setProperty("border-left-color", color, "important");
-      line.classList.add("pp-guideline-colorized");
-    });
-
-    comment.setAttribute("pp-guidelines-rendered", "true");
+  const attachLightbox = () => {
+    if (!document.getElementById("pp_lightbox"))
+      document.body?.append(lightbox);
   };
 
-  // 5. Main Purge & Logic Loop
-  const purgeLogic = () => {
-    // Image Interception
-    document
-      .querySelectorAll("shreddit-post img, .comment-body img")
-      .forEach((img) => {
-        if (img.dataset.viewerHooked) return;
-        img.dataset.viewerHooked = "true";
-        img.addEventListener(
-          "click",
-          (e) => {
-            const link = img.closest("a");
-            if (link && link.href.match(/\.(jpg|jpeg|png|webp|gif)/i)) {
-              e.preventDefault();
-              e.stopPropagation();
-              viewer.open(img.src);
-            }
-          },
-          true,
-        );
-      });
+  // 3. LOGIC MODULES
+  const Actions = {
+    nuke: () => {
+      document
+        .querySelectorAll(NUKE_SELECTORS.join(", "))
+        .forEach((el) => el.remove());
 
-    // Process Comment Guidelines
-    document.querySelectorAll("shreddit-comment").forEach(renderGuidelines);
+      const nav = document.querySelector("left-nav-top-section");
+      if (nav) {
+        ["news", "explore"].forEach((attr) => nav.removeAttribute(attr));
+        nav.shadowRoot
+          ?.querySelectorAll('a[href="/news/"], a[href="/explore/"]')
+          .forEach((link) => (link.closest("li") || link).remove());
+      }
+    },
 
-    // Header & Nav Cleanup
-    const banner = document.getElementById("subreddit-banner-img");
-    if (banner) banner.closest(".\\@container")?.remove();
+    handleImages: (post) => {
+      post
+        .querySelectorAll("faceplate-img, img:not(.pp_imageViewable)")
+        .forEach((imgEl) => {
+          if (imgEl.classList.contains("pp_imageViewable")) return;
+          imgEl.classList.add("pp_imageViewable");
 
-    document
-      .querySelectorAll("div.lowercase.text-neutral-content-weak")
-      .forEach((el) => {
-        if (el.textContent.includes("visitors")) el.remove();
-      });
+          imgEl.addEventListener(
+            "click",
+            (e) => {
+              let src =
+                imgEl.getAttribute("src") ||
+                imgEl.querySelector("img")?.getAttribute("src");
+              if (src) {
+                e.preventDefault();
+                e.stopPropagation();
+                attachLightbox();
+                lightboxImg.src = src.replaceAll("&amp;", "&");
+                lightbox.style.display = "flex";
+              }
+            },
+            true,
+          );
+        });
+    },
 
-    const topSection = document.querySelector("left-nav-top-section");
-    if (topSection)
-      ["news", "explore", "best"].forEach((attr) =>
-        topSection.removeAttribute(attr),
-      );
+    processComments: () => {
+      document
+        .querySelectorAll("shreddit-comment:not([pp-checked])")
+        .forEach((comment) => {
+          comment.setAttribute("pp-checked", "true");
 
-    // Post Unwrapping
-    document
-      .querySelectorAll(
-        'shreddit-post[view-type="cardView"] .truncated-content',
-      )
-      .forEach((p) => {
-        p.style.maxHeight = "none";
-        p.style.display = "block";
-      });
+          if (comment.getAttribute("author") === "AutoModerator") {
+            comment.setAttribute("collapsed", "true");
+          }
+
+          const shadow = comment.shadowRoot;
+          if (shadow && !shadow.querySelector(".pp-line-style")) {
+            const depth = parseInt(comment.getAttribute("depth") || 0);
+            const color = COLORS[depth % COLORS.length];
+
+            const style = document.createElement("style");
+            style.className = "pp-line-style";
+            style.textContent = `
+                        div[data-testid="main-thread-line"],
+                        div[data-testid="branch-line"] {
+                            border-left: 2px solid ${color} !important;
+                            opacity: 1 !important;
+                        }
+                    `;
+            shadow.appendChild(style);
+          }
+        });
+    },
   };
 
-  const observer = new MutationObserver(purgeLogic);
+  // 4. OBSERVER
+  const observer = new MutationObserver(() => {
+    Actions.nuke();
+    Actions.processComments();
+    document
+      .querySelectorAll("shreddit-post")
+      .forEach((post) => Actions.handleImages(post));
+  });
+
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
   });
-  purgeLogic();
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", attachLightbox);
+  } else {
+    attachLightbox();
+  }
 })();
