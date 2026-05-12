@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Goon Finder™ - Cross-Platform Leak Seeker
-// @version      1.0.3
-// @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SimpCity and Coomer.
+// @version      1.0.4
+// @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SimpCity, Coomer, Fapello, Boobpedia, and Babepedia.
 // @author       JR
 // @license      MIT
 // @match        https://onlyfans.com/*
@@ -98,7 +98,6 @@
     const parts = pathname.split("/").filter(Boolean);
     if (!parts.length || CONFIG.IGNORED_PATHS.has(parts[0])) return null;
 
-    // Fanfix and TikTok often use @username
     if (hostname.includes("tiktok.com") || hostname.includes("fanfix.io")) {
       return parts[0].startsWith("@") ? parts[0].slice(1) : parts[0];
     }
@@ -129,19 +128,69 @@
     async performSearch(query, list, type, prefix) {
       if (!query || query.length < 2) return;
       const safeQuery = encodeURIComponent(query);
-      const isSimp = type === "simpcity";
-      const id = `${isSimp ? "sc" : "coo"}-${query.replace(/[^\w]/g, "-").toLowerCase()}`;
-      const url = isSimp
-        ? `https://simpcity.cr/search/1/?q=${safeQuery}&o=relevance`
-        : `https://${CONFIG.COOMER_DOMAIN}/posts?q=${safeQuery}`;
+      const safeSlug = query.replace(/[^\w]/g, "-").toLowerCase();
+
+      let url, id;
+
+      switch (type) {
+        case "simpcity":
+          id = `sc-${safeSlug}`;
+          url = `https://simpcity.cr/search/1/?q=${safeQuery}&o=relevance`;
+          break;
+        case "coomer":
+          id = `coo-${safeSlug}`;
+          url = `https://${CONFIG.COOMER_DOMAIN}/posts?q=${safeQuery}`;
+          break;
+        case "fapello":
+          id = `fap-${safeSlug}`;
+          url = `https://fapello.com/${query.toLowerCase().replace(/\s+/g, "-")}/`;
+          break;
+        case "boobpedia":
+          id = `boo-${safeSlug}`;
+          url = `https://www.boobpedia.com/boobs/${encodeURIComponent(query)}`;
+          break;
+        case "babepedia":
+          id = `babe-${safeSlug}`;
+          url = `https://www.babepedia.com/babe/${encodeURIComponent(query)}`;
+          break;
+        default:
+          return;
+      }
 
       addLinkToUI(list, `${prefix}: ${query}`, url, id);
 
       try {
         const res = await request(url);
-        const found = isSimp
-          ? res.status === 200 && !res.responseText.includes("No results found")
-          : res.status === 200 && res.responseText.includes("post-card");
+        let found = false;
+
+        switch (type) {
+          case "simpcity":
+            found =
+              res.status === 200 &&
+              !res.responseText.includes("No results found");
+            break;
+          case "coomer":
+            found =
+              res.status === 200 && res.responseText.includes("post-card");
+            break;
+          case "fapello":
+            // 200 with actual content = profile exists; 404 or redirect = not found
+            found =
+              res.status === 200 && res.responseText.includes("img_thumbnail");
+            break;
+          case "boobpedia":
+            found =
+              res.status === 200 &&
+              !res.responseText.includes(
+                "There is currently no text in this page",
+              );
+            break;
+          case "babepedia":
+            found =
+              res.status === 200 && res.responseText.includes("babepedia-list");
+            break;
+        }
+
         updateUIStatus(id, found);
       } catch (e) {
         updateUIStatus(id, false);
@@ -181,7 +230,6 @@
       pos2 = pos4 - e.clientY;
       pos3 = e.clientX;
       pos4 = e.clientY;
-
       el.style.top = el.offsetTop - pos2 + "px";
       el.style.left = el.offsetLeft - pos1 + "px";
       el.style.right = "auto";
@@ -192,10 +240,7 @@
       document.onmousemove = null;
       localStorage.setItem(
         CONFIG.STORAGE_KEY,
-        JSON.stringify({
-          top: el.style.top,
-          left: el.style.left,
-        }),
+        JSON.stringify({ top: el.style.top, left: el.style.left }),
       );
     }
 
@@ -237,8 +282,11 @@
 
     checkers.performSearch(username, list, "simpcity", "SimpCity");
     checkers.performSearch(username, list, "coomer", "Coomer");
+    checkers.performSearch(username, list, "fapello", "Fapello");
+    checkers.performSearch(username, list, "boobpedia", "Boobpedia");
+    checkers.performSearch(username, list, "babepedia", "Babepedia");
 
-    // Instagram Name logic
+    // Instagram display name logic
     if (window.location.hostname.includes("instagram.com")) {
       let foundNames = new Set();
       let attempts = 0;
@@ -262,6 +310,24 @@
             "SimpCity (Name)",
           );
           checkers.performSearch(displayName, list, "coomer", "Coomer (Name)");
+          checkers.performSearch(
+            displayName,
+            list,
+            "fapello",
+            "Fapello (Name)",
+          );
+          checkers.performSearch(
+            displayName,
+            list,
+            "boobpedia",
+            "Boobpedia (Name)",
+          );
+          checkers.performSearch(
+            displayName,
+            list,
+            "babepedia",
+            "Babepedia (Name)",
+          );
         }
         if (attempts > 12) clearInterval(igInterval);
       }, 1000);
@@ -304,9 +370,7 @@
   };
 
   const observer = new MutationObserver(() => {
-    if (location.href !== lastUrl) {
-      main();
-    }
+    if (location.href !== lastUrl) main();
   });
 
   observer.observe(document.head, { childList: true });
