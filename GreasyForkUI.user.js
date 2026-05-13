@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Greasy Fork Minimal UI (Optimized)
+// @name         Greasy Fork Minimal UI
 // @namespace    https://greasyfork.org/
 // @version      2.8.0
 // @description  Clean, minimal dark theme for Greasy Fork with optimized performance
