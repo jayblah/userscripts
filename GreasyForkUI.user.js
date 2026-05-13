@@ -8,8 +8,8 @@
 // @match        https://*.greasyfork.org/*
 // @grant        GM_addStyle
 // @run-at       document-start
-// @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/GreasyForkUI.user.js
-// @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/GreasyForkUI.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GreasyForkUI.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GreasyForkUI.user.js
 // ==/UserScript==
 
 (function () {
