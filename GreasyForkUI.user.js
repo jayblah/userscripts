@@ -1,9 +1,8 @@
 // ==UserScript==
-// @name         Greasy Fork Minimal UI
+// @name         Greasy Fork Enhanced UI
 // @namespace    https://greasyfork.org/
-// @version      3.2.0
-// @description  Clean, minimal dark theme for Greasy Fork with inline sorting, integrated search, converted 0..5 star ratings, increased content font sizes, properly stacked description rows, and hidden install help icons.
-// @author       quantavil & Wack.3gp
+// @version      3.2.2
+// @description  Clean, minimal dark theme for Greasy Fork with centered landing search, inline sorting, integrated search, converted 0..5 star ratings, increased content font sizes, properly stacked description rows, and hidden install help icons.
 // @license      MIT
 // @match        https://greasyfork.org/*
 // @match        https://*.greasyfork.org/*
@@ -250,15 +249,39 @@
             color: var(--text-1) !important;
             margin: 12px 0 24px 0 !important;
         }
-        #home-script-nav {
-            background: var(--bg-1) !important;
-            border: 1px solid var(--border) !important;
-            border-radius: var(--radius) !important;
-            padding: 28px !important;
+
+        /* ── Centered Home Landing Clean Setup (Strict Override) ── */
+        body:not(:has(#browse-script-list)):not(:has(#script-info)) .width-constraint,
+        body:not(:has(#browse-script-list)):not(:has(#script-info)) .text-content {
+            background: #13131a !important;
+            border: none !important;
+            border-width: 0px !important;
+            box-shadow: none !important;
+            max-width: 100% !important;
+            width: 100% !important;
+        }
+
+        body:not(:has(#browse-script-list)):not(:has(#script-info)) .super-title {
+            display: none !important;
+        }
+
+        body:not(:has(#browse-script-list)):not(:has(#script-info)) #home-script-nav {
+            background: #13131a !important;
+            border: none !important;
+            border-style: none !important;
+            border-width: 0px !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 80px auto 0 auto !important;
             display: flex !important;
             flex-direction: column !important;
-            gap: 20px !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 24px !important;
+            max-width: 650px !important;
+            width: 100% !important;
         }
+
         .home-search {
             display: flex !important;
             gap: 8px !important;
@@ -267,36 +290,42 @@
         }
         .home-search input[type="search"] {
             flex: 1 !important;
-            height: 46px !important;
+            height: 48px !important;
             font-size: 16px !important;
+            background: var(--bg-1) !important;
         }
         .home-search .search-submit {
-            height: 46px !important;
+            height: 48px !important;
             padding: 0 24px !important;
             font-size: 16px !important;
             background: var(--bg-3) !important;
         }
         #home-top-sites {
-            font-size: 15px !important;
+            font-size: 14.5px !important;
             color: var(--text-3) !important;
             display: flex !important;
             align-items: center !important;
+            justify-content: center !important;
             flex-wrap: wrap !important;
-            gap: 6px 12px !important;
+            gap: 8px 12px !important;
+            width: 100% !important;
         }
         #home-top-sites a {
             color: var(--text-2) !important;
-            background: var(--bg-2) !important;
-            padding: 4px 12px !important;
+            background: var(--bg-1) !important;
+            padding: 5px 14px !important;
             border-radius: 20px !important;
             font-weight: 500 !important;
             transition: all 0.15s ease !important;
+            border: 1px solid var(--border) !important;
         }
         #home-top-sites a:hover {
             color: var(--accent) !important;
             background: var(--accent-dim) !important;
+            border-color: var(--accent) !important;
         }
 
+        /* ── Regular Browser Views ── */
         #browse-script-list {
             list-style: none !important;
             padding: 0 !important;
@@ -305,6 +334,9 @@
             flex-direction: column;
             gap: 12px;
             width: 100% !important;
+            border: none !important;
+            box-shadow: none !important;
+            background: transparent !important;
         }
         #browse-script-list > li {
             background: var(--bg-1);
@@ -733,7 +765,7 @@
             #script-content { padding: 20px; }
             #gf-control-bar { padding: 12px; flex-direction: column; align-items: stretch; gap: 12px; }
             #gf-control-bar .cb-search-input { width: 100% !important; }
-            #home-script-nav { padding: 16px !important; }
+            body:not(:has(#browse-script-list)):not(:has(#script-info)) #home-script-nav { padding: 0 16px !important; margin: 40px auto 0 auto !important; }
             .home-search { flex-direction: column; }
         }
         @media (max-width: 480px) {
@@ -1129,13 +1161,12 @@
       addControlBar();
     }
 
-    // Fixed loop mutations by restricting trigger checks down to target structural elements
     let mutationTimeout;
     const observer = new MutationObserver(() => {
       if (mutationTimeout) return;
 
       mutationTimeout = window.requestAnimationFrame(() => {
-        observer.disconnect(); // Temporarily isolate execution context
+        observer.disconnect();
         cleanHomeLayoutPanel();
         relocateUserNavItems();
         relocateProfileHeaderActions();
