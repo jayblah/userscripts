@@ -117,7 +117,7 @@
             z-index: 1000;
         }
         #main-header > .width-constraint {
-            max-width: 860px;
+            max-width: 1720px; /* Changed from 860px */
             margin: 0 auto;
             padding: 12px 32px;
             display: flex;
@@ -192,9 +192,11 @@
         #mobile-nav { display: none !important; }
 
         /* ── Layout ── */
-        .width-constraint { max-width: 860px !important; margin: 0 auto !important; padding: 24px 32px !important; }
-        .sidebarred { display: block !important; }
-        .sidebar, .open-sidebar, .close-sidebar { display: none !important; }
+        .width-constraint {
+            max-width: 1720px !important; /* Changed from 860px */
+            margin: 0 auto !important;
+            padding: 24px 32px !important;
+        }
 
         /* ── Script List ── */
         #browse-script-list {
@@ -376,9 +378,9 @@
             margin-bottom: 24px;
         }
         .script-meta-block #script-stats.inline-script-stats {
-            display: grid;
-            grid-template-columns: max-content 1fr;
-            gap: 10px 24px;
+            display: flex; /* Changed from grid to flex for wider layouts */
+            flex-wrap: wrap;
+            gap: 10px 32px;
             align-items: baseline;
         }
         .script-meta-block #script-stats.inline-script-stats > dt {
