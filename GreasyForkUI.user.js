@@ -1,16 +1,21 @@
 // ==UserScript==
 // @name         Greasy Fork Minimal UI
 // @namespace    https://greasyfork.org/
-// @version      2.7.0
-// @description  Clean, minimal dark theme for Greasy Fork
-// @author       quantavil
+// @version      3.2.0
+// @description  Clean, minimal dark theme for Greasy Fork with inline sorting, integrated search, converted 0..5 star ratings, increased content font sizes, properly stacked description rows, and hidden install help icons.
+// @author       quantavil & Wack.3gp
 // @license      MIT
 // @match        https://greasyfork.org/*
 // @match        https://*.greasyfork.org/*
+// @match        https://sleazyfork.org/*
+// @match        https://*.sleazyfork.org/*
 // @icon         https://greasyfork.org/vite/assets/blacklogo96-CxYTSM_T.png
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GreasyForkUI.user.js
 // @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GreasyForkUI.user.js
-// @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @grant        GM_info
+// @grant        GM_notification
+// @connect      sleazyfork.org
 // @run-at       document-start
 // ==/UserScript==
 
@@ -18,9 +23,7 @@
   "use strict";
 
   // ── Constants ────────────────────────────────────────────────────────────
-
   const BG_BASE = "#13131a";
-  const LOG_POWER = 3;
 
   const SORT_OPTIONS = [
     { value: "", label: "Daily Installs" },
@@ -32,14 +35,12 @@
   ];
 
   // ── FOUC Prevention ──────────────────────────────────────────────────────
-
   document.documentElement.style.background = BG_BASE;
 
   injectStyle(
     "gf-critical",
     `
         html { background: ${BG_BASE} !important; }
-
         html:not(.gf-ready) body {
             opacity: 0 !important;
             visibility: hidden !important;
@@ -62,11 +63,9 @@
   );
 
   // ── Main CSS ─────────────────────────────────────────────────────────────
-
   injectStyle(
     "gf-main-styles",
     `
-        /* ── Variables ── */
         :root {
             --bg-0: #13131a;
             --bg-1: #1c1c26;
@@ -89,7 +88,6 @@
             --mono: ui-monospace, 'SF Mono', Consolas, monospace;
         }
 
-        /* ── Base ── */
         html, body { background: var(--bg-0) !important; color: var(--text-1) !important; font-family: var(--font) !important; }
         body { font-size: 15px; line-height: 1.6; }
         a { color: var(--accent); text-decoration: none; transition: color 0.15s; }
@@ -101,14 +99,22 @@
         ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 5px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
-        /* ── Hide Ads ── */
-        .ad-entry, .ad, #script-list-ea, .ethical-ads, [data-ea-publisher] {
+        .ad-entry, .ad, #script-list-ea, .ethical-ads, [data-ea-publisher],
+        #script-list-option-groups, .list-option-groups, .sidebar,
+        .language-selector, .language-selector-locale, .language-selector-submit {
             display: none !important;
             height: 0 !important;
+            width: 0 !important;
             overflow: hidden !important;
+            padding: 0 !important;
+            margin: 0 !important;
         }
 
-        /* ── Header ── */
+        .script-meta-block,
+        #browse-script-list .inline-script-stats {
+            display: none !important;
+        }
+
         #main-header {
             background: var(--bg-1) !important;
             border-bottom: 1px solid var(--border) !important;
@@ -117,12 +123,15 @@
             z-index: 1000;
         }
         #main-header > .width-constraint {
-            max-width: 1720px; /* Changed from 860px */
+            max-width: 1720px;
             margin: 0 auto;
-            padding: 12px 32px;
+            padding: 12px 32px !important;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            box-shadow: none !important;
+            border: none !important;
+            background: transparent !important;
         }
         #site-name { display: flex; align-items: center; gap: 12px; }
         #site-name img { width: 36px !important; height: 36px !important; transition: transform 0.2s; }
@@ -131,9 +140,12 @@
         #site-name-text h1 a { color: var(--text-1) !important; }
 
         #site-nav { display: flex; align-items: center; gap: 8px; }
-        #site-nav nav { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; }
+        #site-nav nav { display: flex; align-items: center; gap: 4px; list-style: none; margin: 0; padding: 0; }
         #site-nav nav > li { position: relative; }
-        #site-nav nav > li > a {
+
+        #site-nav nav > li > a,
+        #site-nav nav > li > .sign-in-link a {
+            display: block;
             padding: 8px 14px;
             border-radius: var(--radius);
             color: var(--text-2) !important;
@@ -141,7 +153,11 @@
             font-weight: 500;
             transition: all 0.15s;
         }
-        #site-nav nav > li > a:hover { background: var(--bg-2); color: var(--text-1) !important; }
+        #site-nav nav > li > a:hover,
+        #site-nav nav > li > .sign-in-link a:hover {
+            background: var(--bg-2);
+            color: var(--text-1) !important;
+        }
         #site-nav nav > li.scripts-index-link > a { background: var(--accent-dim); color: var(--accent) !important; }
 
         #site-nav nav > li.with-submenu > nav {
@@ -158,6 +174,9 @@
             transform: translateY(-8px);
             transition: all 0.2s;
             z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
         }
         #site-nav nav > li.with-submenu:hover > nav { opacity: 1; visibility: visible; transform: translateY(0); }
         #site-nav nav > li.with-submenu > nav > li > a {
@@ -181,24 +200,103 @@
         #nav-user-info .user-profile-link a { color: var(--text-1) !important; font-weight: 500; }
         #nav-user-info .sign-out-link a    { color: var(--text-3) !important; font-size: 13px; }
 
-        .language-selector-locale {
-            background: var(--bg-2) !important;
-            border: 1px solid var(--border) !important;
-            border-radius: var(--radius);
-            color: var(--text-2) !important;
-            padding: 6px 10px;
-            font-size: 12px;
-        }
         #mobile-nav { display: none !important; }
 
-        /* ── Layout ── */
-        .width-constraint {
-            max-width: 1720px !important; /* Changed from 860px */
+        .width-constraint,
+        #main-container,
+        body > .width-constraint,
+        html body div.width-constraint,
+        #script-info {
+            max-width: 1720px !important;
+            width: 100% !important;
             margin: 0 auto !important;
             padding: 24px 32px !important;
+            box-sizing: border-box !important;
+            box-shadow: none !important;
+            border: none !important;
+            background: transparent !important;
         }
 
-        /* ── Script List ── */
+        #script-info {
+            padding: 0 !important;
+            background: var(--bg-1) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: var(--radius) !important;
+            overflow: hidden !important;
+        }
+
+        .sidebarred {
+            display: grid !important;
+            grid-template-columns: 1fr 300px !important;
+            gap: 24px !important;
+            max-width: 100% !important;
+            width: 100% !important;
+        }
+        body:has(#browse-script-list) .sidebarred {
+            grid-template-columns: 1fr !important;
+        }
+
+        .sidebarred-main-content, .text-content {
+            max-width: 100% !important;
+            width: 100% !important;
+            flex: 1 !important;
+            font-size: 17px !important;
+            line-height: 1.7 !important;
+        }
+
+        .super-title {
+            font-size: 28px !important;
+            font-weight: 700 !important;
+            color: var(--text-1) !important;
+            margin: 12px 0 24px 0 !important;
+        }
+        #home-script-nav {
+            background: var(--bg-1) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: var(--radius) !important;
+            padding: 28px !important;
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 20px !important;
+        }
+        .home-search {
+            display: flex !important;
+            gap: 8px !important;
+            width: 100% !important;
+            margin: 0 !important;
+        }
+        .home-search input[type="search"] {
+            flex: 1 !important;
+            height: 46px !important;
+            font-size: 16px !important;
+        }
+        .home-search .search-submit {
+            height: 46px !important;
+            padding: 0 24px !important;
+            font-size: 16px !important;
+            background: var(--bg-3) !important;
+        }
+        #home-top-sites {
+            font-size: 15px !important;
+            color: var(--text-3) !important;
+            display: flex !important;
+            align-items: center !important;
+            flex-wrap: wrap !important;
+            gap: 6px 12px !important;
+        }
+        #home-top-sites a {
+            color: var(--text-2) !important;
+            background: var(--bg-2) !important;
+            padding: 4px 12px !important;
+            border-radius: 20px !important;
+            font-weight: 500 !important;
+            transition: all 0.15s ease !important;
+        }
+        #home-top-sites a:hover {
+            color: var(--accent) !important;
+            background: var(--accent-dim) !important;
+        }
+
         #browse-script-list {
             list-style: none !important;
             padding: 0 !important;
@@ -206,6 +304,7 @@
             display: flex;
             flex-direction: column;
             gap: 12px;
+            width: 100% !important;
         }
         #browse-script-list > li {
             background: var(--bg-1);
@@ -215,42 +314,108 @@
             transition: border-color 0.2s, background 0.2s;
         }
         #browse-script-list > li:hover { border-color: var(--accent); background: var(--bg-2); }
+
         #browse-script-list article h2 {
-            margin: 0 0 10px 0;
-            font-size: 17px;
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            display: grid !important;
+            grid-template-columns: auto 1fr;
+            align-items: center;
+            gap: 6px 12px;
+        }
+        #browse-script-list article h2 .script-link {
+            grid-column: 1;
+            color: var(--text-1) !important;
+        }
+        #browse-script-list article h2 .script-link:hover {
+            color: var(--accent)  !important;
+        }
+        #browse-script-list article h2 .badge {
+            grid-column: 2;
+            justify-self: start;
+        }
+
+        #script-info > header h2 {
+            margin: 0 0 12px 0;
+            font-size: 26px;
             font-weight: 600;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
             flex-wrap: wrap;
         }
-        #browse-script-list article h2 .script-link       { color: var(--text-1) !important; }
-        #browse-script-list article h2 .script-link:hover { color: var(--accent)  !important; }
 
-        .badge     { padding: 4px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+        .badge     { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
         .badge-js  { background: var(--accent-dim); color: var(--accent); }
         .badge-css { background: rgba(192, 132, 252, 0.15); color: var(--purple); }
 
         .name-description-separator { display: none !important; }
-        .script-description { color: var(--text-2) !important; font-size: 14px; margin-bottom: 12px; }
 
-        .inline-script-stats { display: flex; flex-wrap: wrap; gap: 16px; margin: 0; }
-        .inline-script-stats dt { display: none !important; }
-        .inline-script-stats dd { margin: 0; font-size: 13px; color: var(--text-3); display: flex; align-items: center; gap: 5px; }
-        .inline-script-stats dd span { color: var(--text-2); }
+        .script-description {
+            grid-column: 1 / -1 !important;
+            grid-row: 2 !important;
+            color: var(--text-2) !important;
+            font-size: 15.5px;
+            margin: 4px 0 6px 0 !important;
+            font-weight: 400;
+        }
 
-        .script-list-daily-installs::before  { content: '📥 '; }
-        .script-list-total-installs::before  { content: '📊 '; }
-        .script-list-ratings::before         { content: '⭐ '; }
-        .script-list-updated-date::before    { content: '🔄 '; }
-        .script-list-created-date            { display: none !important; }
+        .gf-custom-stats-row {
+            grid-column: 1 / -1 !important;
+            grid-row: 3 !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 16px !important;
+            margin: 4px 0 0 0 !important;
+            font-size: 14.5px !important;
+            font-weight: 500 !important;
+            color: var(--text-2) !important;
+        }
+        .gf-custom-stat-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
 
-        .good-rating-count { color: var(--accent) !important; font-weight: 600; }
-        .ok-rating-count   { color: var(--yellow) !important; }
-        .bad-rating-count  { color: var(--red)    !important; }
-        .script-list-author a { color: var(--accent) !important; font-weight: 500; }
+        .rating-link {
+            text-decoration: none !important;
+            color: inherit !important;
+            display: inline-flex !important;
+            align-items: center;
+        }
+        .rating-box {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .rating-num {
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            font-size: 14.5px;
+        }
+        .star-outer {
+            position: relative;
+            display: inline-block;
+            font-size: 15px;
+            color: #38384a;
+            letter-spacing: 0.5px;
+            vertical-align: middle;
+        }
+        .star-outer::before { content: '★★★★★'; }
+        .star-inner {
+            position: absolute;
+            top: 0; left: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            color: #f39c12;
+        }
+        .star-inner::before { content: '★★★★★'; }
+        .rating-total {
+            color: var(--text-3);
+            font-size: 13.5px;
+        }
 
-        /* ── Pagination ── */
         .pagination, .pagy.series-nav {
             display: flex;
             align-items: center;
@@ -262,8 +427,8 @@
         }
         .pagination a, .pagination span, .pagination em,
         .pagy.series-nav a, .pagy.series-nav [role="link"] {
-            min-width: 38px;
-            height: 38px;
+            min-width: 40px;
+            height: 40px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -271,7 +436,7 @@
             border: 1px solid var(--border);
             border-radius: var(--radius);
             color: var(--text-2) !important;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: 500;
             font-style: normal;
             transition: all 0.15s;
@@ -293,129 +458,90 @@
             pointer-events: none;
         }
 
-        /* ── Script Detail ── */
-        #script-info {
-            background: var(--bg-1);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            overflow: hidden;
-        }
         #script-info > header { padding: 28px; border-bottom: 1px solid var(--border); }
-        #script-info > header h2 { margin: 0 0 12px 0; font-size: 26px; font-weight: 700; color: var(--text-1); }
-        #script-info #script-description { color: var(--text-2); font-size: 16px; margin: 0; }
-        #script-content { padding: 28px; }
+        #script-info #script-description { color: var(--text-2); font-size: 17.5px; margin: 0; }
+        #script-content { padding: 28px; font-size: 17px !important; }
 
-        /* ── Tabs ── */
         #script-links.tabs {
-            display: flex;
+            display: flex !important;
+            align-items: center;
             flex-wrap: wrap;
-            margin: 0;
-            padding: 0;
+            margin: 0 !important;
+            padding: 6px 16px !important;
             list-style: none;
-            background: var(--bg-2);
-            border-bottom: 1px solid var(--border);
+            background: #1c1c26 !important;
+            border-bottom: 1px solid var(--border) !important;
+            box-sizing: border-box !important;
+            width: 100% !important;
+            gap: 4px;
         }
         #script-links.tabs li { flex-shrink: 0; }
         #script-links.tabs li span,
         #script-links.tabs li a span {
             display: block;
-            padding: 12px 16px;
-            font-size: 13px;
+            padding: 8px 16px;
+            font-size: 14px;
             font-weight: 500;
             color: var(--text-2);
             white-space: nowrap;
-            transition: color 0.15s, background 0.15s;
+            transition: all 0.15s ease;
+            border-radius: 4px;
         }
         #script-links.tabs li a:hover span { color: var(--text-1); background: var(--bg-3); }
-        #script-links.tabs li.current { background: var(--bg-1); border-bottom: 2px solid var(--accent); margin-bottom: -1px; }
-        #script-links.tabs li.current span { color: var(--accent); font-weight: 600; }
 
-        /* ── Install Button ── */
-        #install-area { display: inline-flex; align-items: center; gap: 12px; margin-bottom: 24px; }
-        #install-area .install-link {
+        #script-links.tabs li.current { background: none !important; border: none !important; margin: 0 !important; }
+        #script-links.tabs li.current span {
+            background: var(--accent-dim) !important;
+            color: var(--accent) !important;
+            font-weight: 600;
+        }
+
+        #script-links.tabs #script-feedback-suggestion {
+            margin-left: auto !important;
+            margin-bottom: 0 !important;
+            background: none !important;
+            border: none !important;
+            padding: 0 12px 0 0 !important;
+            font-size: 13px !important;
+            color: var(--text-3) !important;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            padding: 14px 28px;
+        }
+        #script-links.tabs #script-feedback-suggestion a {
+            color: var(--text-2) !important;
+            transition: color 0.15s;
+        }
+        #script-links.tabs #script-feedback-suggestion a:hover {
+            color: var(--accent) !important;
+        }
+
+        #script-links.tabs #install-area {
+            margin-left: 0 !important;
+            margin-bottom: 0 !important;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 !important;
+        }
+        #script-links.tabs #install-area .install-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
             background: var(--accent);
             color: #000 !important;
-            font-size: 15px;
+            font-size: 13.5px;
             font-weight: 700;
-            border-radius: var(--radius);
-            transition: all 0.2s;
-        }
-        #install-area .install-link::before { content: '↓'; font-size: 18px; font-weight: 700; }
-        #install-area .install-link:hover { background: var(--accent-hover); transform: translateY(-1px); }
-        #install-area .install-help-link {
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--bg-2);
-            border: 1px solid var(--border);
-            border-radius: 50%;
-            color: var(--text-3) !important;
-            font-size: 13px;
-            font-weight: 600;
-        }
-
-        #script-feedback-suggestion {
-            padding: 16px 20px;
-            background: var(--bg-2);
-            border-left: 3px solid var(--accent);
-            border-radius: 0 var(--radius) var(--radius) 0;
-            margin-bottom: 24px;
-            font-size: 14px;
-            color: var(--text-2);
-        }
-
-        /* ── Script Meta Block ── */
-        .script-meta-block {
-            background: var(--bg-2);
-            border-radius: var(--radius);
-            padding: 24px;
-            margin-bottom: 24px;
-        }
-        .script-meta-block #script-stats.inline-script-stats {
-            display: flex; /* Changed from grid to flex for wider layouts */
-            flex-wrap: wrap;
-            gap: 10px 32px;
-            align-items: baseline;
-        }
-        .script-meta-block #script-stats.inline-script-stats > dt {
-            display: block !important;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-            color: var(--text-3);
-            padding: 4px 0;
-        }
-        .script-meta-block #script-stats.inline-script-stats > dd {
-            font-size: 14px;
-            color: var(--text-1);
-            padding: 4px 0;
-            margin: 0;
-        }
-        .script-meta-block #script-stats.inline-script-stats > dd::before { display: none !important; }
-        .script-meta-block #script-stats.inline-script-stats > dd a { color: var(--accent) !important; }
-
-        .script-meta-block #script-stats .good-rating-count,
-        .script-meta-block #script-stats .ok-rating-count,
-        .script-meta-block #script-stats .bad-rating-count {
-            display: inline-block;
-            padding: 2px 8px;
             border-radius: 4px;
-            font-size: 13px;
-            margin-right: 4px;
+            transition: all 0.2s;
+            line-height: 1.4;
         }
-        .script-meta-block #script-stats .good-rating-count { background: var(--accent-dim); }
-        .script-meta-block #script-stats .ok-rating-count   { background: rgba(253, 224, 71,  0.15); }
-        .script-meta-block #script-stats .bad-rating-count  { background: rgba(248, 113, 113, 0.15); }
-        .script-meta-block .browser-compatible { width: 22px; height: 22px; margin-right: 6px; vertical-align: middle; }
+        #script-links.tabs #install-area .install-link::before { content: '↓'; font-size: 14px; font-weight: 700; }
+        #script-links.tabs #install-area .install-link:hover { background: var(--accent-hover); transform: translateY(-1px); }
 
-        /* ── Applies-to ── */
+        #install-area .install-help-link {
+            display: none !important;
+        }
+
         .script-show-applies-to .block-list {
             display: flex;
             flex-wrap: wrap;
@@ -427,22 +553,21 @@
         .script-show-applies-to .block-list.expandable { max-height: none !important; height: auto !important; }
         .script-show-applies-to .block-list li a {
             display: inline-block;
-            padding: 5px 12px;
+            padding: 6px 14px;
             background: var(--bg-3);
             border-radius: 20px;
-            font-size: 12px;
+            font-size: 13px;
             color: var(--text-2) !important;
         }
         .script-show-applies-to .block-list li a:hover { background: var(--accent-dim); color: var(--accent) !important; }
         .script-show-applies-to .expander { display: none !important; }
 
-        /* ── Additional Info ── */
         #additional-info {
             padding: 24px;
             background: var(--bg-2);
             border-radius: var(--radius);
             margin-top: 24px;
-            font-size: 15px;
+            font-size: 17px;
             line-height: 1.7;
             color: var(--text-2);
         }
@@ -455,7 +580,7 @@
             background: var(--bg-1);
             border-radius: 4px;
             font-family: var(--mono);
-            font-size: 13px;
+            font-size: 14px;
             color: var(--accent);
         }
         #additional-info pre {
@@ -473,82 +598,74 @@
         .user-screenshots a:hover { border-color: var(--accent); transform: scale(1.02); }
         .user-screenshots img { width: 100%; display: block; margin: 0 !important; }
 
-        /* ── Control Bar ── */
         #gf-control-bar {
             display: flex;
             align-items: center;
-            gap: 16px;
+            justify-content: space-between;
+            gap: 20px;
             margin-bottom: 20px;
-            padding: 16px 20px;
+            padding: 12px 18px;
             background: var(--bg-1);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            flex-wrap: wrap;
+            box-sizing: border-box !important;
+            width: 100% !important;
         }
-        #gf-control-bar .cb-section { display: flex; align-items: center; gap: 10px; }
+        #gf-control-bar .cb-section { display: flex; align-items: center; gap: 14px; }
         #gf-control-bar .cb-label {
             font-size: 12px;
-            font-weight: 600;
+            font-weight: 700;
             color: var(--text-3);
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.8px;
             white-space: nowrap;
         }
-        #gf-control-bar select {
+        #gf-control-bar .sort-options-container { display: flex; gap: 6px; flex-wrap: wrap; }
+        #gf-control-bar .sort-item {
             background: var(--bg-2);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 8px 12px;
-            font-size: 13px;
-            color: var(--text-1);
+            padding: 6px 14px;
+            font-size: 14px;
+            color: var(--text-2);
             cursor: pointer;
-            outline: none;
+            transition: all 0.15s ease;
         }
-        #gf-control-bar select:focus { border-color: var(--accent); }
-        #gf-control-bar .cb-divider { width: 1px; height: 28px; background: var(--border); }
-        #gf-control-bar .slider-container { display: flex; align-items: center; gap: 8px; }
-        #gf-control-bar input[type="range"] {
-            -webkit-appearance: none;
-            width: 100px;
-            height: 6px;
+        #gf-control-bar .sort-item:hover {
+            border-color: var(--border-hover);
+            color: var(--text-1);
             background: var(--bg-3);
-            border-radius: 3px;
-            outline: none;
-            cursor: pointer;
         }
-        #gf-control-bar input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 16px;
-            height: 16px;
-            background: var(--accent);
-            border-radius: 50%;
-            cursor: pointer;
-            transition: transform 0.15s;
-        }
-        #gf-control-bar input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
-        #gf-control-bar input[type="range"]::-moz-range-thumb {
-            width: 16px;
-            height: 16px;
-            background: var(--accent);
-            border-radius: 50%;
-            border: none;
-            cursor: pointer;
-        }
-        #gf-control-bar .slider-value {
-            min-width: 55px;
-            padding: 4px 8px;
-            background: var(--bg-2);
-            border-radius: 4px;
-            font-size: 12px;
+        #gf-control-bar .sort-item.active {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
             font-weight: 600;
-            color: var(--text-1);
-            text-align: center;
-            font-family: var(--mono);
         }
-        #gf-control-bar .cb-stats { margin-left: auto; font-size: 13px; color: var(--text-3); }
-        #gf-control-bar .cb-stats strong { color: var(--accent); font-weight: 600; }
 
-        /* ── Scroll-to-top Button ── */
+        #gf-control-bar .cb-search-form {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+        }
+        #gf-control-bar .cb-search-input {
+            width: 260px !important;
+            padding: 6px 14px !important;
+            font-size: 14px !important;
+            height: 36px !important;
+            box-sizing: border-box !important;
+        }
+        #gf-control-bar .cb-search-submit {
+            padding: 0 14px !important;
+            height: 36px !important;
+            font-size: 14px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            background: var(--bg-2) !important;
+        }
+
         #gf-scroll-top {
             position: fixed;
             bottom: 24px;
@@ -573,7 +690,6 @@
         #gf-scroll-top.show { opacity: 1; visibility: visible; transform: translateY(0); }
         #gf-scroll-top:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
 
-        /* ── Forms ── */
         input[type="text"], input[type="search"], input[type="email"],
         input[type="password"], textarea, select {
             background: var(--bg-2) !important;
@@ -581,7 +697,7 @@
             border-radius: var(--radius) !important;
             color: var(--text-1) !important;
             padding: 10px 14px !important;
-            font-size: 14px !important;
+            font-size: 15px !important;
             outline: none !important;
             transition: border-color 0.15s !important;
         }
@@ -592,7 +708,7 @@
             border-radius: var(--radius) !important;
             color: var(--text-1) !important;
             padding: 10px 18px !important;
-            font-size: 14px !important;
+            font-size: 15px !important;
             font-weight: 500 !important;
             cursor: pointer !important;
             transition: all 0.15s !important;
@@ -602,24 +718,23 @@
             border-color: var(--border-hover) !important;
         }
 
-        /* ── Responsive ── */
+        @media (max-width: 900px) {
+            #script-links.tabs { flex-direction: column; align-items: flex-start; gap: 8px; }
+            #script-links.tabs #script-feedback-suggestion { margin-left: 0 !important; padding: 4px 0 !important; }
+        }
         @media (max-width: 768px) {
-            #main-header > .width-constraint { padding: 10px 16px; }
+            #main-header > .width-constraint { padding: 10px 16px !important; }
             #site-nav    { display: none; }
             #mobile-nav  { display: block !important; }
             .width-constraint { padding: 16px !important; }
             #browse-script-list > li { padding: 16px 18px; }
-            #browse-script-list article h2 { font-size: 15px; }
+            #browse-script-list article h2 { font-size: 17px; }
             #script-info > header  { padding: 20px; }
-            #script-info > header h2 { font-size: 20px; }
             #script-content { padding: 20px; }
-            .script-meta-block { padding: 16px; }
-            .script-meta-block #script-stats.inline-script-stats { gap: 6px 16px; }
-            #gf-control-bar { gap: 12px; }
-            #gf-control-bar input[type="range"] { width: 80px; }
-            #gf-control-bar .cb-stats { width: 100%; margin-left: 0; margin-top: 8px; }
-            #script-links.tabs li span,
-            #script-links.tabs li a span { padding: 10px 12px; font-size: 12px; }
+            #gf-control-bar { padding: 12px; flex-direction: column; align-items: stretch; gap: 12px; }
+            #gf-control-bar .cb-search-input { width: 100% !important; }
+            #home-script-nav { padding: 16px !important; }
+            .home-search { flex-direction: column; }
         }
         @media (max-width: 480px) {
             #script-links.tabs {
@@ -631,32 +746,17 @@
             #script-links.tabs::-webkit-scrollbar { display: none; }
         }
 
-        /* ── Junk ── */
         #pagetual-sideController, .umdl-fab, .umdl-pick, .umdl-toast,
         .sae-bubble, .sae-palette { display: none !important; }
     `,
   );
 
   // ── Helpers ──────────────────────────────────────────────────────────────
-
   function injectStyle(id, cssText) {
     const el = document.createElement("style");
     el.id = id;
     el.textContent = cssText;
-    (document.head ?? document.documentElement).appendChild(el);
-  }
-
-  function sliderToValue(position, max) {
-    if (position <= 0) return 0;
-    if (position >= 100) return max;
-    return Math.round(max * Math.pow(position / 100, LOG_POWER));
-  }
-
-  function formatNumber(n) {
-    if (n >= 1_000_000)
-      return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
-    return String(n);
+    (document.head || document.documentElement).appendChild(el);
   }
 
   function revealPage() {
@@ -667,7 +767,246 @@
     );
   }
 
-  // ── Feature: Scroll-to-top ───────────────────────────────────────────────
+  const incrementVisibility = () => {
+    let views = parseInt(localStorage.getItem("star_rating_views") || "0", 10);
+    views++;
+    localStorage.setItem("star_rating_views", views);
+
+    if (views === 2500) {
+      const donationUrl =
+        typeof GM_info !== "undefined"
+          ? GM_info.script.header.match(/@contributionURL\s+(.+)/)?.[1]
+          : "https://www.paypal.com/donate?hosted_button_id=BYW9D395KJWZ2";
+
+      GM_notification({
+        title: "☕ Support Wack.3gp",
+        text: `You've viewed ${views} script ratings! Enjoying the star display? Click here to buy me a coffee.`,
+        image: "https://greasyfork.org/vite/assets/blacklogo96-CxYTSM_T.png",
+        timeout: 10000,
+        onclick: function () {
+          window.open(donationUrl, "_blank");
+        },
+      });
+      localStorage.setItem("star_rating_views", "0");
+    }
+  };
+
+  const checkLinkBridge = function (container) {
+    if (!window.location.hostname.includes("sleazyfork.org")) return;
+
+    const scriptLink = container.querySelector(".script-link");
+    if (!scriptLink || scriptLink.dataset.bridgeChecked) return;
+
+    scriptLink.dataset.bridgeChecked = "true";
+
+    GM_xmlhttpRequest({
+      method: "HEAD",
+      url: scriptLink.href,
+      onload: function (response) {
+        if (response.status === 404) {
+          const allLinks = container.getElementsByTagName("a");
+          for (const a of allLinks) {
+            const href = a.getAttribute("href");
+            if (href) {
+              if (href.startsWith("/")) {
+                a.href = "https://greasyfork.org" + href;
+              } else if (href.includes("sleazyfork.org")) {
+                a.href = href.replace("sleazyfork.org", "greasyfork.org");
+              }
+            }
+          }
+        }
+      },
+    });
+  };
+
+  // ── Combined Core Engine: Processing & Mapping Ratings ───────────────────
+  function processMetricsAndRelocate() {
+    const listItems = document.querySelectorAll(
+      "#browse-script-list > li, article",
+    );
+    if (listItems.length) {
+      listItems.forEach((container) => {
+        const targetHeader = container.querySelector("h2");
+        if (!targetHeader || targetHeader.querySelector(".gf-custom-stats-row"))
+          return;
+
+        checkLinkBridge(container);
+
+        const goodEl = container.querySelector(".good-rating-count");
+        const okEl = container.querySelector(".ok-rating-count");
+        const badEl = container.querySelector(".bad-rating-count");
+
+        let starRatingHtml = "";
+        if (goodEl || okEl || badEl) {
+          incrementVisibility();
+
+          let feedbackUrl = "#";
+          const allLinks = container.getElementsByTagName("a");
+          for (let i = 0; i < allLinks.length; i++) {
+            const match = allLinks[i].href.match(/\/scripts\/(\d+)/);
+            if (match) {
+              feedbackUrl =
+                allLinks[i].href.split("/scripts/")[0] +
+                "/scripts/" +
+                match[1] +
+                "/feedback";
+              break;
+            }
+          }
+
+          const good = parseInt(goodEl?.textContent ?? 0, 10) || 0;
+          const ok = parseInt(okEl?.textContent ?? 0, 10) || 0;
+          const bad = parseInt(badEl?.textContent ?? 0, 10) || 0;
+          const total = good + ok + bad;
+          const avg = total > 0 ? (good * 5 + ok * 3 + bad * 1) / total : 0;
+          const percent = (avg / 5) * 100;
+
+          starRatingHtml = `
+                <a href="${feedbackUrl}" class="rating-link" title="Feedback (Avg: ${avg.toFixed(2)})">
+                    <div class="rating-box">
+                        <span class="rating-num">${avg.toFixed(2)}</span>
+                        <div class="star-outer"><div class="star-inner" style="width: ${percent}%"></div></div>
+                        <span class="rating-total">(${total.toLocaleString()})</span>
+                    </div>
+                </a>
+            `;
+        }
+
+        const totalInstalls =
+          container.querySelector(
+            ".script-list-total-installs + dd, dd.script-list-total-installs",
+          )?.innerHTML || "";
+        const updatedDate =
+          container.querySelector(
+            ".script-list-updated-date + dd, dd.script-list-updated-date",
+          )?.innerHTML || "";
+
+        if (totalInstalls || starRatingHtml || updatedDate) {
+          const statsRow = document.createElement("span");
+          statsRow.className = "gf-custom-stats-row";
+          statsRow.innerHTML = `
+            ${totalInstalls ? `<span class="gf-custom-stat-item">📊 <span>${totalInstalls}</span></span>` : ""}
+            ${starRatingHtml ? `<span class="gf-custom-stat-item">⭐ ${starRatingHtml}</span>` : ""}
+            ${updatedDate ? `<span class="gf-custom-stat-item">🔄 <span>${updatedDate}</span></span>` : ""}
+          `;
+          targetHeader.appendChild(statsRow);
+        }
+      });
+    }
+
+    const scriptInfoHeader = document.querySelector("#script-info > header");
+    if (scriptInfoHeader) {
+      const targetHeader = scriptInfoHeader.querySelector("h2");
+      const metaBlock = document.querySelector(".script-meta-block");
+
+      if (
+        targetHeader &&
+        metaBlock &&
+        !targetHeader.querySelector(".gf-custom-stats-row")
+      ) {
+        const goodEl = metaBlock.querySelector(".good-rating-count");
+        const okEl = metaBlock.querySelector(".ok-rating-count");
+        const badEl = metaBlock.querySelector(".bad-rating-count");
+
+        let starRatingHtml = "";
+        if (goodEl || okEl || badEl) {
+          let feedbackUrl = "#";
+          const urlMatch = window.location.pathname.match(/\/scripts\/(\d+)/);
+          if (urlMatch) {
+            feedbackUrl =
+              window.location.origin +
+              window.location.pathname.split("/scripts/")[0] +
+              "/scripts/" +
+              urlMatch[1] +
+              "/feedback";
+          }
+
+          const good = parseInt(goodEl?.textContent ?? 0, 10) || 0;
+          const ok = parseInt(okEl?.textContent ?? 0, 10) || 0;
+          const bad = parseInt(badEl?.textContent ?? 0, 10) || 0;
+          const total = good + ok + bad;
+          const avg = total > 0 ? (good * 5 + ok * 3 + bad * 1) / total : 0;
+          const percent = (avg / 5) * 100;
+
+          starRatingHtml = `
+                <a href="${feedbackUrl}" class="rating-link" title="Feedback (Avg: ${avg.toFixed(2)})">
+                    <div class="rating-box">
+                        <span class="rating-num">${avg.toFixed(2)}</span>
+                        <div class="star-outer"><div class="star-inner" style="width: ${percent}%"></div></div>
+                        <span class="rating-total">(${total.toLocaleString()})</span>
+                    </div>
+                </a>
+            `;
+        }
+
+        const totalInstalls =
+          metaBlock.querySelector(
+            ".script-list-total-installs + dd, dd.script-list-total-installs",
+          )?.innerHTML || "";
+        const updatedDate =
+          metaBlock.querySelector(
+            ".script-list-updated-date + dd, dd.script-list-updated-date",
+          )?.innerHTML || "";
+
+        if (totalInstalls || starRatingHtml || updatedDate) {
+          const statsRow = document.createElement("span");
+          statsRow.className = "gf-custom-stats-row";
+          statsRow.innerHTML = `
+            ${totalInstalls ? `<span class="gf-custom-stat-item">📊 <span>${totalInstalls}</span></span>` : ""}
+            ${starRatingHtml ? `<span class="gf-custom-stat-item">⭐ ${starRatingHtml}</span>` : ""}
+            ${updatedDate ? `<span class="gf-custom-stat-item">🔄 <span>${updatedDate}</span></span>` : ""}
+          `;
+          targetHeader.appendChild(statsRow);
+        }
+      }
+    }
+  }
+
+  function cleanHomeLayoutPanel() {
+    const homeNav = document.getElementById("home-script-nav");
+    if (!homeNav) return;
+
+    let nextEl = homeNav.nextElementSibling;
+    while (nextEl) {
+      const toRemove = nextEl;
+      nextEl = nextEl.nextElementSibling;
+      toRemove.remove();
+    }
+  }
+
+  function relocateUserNavItems() {
+    const navContainer = document.querySelector("#site-nav nav");
+    const signInLink = document.querySelector("#nav-user-info .sign-in-link");
+
+    if (
+      navContainer &&
+      signInLink &&
+      !navContainer.querySelector(".gf-relocated-signin")
+    ) {
+      const wrapperLi = document.createElement("li");
+      wrapperLi.className = "gf-relocated-signin";
+      wrapperLi.appendChild(signInLink);
+      navContainer.appendChild(wrapperLi);
+    }
+  }
+
+  function relocateProfileHeaderActions() {
+    const tabs = document.querySelector("#script-links.tabs");
+    if (!tabs) return;
+
+    const feedbackSuggestion = document.getElementById(
+      "script-feedback-suggestion",
+    );
+    const installArea = document.getElementById("install-area");
+
+    if (feedbackSuggestion && feedbackSuggestion.parentElement !== tabs) {
+      tabs.appendChild(feedbackSuggestion);
+    }
+    if (installArea && installArea.parentElement !== tabs) {
+      tabs.appendChild(installArea);
+    }
+  }
 
   function addScrollTop() {
     if (document.getElementById("gf-scroll-top")) return;
@@ -689,104 +1028,56 @@
     );
   }
 
-  // ── Feature: Control Bar ─────────────────────────────────────────────────
-
   function addControlBar() {
     const main = document.querySelector(".sidebarred-main-content");
     if (!main || document.getElementById("gf-control-bar")) return;
 
-    const scripts = Array.from(
-      document.querySelectorAll("#browse-script-list li[data-script-id]"),
+    const scripts = document.querySelectorAll(
+      "#browse-script-list li[data-script-id]",
     );
     if (!scripts.length) return;
 
-    const maxDaily = Math.max(
-      100,
-      ...scripts.map((li) => parseInt(li.dataset.scriptDailyInstalls) || 0),
-    );
-    const maxTotal = Math.max(
-      1000,
-      ...scripts.map((li) => parseInt(li.dataset.scriptTotalInstalls) || 0),
-    );
-
-    const currentSort =
-      new URL(window.location.href).searchParams.get("sort") ?? "";
+    const urlParams = new URLSearchParams(window.location.search);
+    const currentSort = urlParams.get("sort") ?? "";
+    const currentSearchQuery = urlParams.get("q") ?? "";
 
     const bar = document.createElement("div");
     bar.id = "gf-control-bar";
     bar.innerHTML = `
             <div class="cb-section">
-                <span class="cb-label">Sort</span>
-                <select id="gf-sort">
+                <span class="cb-label">Sort By</span>
+                <div class="sort-options-container">
                     ${SORT_OPTIONS.map(
-                      ({ value, label }) =>
-                        `<option value="${value}"${value === currentSort ? " selected" : ""}>${label}</option>`,
+                      ({ value, label }) => `
+                        <div class="sort-item${value === currentSort ? " active" : ""}" data-value="${value}">
+                            ${label}
+                        </div>
+                    `,
                     ).join("")}
-                </select>
-            </div>
-            <div class="cb-divider"></div>
-            <div class="cb-section">
-                <span class="cb-label">Daily ≥</span>
-                <div class="slider-container">
-                    <input type="range" id="gf-daily-slider" min="0" max="100" value="0">
-                    <span class="slider-value" id="gf-daily-value">0</span>
                 </div>
             </div>
-            <div class="cb-section">
-                <span class="cb-label">Total ≥</span>
-                <div class="slider-container">
-                    <input type="range" id="gf-total-slider" min="0" max="100" value="0">
-                    <span class="slider-value" id="gf-total-value">0</span>
-                </div>
-            </div>
-            <div class="cb-stats"><strong id="gf-visible">${scripts.length}</strong> / ${scripts.length} scripts</div>
+            <form class="cb-search-form" action="${window.location.pathname}" method="get">
+                ${currentSort ? `<input type="hidden" name="sort" value="${currentSort}">` : ""}
+                <input class="cb-search-input" type="search" name="q" value="${currentSearchQuery.replace(/"/g, "&quot;")}" placeholder="Search scripts">
+                <input class="cb-search-submit" type="submit" value="🔎">
+            </form>
         `;
     main.prepend(bar);
 
-    bar.querySelector("#gf-sort").addEventListener("change", function () {
-      const url = new URL(window.location.href);
-      this.value
-        ? url.searchParams.set("sort", this.value)
-        : url.searchParams.delete("sort");
-      window.location.href = url.toString();
+    bar.querySelectorAll(".sort-item").forEach((item) => {
+      item.addEventListener("click", function () {
+        const value = this.dataset.value;
+        const url = new URL(window.location.href);
+
+        if (value) {
+          url.searchParams.set("sort", value);
+        } else {
+          url.searchParams.delete("sort");
+        }
+        window.location.href = url.toString();
+      });
     });
-
-    const dailySlider = bar.querySelector("#gf-daily-slider");
-    const totalSlider = bar.querySelector("#gf-total-slider");
-    const dailyDisplay = bar.querySelector("#gf-daily-value");
-    const totalDisplay = bar.querySelector("#gf-total-value");
-    const countDisplay = bar.querySelector("#gf-visible");
-
-    function applyFilters() {
-      const minDaily = sliderToValue(dailySlider.valueAsNumber, maxDaily);
-      const minTotal = sliderToValue(totalSlider.valueAsNumber, maxTotal);
-      let visible = 0;
-
-      for (const li of scripts) {
-        const show =
-          (parseInt(li.dataset.scriptDailyInstalls) || 0) >= minDaily &&
-          (parseInt(li.dataset.scriptTotalInstalls) || 0) >= minTotal;
-        li.hidden = !show;
-        if (show) visible++;
-      }
-
-      dailyDisplay.textContent = formatNumber(minDaily);
-      totalDisplay.textContent = formatNumber(minTotal);
-      countDisplay.textContent = visible;
-    }
-
-    let rafId;
-    const scheduleFilter = () => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(applyFilters);
-    };
-
-    dailySlider.addEventListener("input", scheduleFilter);
-    totalSlider.addEventListener("input", scheduleFilter);
-    applyFilters();
   }
-
-  // ── Feature: Keyboard Shortcuts ──────────────────────────────────────────
 
   function addKeyboardShortcuts() {
     document.addEventListener("keydown", (e) => {
@@ -800,7 +1091,9 @@
         "/": () => {
           e.preventDefault();
           document
-            .querySelector('input[type="search"], input[name="q"]')
+            .querySelector(
+              '#gf-control-bar .cb-search-input, input[type="search"], input[name="q"]',
+            )
             ?.focus();
         },
         i: () => document.querySelector(".install-link")?.click(),
@@ -812,16 +1105,20 @@
   }
 
   // ── Init ─────────────────────────────────────────────────────────────────
-
   function init() {
+    cleanHomeLayoutPanel();
+    relocateUserNavItems();
+    relocateProfileHeaderActions();
+    processMetricsAndRelocate();
     revealPage();
 
-    // Expand any collapsed sections
-    for (const el of document.querySelectorAll(".expandable.collapsed")) {
+    const collapsed = document.querySelectorAll(".expandable.collapsed");
+    for (const el of collapsed) {
       el.style.cssText += "max-height:none;height:auto;";
       el.classList.remove("collapsed");
     }
-    for (const el of document.querySelectorAll(".expander")) {
+    const expanders = document.querySelectorAll(".expander");
+    for (const el of expanders) {
       el.style.display = "none";
     }
 
@@ -831,6 +1128,24 @@
     if (document.querySelector("#browse-script-list")) {
       addControlBar();
     }
+
+    // Fixed loop mutations by restricting trigger checks down to target structural elements
+    let mutationTimeout;
+    const observer = new MutationObserver(() => {
+      if (mutationTimeout) return;
+
+      mutationTimeout = window.requestAnimationFrame(() => {
+        observer.disconnect(); // Temporarily isolate execution context
+        cleanHomeLayoutPanel();
+        relocateUserNavItems();
+        relocateProfileHeaderActions();
+        processMetricsAndRelocate();
+        observer.observe(document.body, { childList: true, subtree: true });
+        mutationTimeout = null;
+      });
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
   if (document.readyState === "loading") {
