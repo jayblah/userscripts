@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name            Reddit Enhancements
 // @description     Nuking clutter and adding a built-in Lightbox/Zoom for images with mousewheel navigation.
-// @version         3.0.5
+// @version         3.1.2
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
 // @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
@@ -22,14 +22,12 @@
   ];
 
   const NUKE_SELECTORS = [
-    // Layout
     "#subreddit-banner-img",
     "shreddit-sidebar",
     "#right-sidebar-container",
     "aside:has(shreddit-sidebar)",
     "[grid-area='right-sidebar']",
     ".right-sidebar",
-    // Nav clutter
     'faceplate-tracker[noun="games_drawer"]',
     "games-section-badge-controller",
     "#games_section",
@@ -37,30 +35,30 @@
     "shreddit-related-communities",
     'details:has(summary[aria-controls="RESOURCES"])',
     "community-highlight-carousel",
-    // User drawer clutter
     'faceplate-tracker[source="achievements"]',
     'faceplate-tracker[source="earn"]',
     'faceplate-tracker[noun="premium_menu"]',
     'faceplate-tracker[noun="advertise"]',
     'faceplate-tracker[noun="try_reddit_pro"]',
+    "search-telemetry-tracker:has(search-answers-response-container-streaming)",
+    "search-answers-response-container-streaming",
   ];
+
+  const NUKE_SELECTOR_STRING = NUKE_SELECTORS.join(", ");
 
   // 1. GLOBAL CSS
   const globalStyle = document.createElement("style");
   globalStyle.textContent = `
-    ${NUKE_SELECTORS.join(", ")} { display: none !important; }
+    ${NUKE_SELECTOR_STRING} { display: none !important; }
 
-    /* Hide award buttons in light DOM */
-    award-button { display: none !important; }
+    award-button, shreddit-slot[slot="award-button"] { display: none !important; }
 
-    /* Hide HRs in user drawer and left nav */
     #user-drawer-content hr.bg-neutral-border-weak,
     #left-sidebar-container hr.border-neutral-border-weak,
     flex-left-nav-container hr.border-neutral-border-weak {
       display: none !important;
     }
 
-    /* Image Zoom / Lightbox */
     .pp_imageViewable { cursor: zoom-in !important; }
     #pp_lightbox {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -70,14 +68,12 @@
     }
     #pp_lightbox img { max-width: 95%; max-height: 95%; box-shadow: 0 0 20px rgba(0,0,0,0.5); pointer-events: none; }
 
-    /* Lightbox Nav Controls */
     .pp_nav_btn {
       position: absolute; top: 50%; transform: translateY(-50%);
       background: rgba(255,255,255,0.1); color: white; border: none;
       font-size: 28px; cursor: pointer; border-radius: 4px;
       transition: background 0.2s; z-index: 1000000; display: none;
-      box-sizing: border-box;
-      height: 60px; width: 60px;
+      box-sizing: border-box; height: 60px; width: 60px;
       display: flex; justify-content: center; align-items: center;
       padding: 0; line-height: 1;
     }
@@ -90,7 +86,6 @@
       padding: 4px 12px; border-radius: 12px; display: none;
     }
 
-    /* Post Expansion */
     .pp_post_noWrap { max-height: none !important; display: block !important; }
     .pp_post_unwrapContainer {
       width: 100%; display: flex; justify-content: center; padding: 12px 0;
@@ -99,26 +94,16 @@
     }
     .pp_post_unwrapButton { font-weight: bold; color: var(--color-interactive-default); }
 
-    /* Collapse All Button (Custom Colors) */
     .pp_collapse_btn {
-      display: inline-flex; align-items: center; gap: 4px;
-      padding: 0 12px;
+      display: inline-flex; align-items: center; gap: 4px; padding: 0 12px;
       font-size: 14px; font-weight: 600; font-family: inherit;
-      color: #eeefef !important;
-      background: #2a3236 !important;
-      border: 1px solid #2a3236 !important;
-      border-radius: 99px; cursor: pointer;
-      height: var(--size-button-sm-h, 32px);
-      transition: background 0.15s, border-color 0.15s;
+      color: #eeefef !important; background: #2a3236 !important;
+      border: 1px solid #2a3236 !important; border-radius: 99px; cursor: pointer;
+      height: var(--size-button-sm-h, 32px); transition: background 0.15s, border-color 0.15s;
       user-select: none; white-space: nowrap;
     }
-    .pp_collapse_btn:hover {
-      background: #3a454a !important;
-      border-color: #3a454a !important;
-    }
-    .pp_collapse_btn.pp_collapsed {
-      opacity: 0.85;
-    }
+    .pp_collapse_btn:hover { background: #3a454a !important; border-color: #3a454a !important; }
+    .pp_collapse_btn.pp_collapsed { opacity: 0.85; }
   `;
   document.documentElement.appendChild(globalStyle);
 
@@ -131,7 +116,6 @@
   lightbox.id = "pp_lightbox";
 
   const lightboxImg = document.createElement("img");
-
   const prevBtn = document.createElement("button");
   prevBtn.id = "pp_nav_prev";
   prevBtn.className = "pp_nav_btn";
@@ -185,13 +169,11 @@
     navigateGallery(1);
   };
 
-  // Keyboard Navigation
   window.addEventListener(
     "keydown",
     (e) => {
       if (lightbox.style.display === "flex") {
         const code = e.code;
-
         if (code === "ArrowRight" || code === "KeyD") {
           e.preventDefault();
           e.stopPropagation();
@@ -211,7 +193,6 @@
   );
 
   // SHADOW-DOM BOUND SEARCH ROUTING RESCUE
-  // Pierces web component barriers using e.composedPath() to cleanly hijack the Enter key
   window.addEventListener(
     "keydown",
     (e) => {
@@ -226,7 +207,7 @@
           const query = input.value ? input.value.trim() : "";
           if (query) {
             e.preventDefault();
-            e.stopImmediatePropagation(); // Completely drop Reddit's internal SPA router intercept
+            e.stopImmediatePropagation();
             window.location.assign(`/search/?q=${encodeURIComponent(query)}`);
           }
         }
@@ -235,14 +216,12 @@
     { capture: true },
   );
 
-  // Mousewheel Navigation
   window.addEventListener(
     "wheel",
     (e) => {
       if (lightbox.style.display === "flex") {
         e.preventDefault();
         e.stopPropagation();
-
         const now = Date.now();
         if (now - lastWheelTime < 150) return;
 
@@ -267,6 +246,7 @@
   let allCollapsed = false;
 
   const Actions = {
+    // Restored deep query loop to ensure nested containers are traversed correctly
     deepQuery: (root, selector) => {
       const found = root.querySelector(selector);
       if (found) return found;
@@ -290,34 +270,27 @@
 
     injectCollapseButton: () => {
       if (!window.location.href.includes("/comments/")) return;
-      if (Actions.deepQuery(document, ".pp_collapse_btn")) return;
 
       const commentsBtn = Actions.deepQuery(
         document,
         'button[name="comments-action-button"]',
       );
-      if (!commentsBtn) return;
+      if (!commentsBtn || commentsBtn.hasAttribute("pp-has-sibling-btn"))
+        return;
 
       const shadowHost = commentsBtn.getRootNode();
       if (shadowHost && shadowHost !== document) {
         const styleEl = document.createElement("style");
         styleEl.textContent = `
           .pp_collapse_btn {
-            display: inline-flex; align-items: center;
-            padding: 0 12px;
+            display: inline-flex; align-items: center; padding: 0 12px;
             font-size: 14px; font-weight: 600; font-family: inherit;
-            color: #eeefef !important;
-            background: #2a3236 !important;
-            border: 1px solid #2a3236 !important;
-            border-radius: 99px; cursor: pointer;
-            height: var(--size-button-sm-h, 32px);
-            transition: background 0.15s, border-color 0.15s;
+            color: #eeefef !important; background: #2a3236 !important;
+            border: 1px solid #2a3236 !important; border-radius: 99px; cursor: pointer;
+            height: var(--size-button-sm-h, 32px); transition: background 0.15s, border-color 0.15s;
             user-select: none; white-space: nowrap;
           }
-          .pp_collapse_btn:hover {
-            background: #3a454a !important;
-            border-color: #3a454a !important;
-          }
+          .pp_collapse_btn:hover { background: #3a454a !important; border-color: #3a454a !important; }
         `;
         shadowHost.appendChild(styleEl);
       }
@@ -335,133 +308,156 @@
         if (!children.length) return;
 
         allCollapsed = !allCollapsed;
-        children.forEach((c) => {
-          if (allCollapsed) c.setAttribute("collapsed", "");
-          else c.removeAttribute("collapsed");
-        });
+        for (let i = 0; i < children.length; i++) {
+          if (allCollapsed) children[i].setAttribute("collapsed", "");
+          else children[i].removeAttribute("collapsed");
+        }
 
         btn.textContent = allCollapsed ? "+ Expand" : "− Collapse";
         btn.classList.toggle("pp_collapsed", allCollapsed);
       });
 
       commentsBtn.insertAdjacentElement("afterend", btn);
+      commentsBtn.setAttribute("pp-has-sibling-btn", "true");
     },
 
     nukeAwardButtons: () => {
-      Actions.deepQueryAll(document, "award-button").forEach((el) => {
+      Actions.deepQueryAll(
+        document,
+        "award-button, shreddit-slot[slot='award-button']",
+      ).forEach((el) => {
         el.style.display = "none";
       });
     },
 
     nuke: () => {
-      document
-        .querySelectorAll(NUKE_SELECTORS.join(", "))
-        .forEach((el) => el.remove());
+      const items = document.querySelectorAll(NUKE_SELECTOR_STRING);
+      for (let i = 0; i < items.length; i++) {
+        items[i].remove();
+      }
 
       const nav = document.querySelector("left-nav-top-section");
-      if (nav) {
-        ["news", "explore"].forEach((attr) => nav.removeAttribute(attr));
+      if (nav && !nav.hasAttribute("pp-sanitized")) {
+        nav.removeAttribute("news");
+        nav.removeAttribute("explore");
         nav.shadowRoot
           ?.querySelectorAll('a[href="/news/"], a[href="/explore/"]')
-          .forEach((link) => (link.closest("li") || link).remove());
+          .forEach((link) => {
+            (link.closest("li") || link).remove();
+          });
+        nav.setAttribute("pp-sanitized", "true");
       }
     },
 
     handleImages: (post) => {
-      post
-        .querySelectorAll("faceplate-img, img:not(.pp_imageViewable)")
-        .forEach((imgEl) => {
-          if (imgEl.classList.contains("pp_imageViewable")) return;
-          imgEl.classList.add("pp_imageViewable");
+      if (post.hasAttribute("pp-images-handled")) return;
 
-          imgEl.addEventListener(
-            "click",
-            (e) => {
-              let clickedSrc =
-                imgEl.getAttribute("src") ||
-                imgEl.querySelector("img")?.getAttribute("src");
-              if (!clickedSrc) return;
+      const images = post.querySelectorAll(
+        "faceplate-img, img:not(.pp_imageViewable)",
+      );
+      if (!images.length) return;
 
-              e.preventDefault();
-              e.stopPropagation();
-              attachLightbox();
+      for (let i = 0; i < images.length; i++) {
+        const imgEl = images[i];
+        if (imgEl.classList.contains("pp_imageViewable")) continue;
+        imgEl.classList.add("pp_imageViewable");
 
-              const galleryContainer =
-                imgEl.closest("gallery-carousel") || imgEl.closest("ul");
+        imgEl.addEventListener(
+          "click",
+          (e) => {
+            let clickedSrc =
+              imgEl.getAttribute("src") ||
+              imgEl.querySelector("img")?.getAttribute("src");
+            if (!clickedSrc) return;
 
-              if (galleryContainer) {
-                const allImgs = Array.from(
-                  galleryContainer.querySelectorAll("faceplate-img, img"),
-                );
+            e.preventDefault();
+            e.stopPropagation();
+            attachLightbox();
 
-                currentGalleryImages = allImgs
-                  .map(
-                    (el) =>
-                      el.getAttribute("src") ||
-                      el.querySelector("img")?.getAttribute("src"),
-                  )
-                  .filter((src, idx, self) => src && self.indexOf(src) === idx);
+            const galleryContainer =
+              imgEl.closest("gallery-carousel") || imgEl.closest("ul");
+            if (galleryContainer) {
+              const allImgs = Array.from(
+                galleryContainer.querySelectorAll("faceplate-img, img"),
+              );
+              currentGalleryImages = allImgs
+                .map(
+                  (el) =>
+                    el.getAttribute("src") ||
+                    el.querySelector("img")?.getAttribute("src"),
+                )
+                .filter((src, idx, self) => src && self.indexOf(src) === idx);
 
-                currentGalleryIndex = currentGalleryImages.indexOf(clickedSrc);
-                if (currentGalleryIndex === -1) currentGalleryIndex = 0;
-              } else {
-                currentGalleryImages = [clickedSrc];
-                currentGalleryIndex = 0;
-              }
+              currentGalleryIndex = currentGalleryImages.indexOf(clickedSrc);
+              if (currentGalleryIndex === -1) currentGalleryIndex = 0;
+            } else {
+              currentGalleryImages = [clickedSrc];
+              currentGalleryIndex = 0;
+            }
 
-              updateLightboxImage();
-              lightbox.style.display = "flex";
-            },
-            true,
-          );
-        });
+            updateLightboxImage();
+            lightbox.style.display = "flex";
+          },
+          true,
+        );
+      }
+      post.setAttribute("pp-images-handled", "true");
     },
 
     processComments: () => {
-      document
-        .querySelectorAll("shreddit-comment:not([pp-checked])")
-        .forEach((comment) => {
-          comment.setAttribute("pp-checked", "true");
+      const comments = document.querySelectorAll(
+        "shreddit-comment:not([pp-checked])",
+      );
+      if (!comments.length) return;
 
-          if (comment.getAttribute("author") === "AutoModerator") {
-            comment.setAttribute("collapsed", "");
-          }
+      for (let i = 0; i < comments.length; i++) {
+        const comment = comments[i];
+        comment.setAttribute("pp-checked", "true");
 
-          const shadow = comment.shadowRoot;
-          if (shadow && !shadow.querySelector(".pp-line-style")) {
-            const depth = parseInt(comment.getAttribute("depth") || 0);
-            const color = COLORS[depth % COLORS.length];
+        if (comment.getAttribute("author") === "AutoModerator") {
+          comment.setAttribute("collapsed", "");
+        }
 
-            const style = document.createElement("style");
-            style.className = "pp-line-style";
-            style.textContent = `
-              div[data-testid="main-thread-line"],
-              div[data-testid="branch-line"] {
-                border-left: 2px solid ${color} !important;
-                opacity: 1 !important;
-              }
-            `;
-            shadow.appendChild(style);
-          }
-        });
+        const shadow = comment.shadowRoot;
+        if (shadow && !shadow.querySelector(".pp-line-style")) {
+          const depth = parseInt(comment.getAttribute("depth") || 0);
+          const color = COLORS[depth % COLORS.length];
+
+          const style = document.createElement("style");
+          style.className = "pp-line-style";
+          style.textContent = `
+            div[data-testid="main-thread-line"],
+            div[data-testid="branch-line"] {
+              border-left: 2px solid ${color} !important;
+              opacity: 1 !important;
+            }
+          `;
+          shadow.appendChild(style);
+        }
+      }
     },
   };
 
-  // 4. ULTRA-LOW OVERHEAD FRAME-BOUND OBSERVER
+  // 4. LOW-OVERHEAD TIMEOUT DEBOUNCED OBSERVER
   let updateScheduled = false;
   const observer = new MutationObserver(() => {
     if (updateScheduled) return;
     updateScheduled = true;
-    requestAnimationFrame(() => {
+
+    setTimeout(() => {
       Actions.nuke();
       Actions.nukeAwardButtons();
       Actions.processComments();
       Actions.injectCollapseButton();
-      document
-        .querySelectorAll("shreddit-post")
-        .forEach((post) => Actions.handleImages(post));
+
+      const posts = document.querySelectorAll(
+        "shreddit-post:not([pp-images-handled])",
+      );
+      for (let i = 0; i < posts.length; i++) {
+        Actions.handleImages(posts[i]);
+      }
       updateScheduled = false;
-    });
+    }, 0);
   });
 
   observer.observe(document.documentElement, {
