@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name            Reddit Enhancements
 // @description     Nuking clutter and adding a built-in Lightbox/Zoom for images with mousewheel navigation.
-// @version         3.0.4
+// @version         3.0.5
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
 // @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
@@ -210,22 +210,23 @@
     true,
   );
 
-  // FORCE SEARCH ROUTING RESCUE
-  // Intercepts the form submit event at the highest level, kills Reddit's broken internal listeners,
-  // and hard-navigates the window using window.location.assign()
+  // SHADOW-DOM BOUND SEARCH ROUTING RESCUE
+  // Pierces web component barriers using e.composedPath() to cleanly hijack the Enter key
   window.addEventListener(
-    "submit",
+    "keydown",
     (e) => {
-      if (
-        e.target.closest?.(".reddit-search-bar") ||
-        e.target.matches?.('form[action^="/search"]')
-      ) {
-        const input = e.target.querySelector('input[name="q"]');
+      if (e.key === "Enter") {
+        const path = e.composedPath();
+        const input = path.find(
+          (el) =>
+            el.tagName === "INPUT" && (el.name === "q" || el.type === "search"),
+        );
+
         if (input) {
-          const query = input.value.trim();
+          const query = input.value ? input.value.trim() : "";
           if (query) {
             e.preventDefault();
-            e.stopImmediatePropagation();
+            e.stopImmediatePropagation(); // Completely drop Reddit's internal SPA router intercept
             window.location.assign(`/search/?q=${encodeURIComponent(query)}`);
           }
         }
@@ -447,7 +448,6 @@
   };
 
   // 4. ULTRA-LOW OVERHEAD FRAME-BOUND OBSERVER
-  // Schedules execution tasks only inside a browser-native animation frame to prevent UI event blocking.
   let updateScheduled = false;
   const observer = new MutationObserver(() => {
     if (updateScheduled) return;
