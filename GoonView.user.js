@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Goon View™
-// @version      1.7.0
+// @version      1.7.1
 // @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -179,7 +179,7 @@
 
       this.shadow.innerHTML = `
         <div class="panel" id="gv-panel" style="top: ${defaultTop}; left: ${defaultLeft}">
-          <div class="header" id="gv-drag">Goon View™</div>
+          <div class="header" id="gv-drag"><span class="lbl-full">Goon View™</span><span class="lbl-short">GV™</span></div>
           <div class="row scroll-row">
             <div class="btn" role="button" tabindex="0" data-action="top" title="Scroll to top">▴ TOP</div>
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
