@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Goon View™
-// @version      1.7.3
+// @version      1.7.4
 // @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -167,7 +167,9 @@
       this.renderBase();
       this.updateUI();
       if (this.isMobile)
-        this._updateHeaderOrientation(this.shadow.getElementById("gv-panel"));
+        requestAnimationFrame(() =>
+          this._updateHeaderOrientation(this.shadow.getElementById("gv-panel")),
+        );
       this.bindInternalEvents();
     },
 
@@ -326,16 +328,18 @@
       if (!this.isMobile) return;
       const header = this.shadow.getElementById("gv-drag");
       const isVerticalLayout = panel.offsetWidth < 120;
-      header.style.writingMode = isVerticalLayout ? "" : "vertical-rl";
-      header.style.transform = isVerticalLayout ? "" : "rotate(180deg)";
+      header.style.writingMode = isVerticalLayout
+        ? "horizontal-tb"
+        : "vertical-rl";
+      header.style.transform = isVerticalLayout ? "none" : "rotate(180deg)";
       header.style.borderRight = isVerticalLayout
-        ? ""
+        ? "none"
         : "1px solid var(--border)";
       header.style.borderBottom = isVerticalLayout
         ? "1px solid var(--border)"
-        : "";
-      header.style.paddingRight = isVerticalLayout ? "" : "6px";
-      header.style.paddingBottom = isVerticalLayout ? "6px" : "";
+        : "none";
+      header.style.paddingRight = isVerticalLayout ? "0" : "6px";
+      header.style.paddingBottom = isVerticalLayout ? "6px" : "0";
     },
 
     handleTouchStart(e) {
