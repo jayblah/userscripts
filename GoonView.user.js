@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Goon View™
-// @version      1.7.1
+// @version      1.7.2
 // @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -166,6 +166,8 @@
 
       this.renderBase();
       this.updateUI();
+      if (this.isMobile)
+        this._updateHeaderOrientation(this.shadow.getElementById("gv-panel"));
       this.bindInternalEvents();
     },
 
@@ -320,6 +322,22 @@
       }
     },
 
+    _updateHeaderOrientation(panel) {
+      if (!this.isMobile) return;
+      const header = this.shadow.getElementById("gv-drag");
+      const isVerticalLayout = panel.offsetWidth < 120;
+      header.style.writingMode = isVerticalLayout ? "" : "vertical-rl";
+      header.style.transform = isVerticalLayout ? "" : "rotate(180deg)";
+      header.style.borderRight = isVerticalLayout
+        ? ""
+        : "1px solid var(--border)";
+      header.style.borderBottom = isVerticalLayout
+        ? "1px solid var(--border)"
+        : "";
+      header.style.paddingRight = isVerticalLayout ? "" : "6px";
+      header.style.paddingBottom = isVerticalLayout ? "6px" : "";
+    },
+
     handleTouchStart(e) {
       if (e.touches.length === 2) {
         this._isPinching = true;
@@ -442,6 +460,7 @@
         const up = () => {
           settings.panelLeft = panel.style.left;
           settings.panelTop = panel.style.top;
+          this._updateHeaderOrientation(panel);
           dragHdr.removeEventListener("pointermove", move);
           dragHdr.removeEventListener("pointerup", up);
         };
