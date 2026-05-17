@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Goon View™
-// @version      1.6.9
+// @version      1.7.0
 // @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -107,6 +107,7 @@
         .btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
         .row { display: flex; gap: 6px; }
         .row .btn { flex: 1; }
+        .lbl-short { display: none; }
         u { text-decoration: underline; text-decoration-color: var(--teal); text-underline-offset: 3px; }
 
         #overlay {
@@ -133,10 +134,32 @@
           padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
         }
         @media (max-width: 600px) and (pointer: coarse) {
-          .panel { width: 120px; padding: 8px; gap: 7px; }
-          .header { font-size: 10px; padding-bottom: 5px; }
-          .btn { height: 30px; font-size: 10px; }
+          .panel {
+            width: auto;
+            flex-direction: row;
+            flex-wrap: wrap;
+            align-items: center;
+            padding: 6px 8px;
+            gap: 5px;
+          }
+          .header {
+            font-size: 9px;
+            padding-bottom: 0;
+            padding-right: 6px;
+            border-bottom: none;
+            border-right: 1px solid var(--border);
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            transform: rotate(180deg);
+            align-self: stretch;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .btn { height: 28px; font-size: 10px; padding: 0 7px; }
           .row.scroll-row { display: none; }
+          .lbl-full { display: none; }
+          .lbl-short { display: inline; }
         }
       `);
       this.shadow.adoptedStyleSheets = [sheet];
@@ -162,8 +185,8 @@
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
           </div>
           <div class="btn" role="button" tabindex="0" data-action="expand" id="btn-expand">EXPAND ALL</div>
-          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery">IMAGE&nbsp;<u>G</u>ALLERY</div>
-          <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery"><u>V</u>IDEO GALLERY</div>
+          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery"><span class="lbl-full">IMAGE&nbsp;</span><u>G</u><span class="lbl-full">ALLERY</span><span class="lbl-short">AL</span></div>
+          <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery"><u>V</u><span class="lbl-full">IDEO GALLERY</span><span class="lbl-short">ID</span></div>
         </div>
         <div id="overlay" tabindex="-1">
           <div class="z-hint">[A/←] PREV · [D/→] NEXT · [W/↑/ESC] EXIT · [SCROLL] ZOOM</div>
@@ -176,12 +199,11 @@
     updateUI() {
       const btnExpand = this.shadow.getElementById("btn-expand");
       btnExpand.innerHTML = this.isExpanded
-        ? "COLLAPSE ALL"
-        : "E<u>X</u>PAND ALL";
+        ? "<span class='lbl-full'>COLLAPSE ALL</span><span class='lbl-short'>COL</span>"
+        : "<span class='lbl-full'>E<u>X</u>PAND ALL</span><span class='lbl-short'>E<u>X</u>P</span>";
     },
 
     refreshMediaList() {
-      // Filter strictly for images for the main gallery
       const selector = "img.bbImage";
       this.mediaList = Array.from(document.querySelectorAll(selector)).filter(
         (el) => {
