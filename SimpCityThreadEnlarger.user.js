@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SimpCity Enlarge Thumbnails
-// @version      1.1.3
+// @version      1.1.4
 // @description  Moves thread thumbnails to appear before the thread titles on SimpCity forums and makes them larger.
 // @author       JR
 // @license      MIT
@@ -21,34 +21,33 @@
   const injectStyles = () => {
     const style = document.createElement("style");
     style.textContent = `
-      /* Target the moved thumbnail links */
-      .structItem--thread [data-gv-thumb],
-      .block-row [data-gv-thumb] {
-        width: 400px !important;
-        height: 400px !important;
-        display: block !important;
-        margin-bottom: 10px !important;
-        opacity: 1 !important;
-      }
-
-      /* Target the internal images */
-      .structItem--thread [data-gv-thumb] img,
-      .block-row [data-gv-thumb] img {
-        width: 100% !important;
-        height: 100% !important;
-        object-fit: cover !important;
-        filter: none !important;
-        opacity: 1 !important;
-        background-size: cover !important;
-        background-position: center !important;
-      }
-
-      /* Fix for 1x1 placeholder pixels (the 'haze' fix) */
-      .structItem--thread [data-gv-thumb] img[src*="base64"],
-      .block-row [data-gv-thumb] img[src*="base64"] {
-        object-position: -9999px !important;
-      }
-    `;
+    .structItem--thread [data-gv-thumb],
+    .block-row [data-gv-thumb] {
+      width: 400px !important;
+      height: 400px !important;
+      display: block !important;
+      margin-bottom: 10px !important;
+      opacity: 1 !important;
+    }
+    .structItem--thread [data-gv-thumb] img,
+    .block-row [data-gv-thumb] img {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover !important;
+      filter: none !important;
+      opacity: 1 !important;
+      background-size: cover !important;
+      background-position: center !important;
+    }
+    .structItem--thread [data-gv-thumb] img[src*="base64"],
+    .block-row [data-gv-thumb] img[src*="base64"] {
+      object-position: -9999px !important;
+    }
+    /* Hide the now-empty icon cell after thumbnail is moved out */
+    .structItem-cell--icon {
+      display: none !important;
+    }
+  `;
     document.head.appendChild(style);
   };
 

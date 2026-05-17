@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Goon View™
-// @version      1.7.4
+// @version      1.7.5
 // @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -139,13 +139,13 @@
             flex-direction: row;
             flex-wrap: wrap;
             align-items: center;
-            padding: 6px 8px;
-            gap: 5px;
+            padding: 8px 10px;
+            gap: 6px;
           }
           .header {
-            font-size: 9px;
+            font-size: 11px;
             padding-bottom: 0;
-            padding-right: 6px;
+            padding-right: 8px;
             border-bottom: none;
             border-right: 1px solid var(--border);
             writing-mode: vertical-rl;
@@ -156,7 +156,7 @@
             align-items: center;
             justify-content: center;
           }
-          .btn { height: 28px; font-size: 10px; padding: 0 7px; }
+          .btn { height: 35px; font-size: 12px; padding: 0 9px; }
           .row.scroll-row { display: none; }
           .lbl-full { display: none; }
           .lbl-short { display: inline; }
@@ -327,7 +327,7 @@
     _updateHeaderOrientation(panel) {
       if (!this.isMobile) return;
       const header = this.shadow.getElementById("gv-drag");
-      const isVerticalLayout = panel.offsetWidth < 120;
+      const isVerticalLayout = panel.offsetWidth < 150;
       header.style.writingMode = isVerticalLayout
         ? "horizontal-tb"
         : "vertical-rl";
