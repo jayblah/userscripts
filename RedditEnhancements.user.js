@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name            Reddit Enhancements
 // @description     Nuking clutter and adding a built-in Lightbox/Zoom for images with mousewheel navigation.
-// @version         3.1.2
+// @version         3.1.3
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
 // @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
@@ -42,6 +42,7 @@
     'faceplate-tracker[noun="try_reddit_pro"]',
     "search-telemetry-tracker:has(search-answers-response-container-streaming)",
     "search-answers-response-container-streaming",
+    "in-feed-community-recommendations",
   ];
 
   const NUKE_SELECTOR_STRING = NUKE_SELECTORS.join(", ");
@@ -246,7 +247,6 @@
   let allCollapsed = false;
 
   const Actions = {
-    // Restored deep query loop to ensure nested containers are traversed correctly
     deepQuery: (root, selector) => {
       const found = root.querySelector(selector);
       if (found) return found;
