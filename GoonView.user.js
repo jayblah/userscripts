@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Goon View™
-// @version      1.7.2
+// @version      1.7.3
 // @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
 // @author       JR
 // @license      MIT
