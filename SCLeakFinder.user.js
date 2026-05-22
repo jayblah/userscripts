@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Goon Finder™ - Cross-Platform Leak Seeker
-// @version      1.0.4
-// @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SimpCity, Coomer, Fapello, Boobpedia, and Babepedia.
+// @name         SC Leak Finder - Cross-Platform Leak Seeker
+// @version      1.0.6
+// @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SC.
 // @author       JR
 // @license      MIT
 // @match        https://onlyfans.com/*
@@ -10,8 +10,8 @@
 // @match        https://www.instagram.com/*
 // @match        https://www.tiktok.com/*
 // @match        https://app.fanfix.io/*
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/LeakFinder.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/LeakFinder.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SCLeakFinder.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SCLeakFinder.user.js
 // @grant        GM.xmlHttpRequest
 // @grant        GM_addStyle
 // ==/UserScript==
@@ -20,7 +20,6 @@
   "use strict";
 
   const CONFIG = {
-    COOMER_DOMAIN: "coomer.st",
     UI_ID: "leak-finder-overlay",
     STORAGE_KEY: "lfo_position_data",
     TIMEOUT: 10000,
@@ -137,10 +136,6 @@
           id = `sc-${safeSlug}`;
           url = `https://simpcity.cr/search/1/?q=${safeQuery}&o=relevance`;
           break;
-        case "coomer":
-          id = `coo-${safeSlug}`;
-          url = `https://${CONFIG.COOMER_DOMAIN}/posts?q=${safeQuery}`;
-          break;
         case "fapello":
           id = `fap-${safeSlug}`;
           url = `https://fapello.com/${query.toLowerCase().replace(/\s+/g, "-")}/`;
@@ -169,12 +164,7 @@
               res.status === 200 &&
               !res.responseText.includes("No results found");
             break;
-          case "coomer":
-            found =
-              res.status === 200 && res.responseText.includes("post-card");
-            break;
           case "fapello":
-            // 200 with actual content = profile exists; 404 or redirect = not found
             found =
               res.status === 200 && res.responseText.includes("img_thumbnail");
             break;
@@ -281,7 +271,6 @@
     list.innerHTML = "";
 
     checkers.performSearch(username, list, "simpcity", "SimpCity");
-    checkers.performSearch(username, list, "coomer", "Coomer");
     checkers.performSearch(username, list, "fapello", "Fapello");
     checkers.performSearch(username, list, "boobpedia", "Boobpedia");
     checkers.performSearch(username, list, "babepedia", "Babepedia");
@@ -309,7 +298,6 @@
             "simpcity",
             "SimpCity (Name)",
           );
-          checkers.performSearch(displayName, list, "coomer", "Coomer (Name)");
           checkers.performSearch(
             displayName,
             list,
@@ -332,24 +320,6 @@
         if (attempts > 12) clearInterval(igInterval);
       }, 1000);
       activeIntervals.push(igInterval);
-    }
-
-    // Fansly ID logic
-    if (window.location.hostname.includes("fansly.com")) {
-      try {
-        const res = await request(
-          `https://apiv3.fansly.com/api/v1/account?usernames=${username}`,
-        );
-        const data = JSON.parse(res.responseText);
-        if (data.success && data.response?.[0]?.id) {
-          checkers.performSearch(
-            data.response[0].id,
-            list,
-            "coomer",
-            "Coomer (ID)",
-          );
-        }
-      } catch (e) {}
     }
   }
 

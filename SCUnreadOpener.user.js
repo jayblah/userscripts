@@ -10,8 +10,8 @@
 // @match        https://simpcity.hk/*
 // @match        https://simpcity.rs/*
 // @match        https://simpcity.ax/*
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/RedditDecoder.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/RedditDecoder.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SCUnreadOpener.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SCUnreadOpener.user.js
 // @grant        GM_openInTab
 // @connect      simpcity.cr
 // @connect      simpcity.is

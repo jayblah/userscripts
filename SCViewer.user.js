@@ -1,13 +1,13 @@
 // ==UserScript==
-// @name         Goon View™
-// @version      1.7.5
-// @description  Streamlined media viewing experience for SimpCity.cr with mobile & keyboard support.
+// @name         SC Media Viewer
+// @version      1.7.7
+// @description  Streamlined media viewing experience for SC with mobile & keyboard support.
 // @author       JR
 // @license      MIT
 // @match        *://simpcity.*/threads/*
 // @exclude      *://simpcity.com/*
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GoonView.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SCViewer.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SCViewer.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
@@ -133,30 +133,18 @@
           color: var(--teal); font-weight: 800; background: rgba(0,0,0,0.8);
           padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
         }
+
         @media (max-width: 600px) and (pointer: coarse) {
           .panel {
             width: auto;
             flex-direction: row;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
             align-items: center;
-            padding: 8px 10px;
-            gap: 6px;
+            padding: 10px 12px;
+            gap: 8px;
           }
-          .header {
-            font-size: 11px;
-            padding-bottom: 0;
-            padding-right: 8px;
-            border-bottom: none;
-            border-right: 1px solid var(--border);
-            writing-mode: vertical-rl;
-            text-orientation: mixed;
-            transform: rotate(180deg);
-            align-self: stretch;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          }
-          .btn { height: 35px; font-size: 12px; padding: 0 9px; }
+          .header { display: none; }
+          .btn { height: 44px; font-size: 15px; padding: 0 14px; border-radius: 7px; }
           .row.scroll-row { display: none; }
           .lbl-full { display: none; }
           .lbl-short { display: inline; }
@@ -166,10 +154,6 @@
 
       this.renderBase();
       this.updateUI();
-      if (this.isMobile)
-        requestAnimationFrame(() =>
-          this._updateHeaderOrientation(this.shadow.getElementById("gv-panel")),
-        );
       this.bindInternalEvents();
     },
 
@@ -189,8 +173,8 @@
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
           </div>
           <div class="btn" role="button" tabindex="0" data-action="expand" id="btn-expand">EXPAND ALL</div>
-          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery"><span class="lbl-full">IMAGE&nbsp;</span><u>G</u><span class="lbl-full">ALLERY</span><span class="lbl-short">AL</span></div>
-          <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery"><u>V</u><span class="lbl-full">IDEO GALLERY</span><span class="lbl-short">ID</span></div>
+          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery"><span class="lbl-full">IMAGE&nbsp;</span><u>G</u><span class="lbl-full">ALLERY</span><span class="lbl-short">GAL</span></div>
+          <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery"><u>V</u><span class="lbl-full">IDEO GALLERY</span><span class="lbl-short">VID</span></div>
         </div>
         <div id="overlay" tabindex="-1">
           <div class="z-hint">[A/←] PREV · [D/→] NEXT · [W/↑/ESC] EXIT · [SCROLL] ZOOM</div>
@@ -204,7 +188,7 @@
       const btnExpand = this.shadow.getElementById("btn-expand");
       btnExpand.innerHTML = this.isExpanded
         ? "<span class='lbl-full'>COLLAPSE ALL</span><span class='lbl-short'>COL</span>"
-        : "<span class='lbl-full'>E<u>X</u>PAND ALL</span><span class='lbl-short'>E<u>X</u>P</span>";
+        : "<span class='lbl-full'>E<u>X</u>PAND ALL</span><span class='lbl-short'>EXP</span>";
     },
 
     refreshMediaList() {
@@ -322,24 +306,6 @@
         img.style.transform = "";
         img.classList.remove("zoomed");
       }
-    },
-
-    _updateHeaderOrientation(panel) {
-      if (!this.isMobile) return;
-      const header = this.shadow.getElementById("gv-drag");
-      const isVerticalLayout = panel.offsetWidth < 150;
-      header.style.writingMode = isVerticalLayout
-        ? "horizontal-tb"
-        : "vertical-rl";
-      header.style.transform = isVerticalLayout ? "none" : "rotate(180deg)";
-      header.style.borderRight = isVerticalLayout
-        ? "none"
-        : "1px solid var(--border)";
-      header.style.borderBottom = isVerticalLayout
-        ? "1px solid var(--border)"
-        : "none";
-      header.style.paddingRight = isVerticalLayout ? "0" : "6px";
-      header.style.paddingBottom = isVerticalLayout ? "6px" : "0";
     },
 
     handleTouchStart(e) {
@@ -464,7 +430,6 @@
         const up = () => {
           settings.panelLeft = panel.style.left;
           settings.panelTop = panel.style.top;
-          this._updateHeaderOrientation(panel);
           dragHdr.removeEventListener("pointermove", move);
           dragHdr.removeEventListener("pointerup", up);
         };

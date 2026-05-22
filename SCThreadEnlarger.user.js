@@ -5,8 +5,8 @@
 // @author       JR
 // @license      MIT
 // @match        *://simpcity.*/*
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SimpCityThreadEnlarger.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SimpCityThreadEnlarger.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SCThreadEnlarger.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SCThreadEnlarger.user.js
 // @grant        none
 // @license      MIT
 // ==/UserScript==

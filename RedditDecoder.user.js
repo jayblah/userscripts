@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Goon Seek™ - Binary & NATO Decoder
-// @version      1.0.4
-// @description  Decodes NATO and Binary codes in Reddit comments with one-click search for Instagram, TikTok, OnlyFans, Fansly, and SimpCity.
+// @name         Reddit Binary & NATO Decoder
+// @version      1.0.5
+// @description  Decodes NATO and Binary codes in Reddit comments with one-click search for Instagram, TikTok, OF, FY, and SC.
 // @author       JR
 // @license      MIT
 // @match        https://*.reddit.com/*
@@ -81,8 +81,9 @@
    */
   const binaryPattern = /\b(?:[01]{8}[\s]?){2,}\b/g;
 
+  // Add domains to const query
   function buildSocialSearchURL(q) {
-    const query = `${q} (site:instagram.com OR site:tiktok.com OR site:onlyfans.com OR site:fansly.com OR site:simpcity.cr)`;
+    const query = `${q} (site:instagram.com OR site:tiktok.com OR site:onlyfans.com OR site:fansly.com OR site:simpcity.cr OR site:fapello.com)`;
     return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
   }
 

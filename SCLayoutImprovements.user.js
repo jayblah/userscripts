@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         SimpCity Layout Improvements
-// @version      1.5
+// @name         SC Layout Improvements
+// @version      1.6
 // @match        https://simpcity.su/*
 // @match        https://simpcity.cr/*
 // @grant        GM_addStyle
-// @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/SimpLayoutImprovements.user.js
-// @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/SimpLayoutImprovements.user.js
+// @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/SCLayoutImprovements.user.js
+// @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/SCLayoutImprovements.user.js
 // ==/UserScript==
 
 (function () {
