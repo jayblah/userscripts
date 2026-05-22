@@ -1,128 +1,140 @@
 // ==UserScript==
 // @name         SC Expand Image
-// @version      1.2
-// @description  Click thumbnail to expand the full image inline.
+// @version      1.5
+// @description  Click thumbnail to expand the full image inline. Per-post expand button near Share.
 // @match        https://simpcity.cr/*
 // @match        https://forums.socialmediagirls.com/*
-// @grant        GM_registerMenuCommand
-// @grant        GM_getValue
-// @grant        GM_setValue
+// @grant        none
 // @run-at       document-end
-// @license MIT
-// @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/SCImageExpander.user.js
-// @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/SCImageExpander.user.js
+// @license      MIT
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SCImageExpander.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SCImageExpander.user.js
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  // ---------- Language detection / 语言检测 ----------
-  const lang = navigator.language.toLowerCase();
-  const isZh = lang.startsWith("zh"); // zh开头认为中文 / Chinese
+  const THUMB_PATTERN = /\.(md|th)\.(jpg|webp)$/i;
 
-  // ---------- User settings / 用户设置 ----------
-  let LOAD_BIG_ON_START = GM_getValue("LOAD_BIG_ON_START", false);
-
-  // ---------- Register menu command / 注册菜单命令 ----------
-  GM_registerMenuCommand(
-    isZh
-      ? `默认加载全部大图: ${LOAD_BIG_ON_START ? "开" : "关"} (点击切换)`
-      : `Load all big images by default: ${LOAD_BIG_ON_START ? "ON" : "OFF"} (click to toggle)`,
-    () => {
-      LOAD_BIG_ON_START = !LOAD_BIG_ON_START;
-      GM_setValue("LOAD_BIG_ON_START", LOAD_BIG_ON_START);
-      alert(
-        isZh
-          ? `默认加载全部大图已设置为: ${LOAD_BIG_ON_START ? "开" : "关"}，请刷新页面生效`
-          : `Default load of all big images is now: ${LOAD_BIG_ON_START ? "ON" : "OFF"}. Please refresh the page to apply.`,
-      );
-    },
-  );
-
-  // ---------- Styles / 样式 ----------
   const style = document.createElement("style");
   style.textContent = `
-      img.bbImage {
-        cursor: pointer;  /* 鼠标指针为手型 / cursor pointer */
-        transition: all 0.2s ease-in-out;
-        display: inline-block; /* 横向排列 / inline layout */
-        max-width: 200px;  /* 缩略图显示宽度 / thumbnail width */
-        height: auto;
-        margin: 2px;
-      }
-      img.bbImage.expanded {
-        display: block;      /* 展开时独占一行 / block layout */
-        max-width: 100% !important;
-        max-height: 90vh;    /* 最大高度 / max height */
-        margin: 8px auto;
-      }
-    `;
+    img.bbImage {
+      cursor: pointer;
+      transition: all 0.2s ease-in-out;
+      display: inline-block;
+      max-width: 200px;
+      height: auto;
+      margin: 2px;
+    }
+    img.bbImage.expanded {
+      display: block;
+      max-width: 100% !important;
+      max-height: 90vh;
+      margin: 8px auto;
+    }
+    .sc-expand-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: system-ui, sans-serif;
+      color: #aaa;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      margin: 0;
+      line-height: 1;
+      transition: color 0.15s;
+    }
+    .sc-expand-btn:hover { color: #fff; }
+    .sc-expand-btn.is-expanded { color: #3db7c7; }
+  `;
   document.head.appendChild(style);
 
-  // ---------- Utility functions / 工具函数 ----------
-  function cleanName(str) {
-    return str.replace(".md", "").replace(".th", ""); // 去掉 .md / .th
-  }
   function getBigUrl(src) {
-    return src.replace(".md.", ".").replace(".th.", "."); // md.jpg / th.webp → jpg / webp
+    return src.replace(/\.(md|th)\.(jpg|webp)$/i, ".$2");
   }
 
-  // ---------- Initialize / 页面加载时替换缩略图 ----------
-  function replaceAllThumbs() {
-    document.querySelectorAll("img.bbImage").forEach((img) => {
-      const src = img.src.toLowerCase();
-      if (
-        !src.includes(".md.jpg") &&
-        !src.includes(".md.webp") &&
-        !src.includes(".th.jpg") &&
-        !src.includes(".th.webp")
-      )
-        return;
+  function cleanAttr(str) {
+    return str.replace(/\.(md|th)(?=\.)/, "");
+  }
 
-      const a = img.closest("a.link--external");
-      if (LOAD_BIG_ON_START) {
-        // 默认加载大图 / load big image by default
+  function processImage(img) {
+    if (!THUMB_PATTERN.test(img.src)) return;
+    if (img.title) img.title = cleanAttr(img.title);
+    if (img.alt) img.alt = cleanAttr(img.alt);
+  }
+
+  function injectExpandButton(header) {
+    if (header.querySelector(".sc-expand-btn")) return;
+
+    const messageMain = header.closest(".message-main");
+    if (!messageMain) return;
+    const lbContainer = messageMain.querySelector(".js-lbContainer");
+    if (!lbContainer) return;
+
+    const btn = document.createElement("button");
+    btn.className = "sc-expand-btn";
+    btn.textContent = "⊞ EXP";
+    btn.title = "Expand all images in this post";
+
+    btn.addEventListener("click", () => {
+      const images = lbContainer.querySelectorAll("img.bbImage");
+      const isExpanded = btn.classList.contains("is-expanded");
+
+      images.forEach((img) => {
+        if (!isExpanded) {
+          img.classList.add("expanded");
+          if (!img.dataset.bigLoaded) {
+            img.dataset.bigLoaded = "true";
+            img.src = getBigUrl(img.src);
+            img.removeAttribute("srcset");
+          }
+        } else {
+          img.classList.remove("expanded");
+        }
+      });
+
+      btn.classList.toggle("is-expanded", !isExpanded);
+      btn.textContent = isExpanded ? "⊞ EXP" : "⊟ COL";
+      btn.title = isExpanded
+        ? "Expand all images in this post"
+        : "Collapse all images in this post";
+    });
+
+    const li = document.createElement("li");
+    li.appendChild(btn);
+    header.appendChild(li);
+  }
+
+  function processAll() {
+    document.querySelectorAll("img.bbImage").forEach(processImage);
+    document
+      .querySelectorAll(".message-attribution-opposite")
+      .forEach(injectExpandButton);
+  }
+
+  document.body.addEventListener("click", (e) => {
+    const img = e.target.closest("img.bbImage");
+    if (!img) return;
+    e.preventDefault();
+
+    if (img.classList.contains("expanded")) {
+      img.classList.remove("expanded");
+    } else {
+      img.classList.add("expanded");
+      if (!img.dataset.bigLoaded) {
+        img.dataset.bigLoaded = "true";
         img.src = getBigUrl(img.src);
         img.removeAttribute("srcset");
-        if (img.title) img.title = cleanName(img.title);
-        if (img.alt) img.alt = cleanName(img.alt);
-        if (a) a.removeAttribute("href");
-      } else {
-        // 保持缩略图显示 / keep thumbnail layout
-        if (img.title) img.title = cleanName(img.title);
-        if (img.alt) img.alt = cleanName(img.alt);
       }
-    });
-  }
+    }
+  });
 
-  // ---------- Click event / 点击切换大小 ----------
-  document.body.addEventListener(
-    "click",
-    function (event) {
-      const img = event.target.closest("img.bbImage");
-      if (!img) return;
-      event.preventDefault();
+  processAll();
 
-      if (img.classList.contains("expanded")) {
-        // 大图 → 缩回 / collapse big image
-        img.classList.remove("expanded");
-      } else {
-        // 小图 → 展开 / expand big image
-        img.classList.add("expanded");
-        if (!img.dataset.bigLoaded) {
-          img.dataset.bigLoaded = "true";
-          img.src = getBigUrl(img.src);
-          img.removeAttribute("srcset");
-        }
-      }
-    },
-    false,
-  );
-
-  // ---------- Initial execution / 首次执行 ----------
-  replaceAllThumbs();
-
-  // ---------- Mutation observer for lazy-loaded content / 懒加载监听 ----------
-  const observer = new MutationObserver(() => replaceAllThumbs());
+  const observer = new MutationObserver(processAll);
   observer.observe(document.body, { childList: true, subtree: true });
 })();

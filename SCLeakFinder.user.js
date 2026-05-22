@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Leak Finder - Cross-Platform Leak Seeker
-// @version      1.0.6
+// @version      1.0.8
 // @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SC.
 // @author       JR
 // @license      MIT
@@ -97,9 +97,8 @@
     const parts = pathname.split("/").filter(Boolean);
     if (!parts.length || CONFIG.IGNORED_PATHS.has(parts[0])) return null;
 
-    if (hostname.includes("tiktok.com") || hostname.includes("fanfix.io")) {
+    if (hostname.includes("tiktok.com") || hostname.includes("fanfix.io"))
       return parts[0].startsWith("@") ? parts[0].slice(1) : parts[0];
-    }
 
     if (hostname.includes("fansly.com"))
       return pathname.match(/^\/(?:profile\/)?([^/]+)/)?.[1];
@@ -123,69 +122,24 @@
     list.appendChild(li);
   };
 
-  const checkers = {
-    async performSearch(query, list, type, prefix) {
-      if (!query || query.length < 2) return;
-      const safeQuery = encodeURIComponent(query);
-      const safeSlug = query.replace(/[^\w]/g, "-").toLowerCase();
+  const searchSimpCity = async (query, list, prefix) => {
+    if (!query || query.length < 2) return;
+    const safeQuery = encodeURIComponent(query);
+    const safeSlug = query.replace(/[^\w]/g, "-").toLowerCase();
+    const id = `sc-${safeSlug}`;
+    const url = `https://simpcity.cr/search/1/?q=${safeQuery}&o=relevance`;
 
-      let url, id;
+    addLinkToUI(list, `${prefix}: ${query}`, url, id);
 
-      switch (type) {
-        case "simpcity":
-          id = `sc-${safeSlug}`;
-          url = `https://simpcity.cr/search/1/?q=${safeQuery}&o=relevance`;
-          break;
-        case "fapello":
-          id = `fap-${safeSlug}`;
-          url = `https://fapello.com/${query.toLowerCase().replace(/\s+/g, "-")}/`;
-          break;
-        case "boobpedia":
-          id = `boo-${safeSlug}`;
-          url = `https://www.boobpedia.com/boobs/${encodeURIComponent(query)}`;
-          break;
-        case "babepedia":
-          id = `babe-${safeSlug}`;
-          url = `https://www.babepedia.com/babe/${encodeURIComponent(query)}`;
-          break;
-        default:
-          return;
-      }
-
-      addLinkToUI(list, `${prefix}: ${query}`, url, id);
-
-      try {
-        const res = await request(url);
-        let found = false;
-
-        switch (type) {
-          case "simpcity":
-            found =
-              res.status === 200 &&
-              !res.responseText.includes("No results found");
-            break;
-          case "fapello":
-            found =
-              res.status === 200 && res.responseText.includes("img_thumbnail");
-            break;
-          case "boobpedia":
-            found =
-              res.status === 200 &&
-              !res.responseText.includes(
-                "There is currently no text in this page",
-              );
-            break;
-          case "babepedia":
-            found =
-              res.status === 200 && res.responseText.includes("babepedia-list");
-            break;
-        }
-
-        updateUIStatus(id, found);
-      } catch (e) {
-        updateUIStatus(id, false);
-      }
-    },
+    try {
+      const res = await request(url);
+      updateUIStatus(
+        id,
+        res.status === 200 && !res.responseText.includes("No results found"),
+      );
+    } catch {
+      updateUIStatus(id, false);
+    }
   };
 
   const initMovable = (el, header) => {
@@ -246,7 +200,7 @@
       container.id = CONFIG.UI_ID;
       container.innerHTML = `
         <div class="lfo-header" id="lfo-handle">
-          <span>Goon Finder™</span>
+          <span>SC Finder™</span>
           <span class="lfo-tgl-btn" id="lfo-tgl">▼</span>
         </div>
         <ul class="lfo-list"></ul>
@@ -270,12 +224,8 @@
     const list = container.querySelector(".lfo-list");
     list.innerHTML = "";
 
-    checkers.performSearch(username, list, "simpcity", "SimpCity");
-    checkers.performSearch(username, list, "fapello", "Fapello");
-    checkers.performSearch(username, list, "boobpedia", "Boobpedia");
-    checkers.performSearch(username, list, "babepedia", "Babepedia");
+    searchSimpCity(username, list, "SimpCity");
 
-    // Instagram display name logic
     if (window.location.hostname.includes("instagram.com")) {
       let foundNames = new Set();
       let attempts = 0;
@@ -292,30 +242,7 @@
           !foundNames.has(displayName.toLowerCase())
         ) {
           foundNames.add(displayName.toLowerCase());
-          checkers.performSearch(
-            displayName,
-            list,
-            "simpcity",
-            "SimpCity (Name)",
-          );
-          checkers.performSearch(
-            displayName,
-            list,
-            "fapello",
-            "Fapello (Name)",
-          );
-          checkers.performSearch(
-            displayName,
-            list,
-            "boobpedia",
-            "Boobpedia (Name)",
-          );
-          checkers.performSearch(
-            displayName,
-            list,
-            "babepedia",
-            "Babepedia (Name)",
-          );
+          searchSimpCity(displayName, list, "SimpCity (Name)");
         }
         if (attempts > 12) clearInterval(igInterval);
       }, 1000);
