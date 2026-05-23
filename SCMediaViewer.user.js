@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      2.2
+// @version      2.4
 // @description  Streamlined media viewing experience for SC with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -38,7 +38,9 @@
 
   const App = {
     mediaList: [],
+    _videoList: [],
     zoomIdx: 0,
+    _videoIdx: 0,
     isExpanded: false,
     shadow: null,
     _touchStart: { x: 0, y: 0 },
@@ -56,6 +58,8 @@
     _panOffset: { x: 0, y: 0 },
     _panStart: { x: 0, y: 0 },
     _isPanning: false,
+    _xpageLocked: false,
+    _xpageUrl: null,
 
     init() {
       this.injectGlobalStyles();
@@ -108,7 +112,7 @@
         .btn:hover { border-color: var(--teal); color: #fff; background: #2a2a2a; }
         .btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
         .row { display: flex; gap: 6px; }
-        .row .btn { flex: 0 0 auto; width: 100%; }
+        .scroll-row .btn { flex: 1 1 0; min-width: 0; }
         .lbl-short { display: none; }
         u { text-decoration: underline; text-decoration-color: var(--teal); text-underline-offset: 3px; }
 
@@ -134,9 +138,9 @@
           position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
           color: var(--teal); font-weight: 800; background: rgba(0,0,0,0.8);
           padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
+          white-space: nowrap;
         }
 
-        /* ── Mobile horizontal (default) ── */
         @media (max-width: 600px) and (pointer: coarse) {
           .panel {
             width: auto;
@@ -149,7 +153,6 @@
           }
           .panel:active { cursor: grabbing; }
 
-          /* GV™ label — visible on mobile as a drag grip indicator */
           .header {
             display: flex;
             align-items: center;
@@ -171,7 +174,6 @@
           .lbl-short { display: inline; }
         }
 
-        /* ── Mobile vertical (edge-docked) ── */
         @media (max-width: 600px) and (pointer: coarse) {
           .panel.vertical {
             flex-direction: column !important;
@@ -181,20 +183,16 @@
             gap: 8px !important;
             box-sizing: border-box !important;
           }
-
-          /* Force the scroll row specifically to be hidden */
           .panel.vertical .row.scroll-row,
           .panel.vertical .scroll-row {
             display: none !important;
           }
-
           .panel.vertical .header {
             border-right: none !important;
             border-bottom: 1px solid var(--border) !important;
             padding-right: 0 !important;
             padding-bottom: 6px !important;
           }
-
           .panel.vertical .btn {
             width: 100% !important;
             height: 38px !important;
@@ -203,10 +201,7 @@
             box-sizing: border-box !important;
             flex: 0 0 auto !important;
           }
-
-          .z-hint {
-            display: none !important;
-          }
+          .z-hint { display: none !important; }
         }
       `);
       this.shadow.adoptedStyleSheets = [sheet];
@@ -270,12 +265,9 @@
 
     _updatePanelOrientation(panel) {
       if (!this.isMobile) return;
-
       const left = panel.offsetLeft;
       const screenW = window.innerWidth;
       const isCurrentlyVertical = panel.classList.contains("vertical");
-
-      // Snap to vertical if within 100px of left or 170px of right
       const shouldBeVertical = left <= 100 || left >= screenW - 170;
 
       if (shouldBeVertical !== isCurrentlyVertical) {
@@ -290,6 +282,17 @@
         const rect = el.getBoundingClientRect();
         return rect.width > 0 || rect.height > 0;
       });
+    },
+
+    _refreshVideoList() {
+      const selector =
+        'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
+      this._videoList = Array.from(document.querySelectorAll(selector)).filter(
+        (el) => {
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 || rect.height > 0 || el.tagName === "DIV";
+        },
+      );
     },
 
     toggleExpand() {
@@ -343,6 +346,101 @@
         });
       });
     },
+
+    // ── Cross-page navigation helpers ─────────────────────────────────────
+
+    _getMaxPage() {
+      let max = 1;
+      const navs = document.querySelectorAll(
+        ".pageNav a[href], .pageNav li.pageNav-page",
+      );
+      navs.forEach((el) => {
+        let num;
+        if (el.tagName === "A") {
+          const m =
+            el.href.match(/\/page-(\d+)/) || el.href.match(/[?&]page=(\d+)/);
+          if (m) num = parseInt(m[1], 10);
+        } else {
+          num = parseInt(el.textContent.trim(), 10);
+        }
+        if (num > max) max = num;
+      });
+      const m2 =
+        window.location.href.match(/\/page-(\d+)/) ||
+        window.location.href.match(/[?&]page=(\d+)/);
+      if (m2 && parseInt(m2[1], 10) > max) max = parseInt(m2[1], 10);
+      return max;
+    },
+
+    _getFirstPageUrl() {
+      return window.location.href
+        .replace(/\/page-\d+\/?/, "/")
+        .replace(/[?&]page=\d+/, "")
+        .split("#")[0];
+    },
+
+    _getAdjacentPageUrl(dir) {
+      const base = (this._xpageUrl || window.location.href).split("#")[0];
+      const pagePathMatch = base.match(/\/page-(\d+)/);
+      const pageQueryMatch = base.match(/[?&]page=(\d+)/);
+
+      let currentPage = 1;
+      if (pagePathMatch) currentPage = parseInt(pagePathMatch[1], 10);
+      else if (pageQueryMatch) currentPage = parseInt(pageQueryMatch[1], 10);
+
+      const targetPage = currentPage + (dir > 0 ? 1 : -1);
+      const maxPage = this._getMaxPage();
+
+      if (targetPage < 1 || targetPage > maxPage) return null;
+
+      if (pagePathMatch) {
+        return base.replace(/\/page-\d+/, `/page-${targetPage}`);
+      } else if (pageQueryMatch) {
+        return base.replace(/([?&]page=)\d+/, `$1${targetPage}`);
+      } else {
+        const qIdx = base.indexOf("?");
+        const path = qIdx > -1 ? base.substring(0, qIdx) : base;
+        const query = qIdx > -1 ? base.substring(qIdx) : "";
+        const sep = path.endsWith("/") ? "" : "/";
+        return `${path}${sep}page-${targetPage}${query}`;
+      }
+    },
+
+    _fetchPageMedia(url, type = "image") {
+      return new Promise((resolve) => {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url,
+          timeout: 10000,
+          onload(resp) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(resp.responseText, "text/html");
+            let items;
+            if (type === "video") {
+              items = Array.from(
+                doc.querySelectorAll(
+                  'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]',
+                ),
+              );
+            } else {
+              items = Array.from(doc.querySelectorAll("img.bbImage")).filter(
+                (el) => el.src,
+              );
+            }
+            resolve(items);
+          },
+          onerror: () => resolve([]),
+          ontimeout: () => resolve([]),
+        });
+      });
+    },
+
+    _showCrossPageHint(msg) {
+      const counter = this.shadow.getElementById("gv-counter");
+      if (counter) counter.textContent = msg;
+    },
+
+    // ── Zoom / pan ─────────────────────────────────────────────────────────
 
     _getZoomTarget() {
       return (
@@ -398,6 +496,8 @@
         img.classList.remove("zoomed");
       }
     },
+
+    // ── Touch handling ─────────────────────────────────────────────────────
 
     handleTouchStart(e) {
       if (e.touches.length === 2) {
@@ -475,6 +575,8 @@
       } else if (Math.abs(dy) > threshold) this.closeGallery();
     },
 
+    // ── Internal event binding ─────────────────────────────────────────────
+
     bindInternalEvents() {
       const s = this.shadow;
       const panel = s.getElementById("gv-panel");
@@ -509,31 +611,22 @@
         }
       });
 
-      // Desktop: drag by header. Mobile: drag by whole panel (button taps excluded).
       const dragTarget = this.isMobile ? panel : s.getElementById("gv-drag");
 
       dragTarget.addEventListener("pointerdown", (e) => {
         if (e.target.closest(".btn")) return;
-
-        // Calculate initial offset
         const startX = e.clientX - panel.offsetLeft;
         const startY = e.clientY - panel.offsetTop;
         dragTarget.setPointerCapture(e.pointerId);
 
         const move = (m) => {
-          // Update position without re-triggering orientation logic immediately
           panel.style.left = `${m.clientX - startX}px`;
           panel.style.top = `${m.clientY - startY}px`;
         };
-
         const up = () => {
-          // Save settings
           settings.panelLeft = panel.style.left;
           settings.panelTop = panel.style.top;
-
-          // Trigger orientation check ONLY once, at the end of the drag
           this._updatePanelOrientation(panel);
-
           dragTarget.removeEventListener("pointermove", move);
           dragTarget.removeEventListener("pointerup", up);
         };
@@ -542,7 +635,6 @@
         dragTarget.addEventListener("pointerup", up);
       });
 
-      // Check orientation on load too
       this._updatePanelOrientation(panel);
 
       overlay.addEventListener(
@@ -552,20 +644,15 @@
           if (hovered?.matches("video, iframe")) return;
           e.preventDefault();
 
-          // Right-click hold = Zoom
           if (e.buttons === 2) {
             this._applyZoom(
               this._scale + (e.deltaY < 0 ? this._zoomStep : -this._zoomStep),
             );
           } else {
-            // Instant navigation, but only if the scroll is intentional
             if (Math.abs(e.deltaY) > 30) {
               const dir = e.deltaY > 0 ? 1 : -1;
-              if (this._galleryMode === "video") {
-                this.openVideoGallery(dir);
-              } else {
-                this.openGallery(dir);
-              }
+              if (this._galleryMode === "video") this.openVideoGallery(dir);
+              else this.openGallery(dir);
             }
           }
         },
@@ -583,12 +670,165 @@
       });
     },
 
-    async openGallery(dir = 0) {
+    // ── Gallery ────────────────────────────────────────────────────────────
+
+    openGallery: async function (dir = 0) {
       this._galleryMode = "main";
-      this.refreshMediaList();
+
+      if (!this._xpageLocked) this.refreshMediaList();
       if (!this.mediaList.length) return;
-      this.zoomIdx =
-        (this.zoomIdx + dir + this.mediaList.length) % this.mediaList.length;
+
+      const nextIdx = this.zoomIdx + dir;
+
+      if (dir > 0 && nextIdx >= this.mediaList.length) {
+        const url = this._getAdjacentPageUrl(1);
+
+        if (!url) {
+          const firstUrl = this._getFirstPageUrl();
+          const currentGalleryUrl = (
+            this._xpageUrl || window.location.href
+          ).split("#")[0];
+
+          if (firstUrl === currentGalleryUrl) {
+            this.zoomIdx = 0;
+            this._renderMedia(this.mediaList[0], 0, this.mediaList.length);
+          } else {
+            const liveUrlClean = window.location.href.split("#")[0];
+            if (firstUrl === liveUrlClean) {
+              this._xpageLocked = false;
+              this._xpageUrl = null;
+              this.refreshMediaList();
+              if (!this.mediaList.length) return;
+              this.zoomIdx = 0;
+              this._renderMedia(this.mediaList[0], 0, this.mediaList.length);
+            } else {
+              this._showCrossPageHint("Wrapping to page 1…");
+              const items = await this._fetchPageMedia(firstUrl, "image");
+              if (items.length) {
+                this.mediaList = items;
+                this.zoomIdx = 0;
+                this._xpageLocked = true;
+                this._xpageUrl = firstUrl;
+                this._renderMedia(items[0], 0, items.length);
+              }
+            }
+          }
+          return;
+        }
+
+        const targetClean = url.split("#")[0];
+        const liveUrlClean = window.location.href.split("#")[0];
+        if (targetClean === liveUrlClean) {
+          this._xpageLocked = false;
+          this._xpageUrl = null;
+          this.refreshMediaList();
+          if (!this.mediaList.length) return;
+          this.zoomIdx = 0;
+          this._renderMedia(this.mediaList[0], 0, this.mediaList.length);
+          return;
+        }
+
+        this._showCrossPageHint("Loading next page…");
+        const items = await this._fetchPageMedia(url, "image");
+        if (items.length) {
+          this.mediaList = items;
+          this.zoomIdx = 0;
+          this._xpageLocked = true;
+          this._xpageUrl = url;
+          this._renderMedia(items[0], 0, items.length);
+        }
+        return;
+      }
+
+      if (dir < 0 && nextIdx < 0) {
+        const url = this._getAdjacentPageUrl(-1);
+
+        if (!url) {
+          const maxPage = this._getMaxPage();
+          const base = this._getFirstPageUrl();
+          let lastUrl;
+          if (maxPage <= 1) {
+            lastUrl = base;
+          } else {
+            const qIdx = base.indexOf("?");
+            const path = qIdx > -1 ? base.substring(0, qIdx) : base;
+            const query = qIdx > -1 ? base.substring(qIdx) : "";
+            const sep = path.endsWith("/") ? "" : "/";
+            lastUrl = `${path}${sep}page-${maxPage}${query}`;
+          }
+
+          const currentGalleryUrl = (
+            this._xpageUrl || window.location.href
+          ).split("#")[0];
+
+          if (lastUrl === currentGalleryUrl) {
+            this.zoomIdx = this.mediaList.length - 1;
+            this._renderMedia(
+              this.mediaList[this.zoomIdx],
+              this.zoomIdx,
+              this.mediaList.length,
+            );
+          } else {
+            const liveUrlClean = window.location.href.split("#")[0];
+            if (lastUrl === liveUrlClean) {
+              this._xpageLocked = false;
+              this._xpageUrl = null;
+              this.refreshMediaList();
+              if (!this.mediaList.length) return;
+              this.zoomIdx = this.mediaList.length - 1;
+              this._renderMedia(
+                this.mediaList[this.zoomIdx],
+                this.zoomIdx,
+                this.mediaList.length,
+              );
+            } else {
+              this._showCrossPageHint("Wrapping to last page…");
+              const items = await this._fetchPageMedia(lastUrl, "image");
+              if (items.length) {
+                this.mediaList = items;
+                this.zoomIdx = items.length - 1;
+                this._xpageLocked = true;
+                this._xpageUrl = lastUrl;
+                this._renderMedia(
+                  items[this.zoomIdx],
+                  this.zoomIdx,
+                  items.length,
+                );
+              }
+            }
+          }
+          return;
+        }
+
+        const targetClean = url.split("#")[0];
+        const liveUrlClean = window.location.href.split("#")[0];
+        if (targetClean === liveUrlClean) {
+          this._xpageLocked = false;
+          this._xpageUrl = null;
+          this.refreshMediaList();
+          if (!this.mediaList.length) return;
+          this.zoomIdx = this.mediaList.length - 1;
+          this._renderMedia(
+            this.mediaList[this.zoomIdx],
+            this.zoomIdx,
+            this.mediaList.length,
+          );
+          return;
+        }
+
+        this._showCrossPageHint("Loading previous page…");
+        const items = await this._fetchPageMedia(url, "image");
+        if (items.length) {
+          this.mediaList = items;
+          this.zoomIdx = items.length - 1;
+          this._xpageLocked = true;
+          this._xpageUrl = url;
+          this._renderMedia(items[this.zoomIdx], this.zoomIdx, items.length);
+        }
+        return;
+      }
+
+      this.zoomIdx = (nextIdx + this.mediaList.length) % this.mediaList.length;
       this._renderMedia(
         this.mediaList[this.zoomIdx],
         this.zoomIdx,
@@ -596,20 +836,168 @@
       );
     },
 
-    async openVideoGallery(dir = 0) {
+    openVideoGallery: async function (dir = 0) {
       this._galleryMode = "video";
-      const videoSelector =
-        'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
-      this._videoList = Array.from(
-        document.querySelectorAll(videoSelector),
-      ).filter((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 || rect.height > 0 || el.tagName === "DIV";
-      });
-      if (!this._videoList.length) return;
+
+      if (!this._xpageLocked) this._refreshVideoList();
+      if (!this._videoList?.length) return;
+
+      const nextIdx = (this._videoIdx ?? 0) + dir;
+
+      if (dir > 0 && nextIdx >= this._videoList.length) {
+        const url = this._getAdjacentPageUrl(1);
+
+        if (!url) {
+          const firstUrl = this._getFirstPageUrl();
+          const currentGalleryUrl = (
+            this._xpageUrl || window.location.href
+          ).split("#")[0];
+
+          if (firstUrl === currentGalleryUrl) {
+            this._videoIdx = 0;
+            this._renderMedia(this._videoList[0], 0, this._videoList.length);
+          } else {
+            const liveUrlClean = window.location.href.split("#")[0];
+            if (firstUrl === liveUrlClean) {
+              this._xpageLocked = false;
+              this._xpageUrl = null;
+              this._refreshVideoList();
+              if (!this._videoList.length) return;
+              this._videoIdx = 0;
+              this._renderMedia(this._videoList[0], 0, this._videoList.length);
+            } else {
+              this._showCrossPageHint("Wrapping to page 1…");
+              const items = await this._fetchPageMedia(firstUrl, "video");
+              if (items.length) {
+                this._videoList = items;
+                this._videoIdx = 0;
+                this._xpageLocked = true;
+                this._xpageUrl = firstUrl;
+                this._renderMedia(items[0], 0, items.length);
+              }
+            }
+          }
+          return;
+        }
+
+        const targetClean = url.split("#")[0];
+        const liveUrlClean = window.location.href.split("#")[0];
+        if (targetClean === liveUrlClean) {
+          this._xpageLocked = false;
+          this._xpageUrl = null;
+          this._refreshVideoList();
+          if (!this._videoList.length) return;
+          this._videoIdx = 0;
+          this._renderMedia(this._videoList[0], 0, this._videoList.length);
+          return;
+        }
+
+        this._showCrossPageHint("Loading next page…");
+        const items = await this._fetchPageMedia(url, "video");
+        if (items.length) {
+          this._videoList = items;
+          this._videoIdx = 0;
+          this._xpageLocked = true;
+          this._xpageUrl = url;
+          this._renderMedia(items[0], 0, items.length);
+        }
+        return;
+      }
+
+      if (dir < 0 && nextIdx < 0) {
+        const url = this._getAdjacentPageUrl(-1);
+
+        if (!url) {
+          const maxPage = this._getMaxPage();
+          const base = this._getFirstPageUrl();
+          let lastUrl;
+          if (maxPage <= 1) {
+            lastUrl = base;
+          } else {
+            const qIdx = base.indexOf("?");
+            const path = qIdx > -1 ? base.substring(0, qIdx) : base;
+            const query = qIdx > -1 ? base.substring(qIdx) : "";
+            const sep = path.endsWith("/") ? "" : "/";
+            lastUrl = `${path}${sep}page-${maxPage}${query}`;
+          }
+
+          const currentGalleryUrl = (
+            this._xpageUrl || window.location.href
+          ).split("#")[0];
+
+          if (lastUrl === currentGalleryUrl) {
+            this._videoIdx = this._videoList.length - 1;
+            this._renderMedia(
+              this._videoList[this._videoIdx],
+              this._videoIdx,
+              this._videoList.length,
+            );
+          } else {
+            const liveUrlClean = window.location.href.split("#")[0];
+            if (lastUrl === liveUrlClean) {
+              this._xpageLocked = false;
+              this._xpageUrl = null;
+              this._refreshVideoList();
+              if (!this._videoList.length) return;
+              this._videoIdx = this._videoList.length - 1;
+              this._renderMedia(
+                this._videoList[this._videoIdx],
+                this._videoIdx,
+                this._videoList.length,
+              );
+            } else {
+              this._showCrossPageHint("Wrapping to last page…");
+              const items = await this._fetchPageMedia(lastUrl, "video");
+              if (items.length) {
+                this._videoList = items;
+                this._videoIdx = items.length - 1;
+                this._xpageLocked = true;
+                this._xpageUrl = lastUrl;
+                this._renderMedia(
+                  items[this._videoIdx],
+                  this._videoIdx,
+                  items.length,
+                );
+              }
+            }
+          }
+          return;
+        }
+
+        const targetClean = url.split("#")[0];
+        const liveUrlClean = window.location.href.split("#")[0];
+        if (targetClean === liveUrlClean) {
+          this._xpageLocked = false;
+          this._xpageUrl = null;
+          this._refreshVideoList();
+          if (!this._videoList.length) return;
+          this._videoIdx = this._videoList.length - 1;
+          this._renderMedia(
+            this._videoList[this._videoIdx],
+            this._videoIdx,
+            this._videoList.length,
+          );
+          return;
+        }
+
+        this._showCrossPageHint("Loading previous page…");
+        const items = await this._fetchPageMedia(url, "video");
+        if (items.length) {
+          this._videoList = items;
+          this._videoIdx = items.length - 1;
+          this._xpageLocked = true;
+          this._xpageUrl = url;
+          this._renderMedia(
+            items[this._videoIdx],
+            this._videoIdx,
+            items.length,
+          );
+        }
+        return;
+      }
+
       this._videoIdx =
-        ((this._videoIdx ?? 0) + dir + this._videoList.length) %
-        this._videoList.length;
+        (nextIdx + this._videoList.length) % this._videoList.length;
       this._renderMedia(
         this._videoList[this._videoIdx],
         this._videoIdx,
@@ -617,7 +1005,7 @@
       );
     },
 
-    async _renderMedia(current, idx, total) {
+    _renderMedia: async function (current, idx, total) {
       const overlay = this.shadow.getElementById("overlay");
       const container = this.shadow.getElementById("media-container");
       overlay.style.display = "flex";
@@ -685,6 +1073,8 @@
 
     closeGallery() {
       this._resetZoom();
+      this._xpageLocked = false;
+      this._xpageUrl = null;
       const container = this.shadow.getElementById("media-container");
       const video = container.querySelector("video");
       if (video) {
@@ -699,6 +1089,8 @@
       document.body.classList.remove("gv-noscroll");
       window.focus();
     },
+
+    // ── Global keyboard events ─────────────────────────────────────────────
 
     setupGlobalEvents() {
       window.addEventListener(
