@@ -202,6 +202,10 @@
             box-sizing: border-box !important;
             flex: 0 0 auto !important;
           }
+
+          .z-hint {
+            display: none !important;
+          }
         }
       `);
       this.shadow.adoptedStyleSheets = [sheet];
@@ -240,7 +244,10 @@
           </div>
         </div>
         <div id="overlay" tabindex="-1">
-          <div class="z-hint">[A/←] PREV · [D/→] NEXT · [W/↑/ESC] EXIT · [SCROLL] ZOOM</div>
+          <div class="z-hint">
+            [A/←] PREV · [D/→] NEXT · [W/↑/ESC] EXIT<br>
+            [SCROLL] GALLERY · [R-CLICK + SCROLL] ZOOM
+          </div>
           <div id="media-container"></div>
           <div class="counter" id="gv-counter"></div>
         </div>
