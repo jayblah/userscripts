@@ -180,26 +180,23 @@
             gap: 8px !important;
             box-sizing: border-box !important;
           }
+
+          /* Force the scroll row specifically to be hidden */
+          .panel.vertical .row.scroll-row,
+          .panel.vertical .scroll-row {
+            display: none !important;
+          }
+
           .panel.vertical .header {
             border-right: none !important;
             border-bottom: 1px solid var(--border) !important;
             padding-right: 0 !important;
             padding-bottom: 6px !important;
           }
-          /* Force row and buttons to stack and stay contained */
-          .panel.vertical .row {
-            display: flex !important;
-            flex-direction: column !important;
-            width: 100% !important;
-            gap: 4px !important;
-          }
-          .panel.vertical .row.scroll-row {
-            display: none !important;
-          }
+
           .panel.vertical .btn {
             width: 100% !important;
             height: 38px !important;
-            font-size: 10px !important;
             font-size: 10px !important;
             padding: 0 2px !important;
             box-sizing: border-box !important;
