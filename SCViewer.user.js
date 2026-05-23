@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      1.7.8
+// @version      1.7.9
 // @description  Streamlined media viewing experience for SC with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -96,7 +96,8 @@
         }
         .header {
           text-align: center; font-weight: 900; color: var(--teal); cursor: move;
-          padding-bottom: 6px; font-size: 11px; text-transform: uppercase; border-bottom: 1px solid var(--border);
+          padding-bottom: 6px; font-size: 11px; text-transform: uppercase;
+          border-bottom: 1px solid var(--border);
         }
         .btn {
           background: #222; border: 1px solid #333; border-radius: 5px; height: 34px;
@@ -134,22 +135,63 @@
           padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
         }
 
+        /* ── Mobile horizontal (default) ── */
         @media (max-width: 600px) and (pointer: coarse) {
           .panel {
             width: auto;
             flex-direction: row;
             flex-wrap: nowrap;
             align-items: center;
-            padding: 10px 12px;
+            padding: 8px 10px;
             gap: 8px;
             cursor: grab;
           }
           .panel:active { cursor: grabbing; }
-          .header { display: none; }
+
+          /* GV™ label — visible on mobile as a drag grip indicator */
+          .header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-bottom: none;
+            border-right: 1px solid var(--border);
+            padding-bottom: 0;
+            padding-right: 8px;
+            font-size: 10px;
+            min-width: 28px;
+            cursor: grab;
+          }
+          .header .lbl-full { display: none; }
+          .header .lbl-short { display: inline; }
+
           .btn { height: 44px; font-size: 15px; padding: 0 14px; border-radius: 7px; }
           .row.scroll-row { display: none; }
           .lbl-full { display: none; }
           .lbl-short { display: inline; }
+        }
+
+        /* ── Mobile vertical (edge-docked) ── */
+        @media (max-width: 600px) and (pointer: coarse) {
+          .panel.vertical {
+            flex-direction: column;
+            width: 70px;
+            align-items: stretch;
+            padding: 10px 8px;
+            gap: 8px;
+          }
+          .panel.vertical .header {
+            border-right: none;
+            border-bottom: 1px solid var(--border);
+            padding-right: 0;
+            padding-bottom: 6px;
+            text-align: center;
+          }
+          .panel.vertical .btn {
+            width: 100%;
+            height: 44px;
+            font-size: 13px;
+            padding: 0 6px;
+          }
         }
       `);
       this.shadow.adoptedStyleSheets = [sheet];
@@ -169,7 +211,10 @@
 
       this.shadow.innerHTML = `
         <div class="panel" id="gv-panel" style="top: ${defaultTop}; left: ${defaultLeft}">
-          <div class="header" id="gv-drag"><span class="lbl-full">Goon View™</span><span class="lbl-short">GV™</span></div>
+          <div class="header" id="gv-drag">
+            <span class="lbl-full">Goon View™</span>
+            <span class="lbl-short">GV™</span>
+          </div>
           <div class="row scroll-row">
             <div class="btn" role="button" tabindex="0" data-action="top" title="Scroll to top">▴ TOP</div>
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
@@ -197,6 +242,16 @@
       btnExpand.innerHTML = this.isExpanded
         ? "<span class='lbl-full'>COLLAPSE ALL</span><span class='lbl-short'>COL</span>"
         : "<span class='lbl-full'>E<u>X</u>PAND ALL</span><span class='lbl-short'>EXP</span>";
+    },
+
+    // Switches panel between horizontal and vertical based on proximity to screen edge
+    _updatePanelOrientation(panel) {
+      if (!this.isMobile) return;
+      const edgeThreshold = 80; // px from left or right edge
+      const left = panel.offsetLeft;
+      const right = window.innerWidth - (left + panel.offsetWidth);
+      const nearEdge = left <= edgeThreshold || right <= edgeThreshold;
+      panel.classList.toggle("vertical", nearEdge);
     },
 
     refreshMediaList() {
@@ -425,27 +480,36 @@
         }
       });
 
-      // Fix: on mobile use the panel itself as drag target since header is hidden
+      // Desktop: drag by header. Mobile: drag by whole panel (button taps excluded).
       const dragTarget = this.isMobile ? panel : s.getElementById("gv-drag");
 
       dragTarget.addEventListener("pointerdown", (e) => {
-        if (e.target.closest(".btn")) return; // don't drag when tapping buttons
+        if (e.target.closest(".btn")) return;
         const startX = e.clientX - panel.offsetLeft;
         const startY = e.clientY - panel.offsetTop;
         dragTarget.setPointerCapture(e.pointerId);
+
         const move = (m) => {
           panel.style.left = `${m.clientX - startX}px`;
           panel.style.top = `${m.clientY - startY}px`;
+          // Live orientation update while dragging
+          this._updatePanelOrientation(panel);
         };
+
         const up = () => {
           settings.panelLeft = panel.style.left;
           settings.panelTop = panel.style.top;
+          this._updatePanelOrientation(panel);
           dragTarget.removeEventListener("pointermove", move);
           dragTarget.removeEventListener("pointerup", up);
         };
+
         dragTarget.addEventListener("pointermove", move);
         dragTarget.addEventListener("pointerup", up);
       });
+
+      // Check orientation on load too
+      this._updatePanelOrientation(panel);
 
       overlay.addEventListener(
         "wheel",
