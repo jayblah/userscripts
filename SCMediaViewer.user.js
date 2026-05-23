@@ -193,6 +193,9 @@
             width: 100% !important;
             gap: 4px !important;
           }
+          .panel.vertical .row.scroll-row {
+            display: none !important;
+          }
           .panel.vertical .btn {
             width: 100% !important;
             height: 38px !important;
