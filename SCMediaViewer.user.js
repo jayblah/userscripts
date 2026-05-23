@@ -249,16 +249,16 @@
 
       const left = panel.offsetLeft;
       const screenW = window.innerWidth;
+      const isCurrentlyVertical = panel.classList.contains("vertical");
 
-      // We calculate boundaries strictly off the panel's left coordinate
-      // rather than width to avoid oscillation loops when dragging.
-      // Turns vertical if pushed within 30px of the left edge,
-      // or if the left edge is shoved past the right boundary
-      // (accounting for the 70px vertical width + 40px buffer)
       const nearLeftEdge = left <= 30;
       const nearRightEdge = left >= screenW - 110;
+      const shouldBeVertical = nearLeftEdge || nearRightEdge;
 
-      panel.classList.toggle("vertical", nearLeftEdge || nearRightEdge);
+      // ONLY toggle if the state actually needs to change
+      if (shouldBeVertical !== isCurrentlyVertical) {
+        panel.classList.toggle("vertical", shouldBeVertical);
+      }
     },
 
     refreshMediaList() {
@@ -492,21 +492,26 @@
 
       dragTarget.addEventListener("pointerdown", (e) => {
         if (e.target.closest(".btn")) return;
+
+        // Calculate initial offset
         const startX = e.clientX - panel.offsetLeft;
         const startY = e.clientY - panel.offsetTop;
         dragTarget.setPointerCapture(e.pointerId);
 
         const move = (m) => {
+          // Update position without re-triggering orientation logic immediately
           panel.style.left = `${m.clientX - startX}px`;
           panel.style.top = `${m.clientY - startY}px`;
-          // Live orientation update while dragging
-          this._updatePanelOrientation(panel);
         };
 
         const up = () => {
+          // Save settings
           settings.panelLeft = panel.style.left;
           settings.panelTop = panel.style.top;
+
+          // Trigger orientation check ONLY once, at the end of the drag
           this._updatePanelOrientation(panel);
+
           dragTarget.removeEventListener("pointermove", move);
           dragTarget.removeEventListener("pointerup", up);
         };
