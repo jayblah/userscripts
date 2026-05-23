@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      1.9
+// @version      2.0
 // @description  Streamlined media viewing experience for SC with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -107,7 +107,7 @@
         .btn:hover { border-color: var(--teal); color: #fff; background: #2a2a2a; }
         .btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
         .row { display: flex; gap: 6px; }
-        .row .btn { flex: 1; }
+        .row .btn { flex: 0 0 auto; width: 100%; }
         .lbl-short { display: none; }
         u { text-decoration: underline; text-decoration-color: var(--teal); text-underline-offset: 3px; }
 
@@ -173,27 +173,34 @@
         /* ── Mobile vertical (edge-docked) ── */
         @media (max-width: 600px) and (pointer: coarse) {
           .panel.vertical {
-            flex-direction: column;
-            width: 70px !important; /* Force width */
-            align-items: stretch;
-            padding: 10px 5px !important; /* Reduce padding to save space */
-            gap: 8px;
-            box-sizing: border-box; /* Crucial: ensures padding doesn't push size */
+            flex-direction: column !important;
+            width: 70px !important;
+            align-items: stretch !important;
+            padding: 8px 5px !important;
+            gap: 8px !important;
+            box-sizing: border-box !important;
           }
           .panel.vertical .header {
-            border-right: none;
-            border-bottom: 1px solid var(--border);
-            padding-right: 0;
-            padding-bottom: 6px;
-            text-align: center;
+            border-right: none !important;
+            border-bottom: 1px solid var(--border) !important;
+            padding-right: 0 !important;
+            padding-bottom: 6px !important;
+          }
+          /* Force row and buttons to stack and stay contained */
+          .panel.vertical .row {
+            display: flex !important;
+            flex-direction: column !important;
+            width: 100% !important;
+            gap: 4px !important;
           }
           .panel.vertical .btn {
-            width: 100%;
-            height: 44px;
-            font-size: 11px !important; /* Slightly smaller font to fit */
+            width: 100% !important;
+            height: 38px !important;
+            font-size: 10px !important;
+            font-size: 10px !important;
             padding: 0 2px !important;
-            box-sizing: border-box;
-            overflow: hidden; /* Prevents text from pushing width */
+            box-sizing: border-box !important;
+            flex: 0 0 auto !important;
           }
         }
       `);
@@ -254,10 +261,8 @@
       const screenW = window.innerWidth;
       const isCurrentlyVertical = panel.classList.contains("vertical");
 
-      // Reduced the "dead zone" (100px from edges instead of 30px)
-      const nearLeftEdge = left <= 100;
-      const nearRightEdge = left >= screenW - 170; // Adjusted based on panel width
-      const shouldBeVertical = nearLeftEdge || nearRightEdge;
+      // Snap to vertical if within 100px of left or 170px of right
+      const shouldBeVertical = left <= 100 || left >= screenW - 170;
 
       if (shouldBeVertical !== isCurrentlyVertical) {
         panel.classList.toggle("vertical", shouldBeVertical);
