@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      2.1
+// @version      2.2
 // @description  Streamlined media viewing experience for SC with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -42,6 +42,7 @@
     isExpanded: false,
     shadow: null,
     _touchStart: { x: 0, y: 0 },
+    _lastScroll: 0,
     _decodeAbort: null,
     _galleryMode: "main",
     isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
@@ -549,19 +550,16 @@
         (e) => {
           const hovered = s.elementFromPoint(e.clientX, e.clientY);
           if (hovered?.matches("video, iframe")) return;
-
           e.preventDefault();
 
-          // e.buttons 2 is Right-Click
+          // Right-click hold = Zoom
           if (e.buttons === 2) {
-            // ZOOM LOGIC (Right-click held)
             this._applyZoom(
               this._scale + (e.deltaY < 0 ? this._zoomStep : -this._zoomStep),
             );
           } else {
-            // GALLERY NAVIGATION LOGIC (Default)
-            if (Math.abs(e.deltaY) > 20) {
-              // Threshold to prevent accidental flips
+            // Instant navigation, but only if the scroll is intentional
+            if (Math.abs(e.deltaY) > 30) {
               const dir = e.deltaY > 0 ? 1 : -1;
               if (this._galleryMode === "video") {
                 this.openVideoGallery(dir);
