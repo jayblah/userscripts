@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      2.0
+// @version      2.1
 // @description  Streamlined media viewing experience for SC with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -248,6 +248,12 @@
     },
 
     updateUI() {
+      if (
+        this.isMobile &&
+        this.shadow.getElementById("gv-panel").classList.contains("vertical")
+      ) {
+        this.shadow.querySelector(".scroll-row").style.display = "none";
+      }
       const btnExpand = this.shadow.getElementById("btn-expand");
       btnExpand.innerHTML = this.isExpanded
         ? "<span class='lbl-full'>COLLAPSE ALL</span><span class='lbl-short'>COL</span>"
