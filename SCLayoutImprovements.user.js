@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Layout Improvements
-// @version      1.8
+// @version      1.9
 // @match        https://simpcity.su/*
 // @match        https://simpcity.cr/*
 // @grant        GM_addStyle
@@ -79,7 +79,23 @@
             min-height: auto !important;
         }
 
-        /* Ensure the main link uses the full space cleanly */
+        /* Zero out the font-size on the container to hide raw text nodes like "replied to" and the trailing period */
+        li.alert .fauxBlockLink {
+            font-size: 0 !important;
+        }
+
+        /* Hide the username links */
+        li.alert .fauxBlockLink a.username {
+            display: none !important;
+        }
+
+        /* Hide the thread labels (e.g., OnlyFans) and their spacing */
+        li.alert .fauxBlockLink-blockLink .label,
+        li.alert .fauxBlockLink-blockLink .label-append {
+            display: none !important;
+        }
+
+        /* Restore font size for the actual thread link and make it block level */
         li.alert .fauxBlockLink-blockLink {
             font-size: 13px !important;
             line-height: 1.4 !important;
