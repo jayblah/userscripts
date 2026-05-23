@@ -174,10 +174,11 @@
         @media (max-width: 600px) and (pointer: coarse) {
           .panel.vertical {
             flex-direction: column;
-            width: 70px;
+            width: 70px !important; /* Force width */
             align-items: stretch;
-            padding: 10px 8px;
+            padding: 10px 5px !important; /* Reduce padding to save space */
             gap: 8px;
+            box-sizing: border-box; /* Crucial: ensures padding doesn't push size */
           }
           .panel.vertical .header {
             border-right: none;
@@ -189,8 +190,10 @@
           .panel.vertical .btn {
             width: 100%;
             height: 44px;
-            font-size: 13px;
-            padding: 0 6px;
+            font-size: 11px !important; /* Slightly smaller font to fit */
+            padding: 0 2px !important;
+            box-sizing: border-box;
+            overflow: hidden; /* Prevents text from pushing width */
           }
         }
       `);
@@ -251,11 +254,11 @@
       const screenW = window.innerWidth;
       const isCurrentlyVertical = panel.classList.contains("vertical");
 
-      const nearLeftEdge = left <= 30;
-      const nearRightEdge = left >= screenW - 110;
+      // Reduced the "dead zone" (100px from edges instead of 30px)
+      const nearLeftEdge = left <= 100;
+      const nearRightEdge = left >= screenW - 170; // Adjusted based on panel width
       const shouldBeVertical = nearLeftEdge || nearRightEdge;
 
-      // ONLY toggle if the state actually needs to change
       if (shouldBeVertical !== isCurrentlyVertical) {
         panel.classList.toggle("vertical", shouldBeVertical);
       }
