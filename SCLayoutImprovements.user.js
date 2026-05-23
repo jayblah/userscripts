@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Layout Improvements
-// @version      1.9
+// @version      2.1
 // @match        https://simpcity.su/*
 // @match        https://simpcity.cr/*
 // @grant        GM_addStyle
@@ -43,7 +43,8 @@
             transition: transform 0.2s ease;
             flex-shrink: 0;
         }
-        .block--category.is-collapsed .sc-toggle {
+        .block--category.is-collapsed .sc-toggle,
+        .sc-sticky-header.is-collapsed .sc-toggle {
             transform: rotate(-90deg);
         }
         .block--category.is-collapsed .block-body {
@@ -57,49 +58,91 @@
         }
 
         /* --- Streamlined Alerts Dropdown --- */
-
-        /* Hide the user avatars */
         li.alert .contentRow-figure {
             display: none !important;
         }
-
-        /* Hide the timestamps and minor subtext */
         li.alert .contentRow-minor {
             display: none !important;
         }
-
-        /* Hide the unread indicator dot and extra icons */
         li.alert .contentRow-extra {
             display: none !important;
         }
-
-        /* Drastically reduce padding to make it a dense list */
         li.alert.menu-row {
             padding: 6px 12px !important;
             min-height: auto !important;
         }
-
-        /* Zero out the font-size on the container to hide raw text nodes like "replied to" and the trailing period */
         li.alert .fauxBlockLink {
             font-size: 0 !important;
         }
-
-        /* Hide the username links */
         li.alert .fauxBlockLink a.username {
             display: none !important;
         }
-
-        /* Hide the thread labels (e.g., OnlyFans) and their spacing */
         li.alert .fauxBlockLink-blockLink .label,
         li.alert .fauxBlockLink-blockLink .label-append {
             display: none !important;
         }
-
-        /* Restore font size for the actual thread link and make it block level */
         li.alert .fauxBlockLink-blockLink {
             font-size: 13px !important;
             line-height: 1.4 !important;
             display: block !important;
+        }
+
+        /* --- Sticky Threads Toggle --- */
+        .sc-sticky-header {
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #a5a5a5;
+            background: rgba(0, 0, 0, 0.2);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .sc-sticky-header:hover {
+            color: #d1d1d1;
+            background: rgba(0, 0, 0, 0.3);
+        }
+        .structItemContainer-group--sticky.is-collapsed {
+            display: none !important;
+        }
+        hr.stickySeparatortop {
+            display: none !important;
+        }
+
+        /* --- Streamlined Thread Lists --- */
+        /* Hide meta and latest columns */
+        .structItem-cell.structItem-cell--meta,
+        .structItem-cell.structItem-cell--latest {
+            display: none !important;
+        }
+
+        /* 1. Hide the cell and remove its borders/padding */
+        .structItem-cell.structItem-cell--iconEnd {
+            display: none !important;
+        }
+
+        /* 2. Force the icon cell to be a clean flex-center box */
+        .structItem-cell.structItem-cell--icon {
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+            padding: 0 !important;        /* Removes the lines/padding */
+            border: none !important;      /* Kills the faint lines */
+            width: 90px !important;
+            flex: 0 0 90px !important;
+        }
+
+        /* 3. Hide all avatars inside icon containers to clean up the look */
+        .structItem-iconContainer .avatar {
+            display: none !important;
+        }
+
+        /* 4. Kill the container borders that might be causing the lines */
+        .structItem--thread {
+            border-bottom: 1px solid rgba(255,255,255,0.05) !important;
         }
     `);
 
@@ -124,8 +167,9 @@
 
   function init() {
     const state = loadState();
-    const blocks = document.querySelectorAll(".block--category");
 
+    // --- 1. Category Toggle Logic ---
+    const blocks = document.querySelectorAll(".block--category");
     blocks.forEach((block) => {
       const id = getCategoryId(block);
       if (!id) return;
@@ -133,15 +177,17 @@
       const header = block.querySelector(".block-header");
       if (!header) return;
 
-      const toggle = document.createElement("span");
-      toggle.className = "sc-toggle";
-      toggle.textContent = "▾";
+      if (!header.querySelector(".sc-toggle")) {
+        const toggle = document.createElement("span");
+        toggle.className = "sc-toggle";
+        toggle.textContent = "▾";
 
-      const headerLink = header.querySelector("a");
-      if (headerLink) {
-        headerLink.insertAdjacentElement("afterend", toggle);
-      } else {
-        header.prepend(toggle);
+        const headerLink = header.querySelector("a");
+        if (headerLink) {
+          headerLink.insertAdjacentElement("afterend", toggle);
+        } else {
+          header.prepend(toggle);
+        }
       }
 
       if (state[id]) {
@@ -159,6 +205,45 @@
         saveState(current);
       });
     });
+
+    // --- 2. Sticky Threads Toggle Logic ---
+    const stickyGroup = document.querySelector(
+      ".structItemContainer-group--sticky",
+    );
+    if (stickyGroup && !document.querySelector(".sc-sticky-header")) {
+      const header = document.createElement("div");
+      header.className = "sc-sticky-header";
+
+      const text = document.createElement("span");
+      text.textContent = "Sticky Threads";
+
+      const toggle = document.createElement("span");
+      toggle.className = "sc-toggle";
+      toggle.textContent = "▾";
+
+      header.appendChild(toggle);
+      header.appendChild(text);
+
+      stickyGroup.parentNode.insertBefore(header, stickyGroup);
+
+      if (state["sc_sticky_threads"] !== true) {
+        header.classList.add("is-collapsed");
+        stickyGroup.classList.add("is-collapsed");
+      }
+
+      header.addEventListener("click", () => {
+        const isCollapsed = stickyGroup.classList.toggle("is-collapsed");
+        header.classList.toggle("is-collapsed", isCollapsed);
+
+        const current = loadState();
+        if (!isCollapsed) {
+          current["sc_sticky_threads"] = true;
+        } else {
+          delete current["sc_sticky_threads"];
+        }
+        saveState(current);
+      });
+    }
   }
 
   if (document.readyState === "loading") {

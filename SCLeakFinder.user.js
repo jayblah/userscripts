@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Leak Finder - Cross-Platform Leak Seeker
-// @version      1.0.8
+// @version      1.1
 // @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SC.
 // @author       JR
 // @license      MIT
