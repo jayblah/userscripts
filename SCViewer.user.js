@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      1.7.7
+// @version      1.7.8
 // @description  Streamlined media viewing experience for SC with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -142,7 +142,9 @@
             align-items: center;
             padding: 10px 12px;
             gap: 8px;
+            cursor: grab;
           }
+          .panel:active { cursor: grabbing; }
           .header { display: none; }
           .btn { height: 44px; font-size: 15px; padding: 0 14px; border-radius: 7px; }
           .row.scroll-row { display: none; }
@@ -173,8 +175,14 @@
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
           </div>
           <div class="btn" role="button" tabindex="0" data-action="expand" id="btn-expand">EXPAND ALL</div>
-          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery"><span class="lbl-full">IMAGE&nbsp;</span><u>G</u><span class="lbl-full">ALLERY</span><span class="lbl-short">GAL</span></div>
-          <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery"><u>V</u><span class="lbl-full">IDEO GALLERY</span><span class="lbl-short">VID</span></div>
+          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery">
+            <span class="lbl-full">IMAGE&nbsp;<u>G</u>ALLERY</span>
+            <span class="lbl-short">GAL</span>
+          </div>
+          <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery">
+            <span class="lbl-full"><u>V</u>IDEO GALLERY</span>
+            <span class="lbl-short">VID</span>
+          </div>
         </div>
         <div id="overlay" tabindex="-1">
           <div class="z-hint">[A/←] PREV · [D/→] NEXT · [W/↑/ESC] EXIT · [SCROLL] ZOOM</div>
@@ -192,13 +200,12 @@
     },
 
     refreshMediaList() {
-      const selector = "img.bbImage";
-      this.mediaList = Array.from(document.querySelectorAll(selector)).filter(
-        (el) => {
-          const rect = el.getBoundingClientRect();
-          return rect.width > 0 || rect.height > 0;
-        },
-      );
+      this.mediaList = Array.from(
+        document.querySelectorAll("img.bbImage"),
+      ).filter((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 || rect.height > 0;
+      });
     },
 
     toggleExpand() {
@@ -418,11 +425,14 @@
         }
       });
 
-      const dragHdr = s.getElementById("gv-drag");
-      dragHdr.addEventListener("pointerdown", (e) => {
+      // Fix: on mobile use the panel itself as drag target since header is hidden
+      const dragTarget = this.isMobile ? panel : s.getElementById("gv-drag");
+
+      dragTarget.addEventListener("pointerdown", (e) => {
+        if (e.target.closest(".btn")) return; // don't drag when tapping buttons
         const startX = e.clientX - panel.offsetLeft;
         const startY = e.clientY - panel.offsetTop;
-        dragHdr.setPointerCapture(e.pointerId);
+        dragTarget.setPointerCapture(e.pointerId);
         const move = (m) => {
           panel.style.left = `${m.clientX - startX}px`;
           panel.style.top = `${m.clientY - startY}px`;
@@ -430,11 +440,11 @@
         const up = () => {
           settings.panelLeft = panel.style.left;
           settings.panelTop = panel.style.top;
-          dragHdr.removeEventListener("pointermove", move);
-          dragHdr.removeEventListener("pointerup", up);
+          dragTarget.removeEventListener("pointermove", move);
+          dragTarget.removeEventListener("pointerup", up);
         };
-        dragHdr.addEventListener("pointermove", move);
-        dragHdr.addEventListener("pointerup", up);
+        dragTarget.addEventListener("pointermove", move);
+        dragTarget.addEventListener("pointerup", up);
       });
 
       overlay.addEventListener(
@@ -467,8 +477,11 @@
       if (!this.mediaList.length) return;
       this.zoomIdx =
         (this.zoomIdx + dir + this.mediaList.length) % this.mediaList.length;
-      const current = this.mediaList[this.zoomIdx];
-      this._renderMedia(current, this.zoomIdx, this.mediaList.length);
+      this._renderMedia(
+        this.mediaList[this.zoomIdx],
+        this.zoomIdx,
+        this.mediaList.length,
+      );
     },
 
     async openVideoGallery(dir = 0) {
