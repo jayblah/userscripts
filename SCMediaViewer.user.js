@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      1.8
+// @version      1.9
 // @description  Streamlined media viewing experience for SC with mobile & keyboard support.
 // @author       JR
 // @license      MIT
@@ -244,14 +244,21 @@
         : "<span class='lbl-full'>E<u>X</u>PAND ALL</span><span class='lbl-short'>EXP</span>";
     },
 
-    // Switches panel between horizontal and vertical based on proximity to screen edge
     _updatePanelOrientation(panel) {
       if (!this.isMobile) return;
-      const edgeThreshold = 80; // px from left or right edge
+
       const left = panel.offsetLeft;
-      const right = window.innerWidth - (left + panel.offsetWidth);
-      const nearEdge = left <= edgeThreshold || right <= edgeThreshold;
-      panel.classList.toggle("vertical", nearEdge);
+      const screenW = window.innerWidth;
+
+      // We calculate boundaries strictly off the panel's left coordinate
+      // rather than width to avoid oscillation loops when dragging.
+      // Turns vertical if pushed within 30px of the left edge,
+      // or if the left edge is shoved past the right boundary
+      // (accounting for the 70px vertical width + 40px buffer)
+      const nearLeftEdge = left <= 30;
+      const nearRightEdge = left >= screenW - 110;
+
+      panel.classList.toggle("vertical", nearLeftEdge || nearRightEdge);
     },
 
     refreshMediaList() {
