@@ -58,6 +58,7 @@
     _panOffset: { x: 0, y: 0 },
     _panStart: { x: 0, y: 0 },
     _isPanning: false,
+    _hasDragged: false,
     _xpageLocked: false,
     _xpageUrl: null,
 
@@ -133,7 +134,8 @@
           cursor: zoom-in;
           will-change: transform;
         }
-        #media-container img.zoomed { cursor: zoom-out; }
+        #media-container img.zoomed { cursor: grab; }
+        #media-container img.zoomed.dragging { cursor: grabbing; }
         .counter {
           position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
           color: var(--teal); font-weight: 800; background: rgba(0,0,0,0.8);
@@ -595,6 +597,12 @@
       };
 
       s.addEventListener("click", (e) => {
+        if (this._hasDragged) {
+          // Reset and ignore this click since it was the end of a pan/drag
+          setTimeout(() => (this._hasDragged = false), 50);
+          return;
+        }
+
         const btn = e.target.closest(".btn");
         if (btn) btnActionHandlers[btn.dataset.action]?.();
         if (["overlay", "media-container"].includes(e.target.id))
@@ -668,6 +676,45 @@
       overlay.addEventListener("touchend", (e) => this.handleTouchEnd(e), {
         passive: true,
       });
+
+      // --- Mouse Panning / Dragging ---
+      overlay.addEventListener("mousedown", (e) => {
+        // Only trigger on left-click (0), when zoomed in, and on the image itself
+        if (e.button !== 0 || this._scale <= 1 || e.target.tagName !== "IMG")
+          return;
+
+        e.preventDefault(); // Prevents the browser's native ghost-image drag
+        this._isPanning = true;
+        this._hasDragged = false;
+
+        // Calculate starting point relative to current pan offset
+        this._panStart.x = e.clientX - this._panOffset.x;
+        this._panStart.y = e.clientY - this._panOffset.y;
+
+        e.target.classList.add("dragging");
+      });
+
+      overlay.addEventListener("mousemove", (e) => {
+        if (!this._isPanning) return;
+
+        this._hasDragged = true;
+        this._panOffset.x = e.clientX - this._panStart.x;
+        this._panOffset.y = e.clientY - this._panStart.y;
+
+        this._clampPan();
+        this._applyTransform();
+      });
+
+      const stopMousePan = () => {
+        if (this._isPanning) {
+          this._isPanning = false;
+          const img = this._getZoomTarget();
+          if (img) img.classList.remove("dragging");
+        }
+      };
+
+      overlay.addEventListener("mouseup", stopMousePan);
+      overlay.addEventListener("mouseleave", stopMousePan);
     },
 
     // ── Gallery ────────────────────────────────────────────────────────────
