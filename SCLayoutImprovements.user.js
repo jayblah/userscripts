@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Layout Improvements
-// @version      2.1
+// @version      3.3
 // @match        https://simpcity.su/*
 // @match        https://simpcity.cr/*
 // @grant        GM_addStyle
@@ -10,8 +10,10 @@
 
 (function () {
   "use strict";
+
+  // 1. All Consolidated Styles
   GM_addStyle(`
-        /* --- Existing Layout Improvements --- */
+        /* --- General Layout Improvements --- */
         .p-body-sidebarCol {
             display: none !important;
         }
@@ -113,36 +115,116 @@
         }
 
         /* --- Streamlined Thread Lists --- */
-        /* Hide meta and latest columns */
         .structItem-cell.structItem-cell--meta,
-        .structItem-cell.structItem-cell--latest {
-            display: none !important;
-        }
-
-        /* 1. Hide the cell and remove its borders/padding */
+        .structItem-cell.structItem-cell--latest,
         .structItem-cell.structItem-cell--iconEnd {
             display: none !important;
         }
-
-        /* 2. Force the icon cell to be a clean flex-center box */
-        .structItem-cell.structItem-cell--icon {
-            display: flex !important;
-            justify-content: center !important;
-            align-items: center !important;
-            padding: 0 !important;        /* Removes the lines/padding */
-            border: none !important;      /* Kills the faint lines */
-            width: 90px !important;
-            flex: 0 0 90px !important;
+        .structItem--thread {
+            border-bottom: 1px solid rgba(255,255,255,0.05) !important;
         }
 
-        /* 3. Hide all avatars inside icon containers to clean up the look */
-        .structItem-iconContainer .avatar {
+        /* Hide parent structural cell containers when the thumbnail inside has been moved */
+        .structItem-cell--icon {
             display: none !important;
         }
 
-        /* 4. Kill the container borders that might be causing the lines */
-        .structItem--thread {
-            border-bottom: 1px solid rgba(255,255,255,0.05) !important;
+        /* Safe avatar clean-up: Only hide standard profiles, ignore enlarged thumbnails */
+        .structItem-iconContainer .avatar:not(.dcThumbnail):not([data-gv-thumb="true"]) {
+            display: none !important;
+        }
+
+        /* --- Enlarged Thumbnail Display Properties --- */
+        .structItem--thread [data-gv-thumb],
+        .structItem [data-gv-thumb],
+        .block-row [data-gv-thumb],
+        .contentRow [data-gv-thumb] {
+            width: 400px !important;
+            height: 400px !important;
+            display: block !important;
+            margin: 0 auto 12px auto !important; /* Force Perfect Center */
+            position: relative !important;
+            z-index: 5 !important;
+            opacity: 1 !important;
+            filter: none !important;
+        }
+
+        .structItem--thread [data-gv-thumb] img,
+        .structItem [data-gv-thumb] img,
+        .block-row [data-gv-thumb] img,
+        .contentRow [data-gv-thumb] img {
+            width: 100% !important;
+            height: 100% !important;
+            display: block !important;
+            object-fit: cover !important;
+            object-position: center center !important;
+            background-size: cover !important;
+            background-position: center !important;
+            opacity: 1 !important;
+            filter: none !important;
+        }
+
+        /* Base64 Tracker Offsets from original script */
+        .structItem--thread [data-gv-thumb] img[src*="base64"],
+        .structItem [data-gv-thumb] img[src*="base64"],
+        .block-row [data-gv-thumb] img[src*="base64"],
+        .contentRow [data-gv-thumb] img[src*="base64"] {
+            object-position: -9999px !important;
+        }
+
+        /* --- Global Grid Centering Fixes (What's New & Forum Thread Lists) --- */
+        /* Force parent rows to drop side pad constraints and align everything vertical-center */
+        .block-row:has([data-gv-thumb="true"]) .contentRow,
+        .contentRow:has([data-gv-thumb="true"]),
+        .structItem:has([data-gv-thumb="true"]) {
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 100% !important;
+            text-align: center !important;
+            padding-left: 0 !important;
+        }
+
+        /* Target text blocks inside lists and scale to 100% full width centered layouts */
+        .contentRow-main:has([data-gv-thumb="true"]),
+        .structItem-cell.structItem-cell--main:has([data-gv-thumb="true"]) {
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 100% !important;
+            text-align: center !important;
+            margin-left: 0 !important;
+            padding-left: 0 !important;
+        }
+
+        /* Clean metadata items, descriptions, and tag arrays */
+        .contentRow-main:has([data-gv-thumb="true"]) .listInline,
+        .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-minor,
+        .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-parts {
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+            flex-wrap: wrap !important;
+            padding: 0 !important;
+            margin: 0 auto !important;
+            text-align: center !important;
+        }
+
+        .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-parts > li {
+            display: inline-flex !important;
+            align-items: center !important;
+            float: none !important;
+        }
+
+        /* --- Kill All Hover Dim Filters completely --- */
+        .block-row:hover [data-gv-thumb],
+        .contentRow:hover [data-gv-thumb],
+        .structItem:hover [data-gv-thumb],
+        .structItem--thread:hover [data-gv-thumb] {
+            opacity: 1 !important;
+            filter: none !important;
         }
     `);
 
@@ -165,10 +247,45 @@
     return anchor ? anchor.id : null;
   }
 
+  // 2. Thread Enlarger Positioning Logic
+  function processThumbnails() {
+    const items = document.querySelectorAll(
+      ".structItem--thread:not([data-processed]), .structItem:not([data-processed]), .block-row:not([data-processed]), .contentRow:not([data-processed])",
+    );
+
+    if (items.length === 0) return;
+
+    items.forEach((item) => {
+      const thumbLink = item.querySelector(
+        ".structItem-iconContainer a, .dcThumbnail",
+      );
+      const titleContainer = item.querySelector(
+        ".structItem-title, .contentRow-title",
+      );
+
+      // Fallback strategy if custom grid containers lack classic heading elements
+      let target = titleContainer;
+      if (!target && thumbLink) {
+        target = item.querySelector(
+          ".contentRow-main > a[href*='/threads/'], .structItem-cell--main > a[href*='/threads/']",
+        );
+      }
+
+      if (thumbLink && target) {
+        thumbLink.setAttribute("data-gv-thumb", "true");
+        target.parentNode.insertBefore(thumbLink, target);
+      }
+
+      item.setAttribute("data-processed", "true");
+    });
+  }
+
   function init() {
     const state = loadState();
 
-    // --- 1. Category Toggle Logic ---
+    processThumbnails();
+
+    // --- Category Toggle Logic ---
     const blocks = document.querySelectorAll(".block--category");
     blocks.forEach((block) => {
       const id = getCategoryId(block);
@@ -206,7 +323,7 @@
       });
     });
 
-    // --- 2. Sticky Threads Toggle Logic ---
+    // --- Sticky Threads Toggle Logic ---
     const stickyGroup = document.querySelector(
       ".structItemContainer-group--sticky",
     );
@@ -251,4 +368,21 @@
   } else {
     init();
   }
+
+  // 3. Dynamic Observer Loop
+  const observer = new MutationObserver((mutations) => {
+    let shouldProcess = false;
+    for (const mutation of mutations) {
+      if (mutation.addedNodes.length > 0) {
+        shouldProcess = true;
+        break;
+      }
+    }
+    if (shouldProcess) processThumbnails();
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
 })();
