@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      2.4
-// @description  Streamlined media viewing experience for SC with mobile & keyboard support.
+// @version      2.5
+// @description  Streamlined media viewing experience for SC with mobile & keyboard support. Includes inline click-to-expand and per-post controls.
 // @author       JR
 // @license      MIT
 // @match        *://simpcity.*/threads/*
@@ -17,6 +17,7 @@
 (function () {
   "use strict";
 
+  const THUMB_PATTERN = /\.(md|th)\.(jpg|webp)$/i;
   const SETTINGS_MAP = {
     panelTop: "gv_p_top",
     panelLeft: "gv_p_left",
@@ -66,11 +67,17 @@
       this.injectGlobalStyles();
       this.createHost();
       this.setupGlobalEvents();
+      this.processInlineElements();
+
+      // Unified single loop monitoring dynamic loads and background swaps
+      const observer = new MutationObserver(() => this.processInlineElements());
+      observer.observe(document.body, { childList: true, subtree: true });
     },
 
     injectGlobalStyles() {
       const style = document.createElement("style");
       style.textContent = `
+        /* --- Dynamic Gallery Overlays --- */
         img.bbImage.gv-expanded {
           display: block !important;
           max-width: 100% !important;
@@ -80,6 +87,40 @@
           object-fit: contain !important;
         }
         body.gv-noscroll { overflow: hidden !important; }
+
+        /* --- Inline Post Layouts --- */
+        img.bbImage {
+          cursor: pointer;
+          transition: all 0.2s ease-in-out;
+          display: inline-block;
+          max-width: 200px;
+          height: auto;
+          margin: 2px;
+        }
+        img.bbImage.expanded {
+          display: block;
+          max-width: 100% !important;
+          max-height: 90vh;
+          margin: 8px auto;
+        }
+        .sc-expand-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          font-weight: 700;
+          font-family: system-ui, sans-serif;
+          color: #aaa;
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 0;
+          margin: 0;
+          line-height: 1;
+          transition: color 0.15s;
+        }
+        .sc-expand-btn:hover { color: #fff; }
+        .sc-expand-btn.is-expanded { color: #3db7c7; }
       `;
       document.head.appendChild(style);
     },
@@ -144,32 +185,11 @@
         }
 
         @media (max-width: 600px) and (pointer: coarse) {
-          .panel {
-            width: auto;
-            flex-direction: row;
-            flex-wrap: nowrap;
-            align-items: center;
-            padding: 8px 10px;
-            gap: 8px;
-            cursor: grab;
-          }
+          .panel { width: auto; flex-direction: row; flex-wrap: nowrap; align-items: center; padding: 8px 10px; gap: 8px; cursor: grab; }
           .panel:active { cursor: grabbing; }
-
-          .header {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-bottom: none;
-            border-right: 1px solid var(--border);
-            padding-bottom: 0;
-            padding-right: 8px;
-            font-size: 10px;
-            min-width: 28px;
-            cursor: grab;
-          }
+          .header { display: flex; align-items: center; justify-content: center; border-bottom: none; border-right: 1px solid var(--border); padding-bottom: 0; padding-right: 8px; font-size: 10px; min-width: 28px; cursor: grab; }
           .header .lbl-full { display: none; }
           .header .lbl-short { display: inline; }
-
           .btn { height: 44px; font-size: 15px; padding: 0 14px; border-radius: 7px; }
           .row.scroll-row { display: none; }
           .lbl-full { display: none; }
@@ -177,32 +197,10 @@
         }
 
         @media (max-width: 600px) and (pointer: coarse) {
-          .panel.vertical {
-            flex-direction: column !important;
-            width: 70px !important;
-            align-items: stretch !important;
-            padding: 8px 5px !important;
-            gap: 8px !important;
-            box-sizing: border-box !important;
-          }
-          .panel.vertical .row.scroll-row,
-          .panel.vertical .scroll-row {
-            display: none !important;
-          }
-          .panel.vertical .header {
-            border-right: none !important;
-            border-bottom: 1px solid var(--border) !important;
-            padding-right: 0 !important;
-            padding-bottom: 6px !important;
-          }
-          .panel.vertical .btn {
-            width: 100% !important;
-            height: 38px !important;
-            font-size: 10px !important;
-            padding: 0 2px !important;
-            box-sizing: border-box !important;
-            flex: 0 0 auto !important;
-          }
+          .panel.vertical { flex-direction: column !important; width: 70px !important; align-items: stretch !important; padding: 8px 5px !important; gap: 8px !important; box-sizing: border-box !important; }
+          .panel.vertical .row.scroll-row, .panel.vertical .scroll-row { display: none !important; }
+          .panel.vertical .header { border-right: none !important; border-bottom: 1px solid var(--border) !important; padding-right: 0 !important; padding-bottom: 6px !important; }
+          .panel.vertical .btn { width: 100% !important; height: 38px !important; font-size: 10px !important; padding: 0 2px !important; box-sizing: border-box !important; flex: 0 0 auto !important; }
           .z-hint { display: none !important; }
         }
       `);
@@ -277,6 +275,77 @@
       }
     },
 
+    // ── Inline Expansion Operations ──────────────────────────────────────────
+    getBigUrl(src) {
+      return src.replace(THUMB_PATTERN, ".$2");
+    },
+
+    cleanAttr(str) {
+      return str.replace(/\.(md|th)(?=\.)/, "");
+    },
+
+    processInlineElements() {
+      // Process titles and markers on standard thumbnail views
+      document
+        .querySelectorAll("img.bbImage:not([data-processed-thumb])")
+        .forEach((img) => {
+          if (!THUMB_PATTERN.test(img.src)) return;
+          if (img.title) img.title = this.cleanAttr(img.title);
+          if (img.alt) img.alt = this.cleanAttr(img.alt);
+          img.setAttribute("data-processed-thumb", "true");
+        });
+
+      // Inject Per-Post Actions next to standard sharing coordinates
+      document
+        .querySelectorAll(
+          ".message-attribution-opposite:not([data-processed-btn])",
+        )
+        .forEach((header) => {
+          header.setAttribute("data-processed-btn", "true");
+          if (header.querySelector(".sc-expand-btn")) return;
+
+          const messageMain = header.closest(".message-main");
+          if (!messageMain) return;
+          const lbContainer = messageMain.querySelector(".js-lbContainer");
+          if (!lbContainer) return;
+
+          const btn = document.createElement("button");
+          btn.className = "sc-expand-btn";
+          btn.textContent = "⊞ EXP";
+          btn.title = "Expand all images in this post";
+
+          btn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const images = lbContainer.querySelectorAll("img.bbImage");
+            const isExpanded = btn.classList.contains("is-expanded");
+
+            images.forEach((img) => {
+              if (!isExpanded) {
+                img.classList.add("expanded");
+                if (!img.dataset.bigLoaded) {
+                  img.dataset.bigLoaded = "true";
+                  img.src = this.getBigUrl(img.src);
+                  img.removeAttribute("srcset");
+                }
+              } else {
+                img.classList.remove("expanded");
+              }
+            });
+
+            btn.classList.toggle("is-expanded", !isExpanded);
+            btn.textContent = isExpanded ? "⊞ EXP" : "⊟ COL";
+            btn.title = isExpanded
+              ? "Expand all images in this post"
+              : "Collapse all images in this post";
+          });
+
+          const li = document.createElement("li");
+          li.appendChild(btn);
+          header.appendChild(li);
+        });
+    },
+
     refreshMediaList() {
       this.mediaList = Array.from(
         document.querySelectorAll("img.bbImage"),
@@ -299,9 +368,21 @@
 
     toggleExpand() {
       this.isExpanded = !this.isExpanded;
-      document
-        .querySelectorAll("img.bbImage")
-        .forEach((img) => img.classList.toggle("gv-expanded", this.isExpanded));
+      document.querySelectorAll("img.bbImage").forEach((img) => {
+        img.classList.toggle("gv-expanded", this.isExpanded);
+        img.classList.toggle("expanded", this.isExpanded);
+
+        // Swapping higher res resources down when panel expansion button executes
+        if (
+          this.isExpanded &&
+          !img.dataset.bigLoaded &&
+          THUMB_PATTERN.test(img.src)
+        ) {
+          img.dataset.bigLoaded = "true";
+          img.src = this.getBigUrl(img.src);
+          img.removeAttribute("srcset");
+        }
+      });
       if (this.isExpanded) {
         document
           .querySelectorAll('div[onclick*="redgifs.com"]')
@@ -596,9 +677,32 @@
         vgallery: () => this.openVideoGallery(0),
       };
 
+      // Handle standard document intercept click requests for direct thumbnail taps
+      document.body.addEventListener("click", (e) => {
+        const img = e.target.closest("img.bbImage");
+        if (!img) return;
+
+        // Skip interceptions if the user target is located inside a native XenForo overlay container
+        if (e.target.closest("#overlay") || e.target.closest("#gv-p-root"))
+          return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (img.classList.contains("expanded")) {
+          img.classList.remove("expanded");
+        } else {
+          img.classList.add("expanded");
+          if (!img.dataset.bigLoaded) {
+            img.dataset.bigLoaded = "true";
+            img.src = this.getBigUrl(img.src);
+            img.removeAttribute("srcset");
+          }
+        }
+      });
+
       s.addEventListener("click", (e) => {
         if (this._hasDragged) {
-          // Reset and ignore this click since it was the end of a pan/drag
           setTimeout(() => (this._hasDragged = false), 50);
           return;
         }
@@ -677,17 +781,14 @@
         passive: true,
       });
 
-      // --- Mouse Panning / Dragging ---
       overlay.addEventListener("mousedown", (e) => {
-        // Only trigger on left-click (0), when zoomed in, and on the image itself
         if (e.button !== 0 || this._scale <= 1 || e.target.tagName !== "IMG")
           return;
 
-        e.preventDefault(); // Prevents the browser's native ghost-image drag
+        e.preventDefault();
         this._isPanning = true;
         this._hasDragged = false;
 
-        // Calculate starting point relative to current pan offset
         this._panStart.x = e.clientX - this._panOffset.x;
         this._panStart.y = e.clientY - this._panOffset.y;
 
@@ -1065,6 +1166,7 @@
 
       if (current.tagName === "IMG") {
         const el = new Image();
+        // Fall back cleanly if an inline asset was already replaced with high res source url
         el.src = current.src;
         const controller = new AbortController();
         this._decodeAbort = controller;
