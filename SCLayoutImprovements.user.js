@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Layout Improvements
-// @version      3.3
+// @version      3.4
 // @match        https://simpcity.su/*
 // @match        https://simpcity.cr/*
 // @grant        GM_addStyle
@@ -46,7 +46,8 @@
             flex-shrink: 0;
         }
         .block--category.is-collapsed .sc-toggle,
-        .sc-sticky-header.is-collapsed .sc-toggle {
+        .sc-sticky-header.is-collapsed .sc-toggle,
+        .sc-notices-header.is-collapsed .sc-toggle {
             transform: rotate(-90deg);
         }
         .block--category.is-collapsed .block-body {
@@ -56,6 +57,29 @@
             display: none !important;
         }
         .message-user {
+            display: none !important;
+        }
+
+        /* --- Collapsible Notices Bar --- */
+        .sc-notices-header {
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #e06c75;
+            background: rgba(224, 108, 117, 0.08);
+            border: 1px solid rgba(224, 108, 117, 0.2);
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .sc-notices-header:hover {
+            background: rgba(224, 108, 117, 0.15);
+        }
+        .notices.js-notices.is-collapsed {
             display: none !important;
         }
 
@@ -173,7 +197,6 @@
         }
 
         /* --- Global Grid Centering Fixes (What's New & Forum Thread Lists) --- */
-        /* Force parent rows to drop side pad constraints and align everything vertical-center */
         .block-row:has([data-gv-thumb="true"]) .contentRow,
         .contentRow:has([data-gv-thumb="true"]),
         .structItem:has([data-gv-thumb="true"]) {
@@ -186,7 +209,6 @@
             padding-left: 0 !important;
         }
 
-        /* Target text blocks inside lists and scale to 100% full width centered layouts */
         .contentRow-main:has([data-gv-thumb="true"]),
         .structItem-cell.structItem-cell--main:has([data-gv-thumb="true"]) {
             display: flex !important;
@@ -199,7 +221,6 @@
             padding-left: 0 !important;
         }
 
-        /* Clean metadata items, descriptions, and tag arrays */
         .contentRow-main:has([data-gv-thumb="true"]) .listInline,
         .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-minor,
         .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-parts {
@@ -263,7 +284,6 @@
         ".structItem-title, .contentRow-title",
       );
 
-      // Fallback strategy if custom grid containers lack classic heading elements
       let target = titleContainer;
       if (!target && thumbLink) {
         target = item.querySelector(
@@ -357,6 +377,45 @@
           current["sc_sticky_threads"] = true;
         } else {
           delete current["sc_sticky_threads"];
+        }
+        saveState(current);
+      });
+    }
+
+    // --- Global Notices Toggle Logic ---
+    const noticesBlock = document.querySelector(".notices.js-notices");
+    if (noticesBlock && !document.querySelector(".sc-notices-header")) {
+      const header = document.createElement("div");
+      header.className = "sc-notices-header";
+
+      const text = document.createElement("span");
+      text.textContent = "Important Board Notices";
+
+      const toggle = document.createElement("span");
+      toggle.className = "sc-toggle";
+      toggle.textContent = "▾";
+
+      header.appendChild(toggle);
+      header.appendChild(text);
+
+      // Insert the clean header block directly above the notice list wrapper
+      noticesBlock.parentNode.insertBefore(header, noticesBlock);
+
+      // Default to collapsed unless explicitly left open in a previous session
+      if (state["sc_board_notices"] !== true) {
+        header.classList.add("is-collapsed");
+        noticesBlock.classList.add("is-collapsed");
+      }
+
+      header.addEventListener("click", () => {
+        const isCollapsed = noticesBlock.classList.toggle("is-collapsed");
+        header.classList.toggle("is-collapsed", isCollapsed);
+
+        const current = loadState();
+        if (!isCollapsed) {
+          current["sc_board_notices"] = true; // explicitly opened
+        } else {
+          delete current["sc_board_notices"]; // closed/collapsed
         }
         saveState(current);
       });
