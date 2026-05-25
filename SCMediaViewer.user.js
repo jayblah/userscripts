@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SC Media Viewer
-// @version      2.5
-// @description  Streamlined media viewing experience for SC with mobile & keyboard support. Includes inline click-to-expand and per-post controls.
+// @version      2.6.3
+// @description  Streamlined media viewing experience for SC with mobile & keyboard support. Includes inline click-to-expand, per-post controls, and auto-seek to unseen content.
 // @author       JR
 // @license      MIT
 // @match        *://simpcity.*/threads/*
@@ -21,12 +21,16 @@
   const SETTINGS_MAP = {
     panelTop: "gv_p_top",
     panelLeft: "gv_p_left",
+    videoVolume: "gv_v_volume",
+    videoMuted: "gv_v_muted",
   };
 
   const settings = new Proxy(
     {
       panelTop: GM_getValue(SETTINGS_MAP.panelTop, "120px"),
       panelLeft: GM_getValue(SETTINGS_MAP.panelLeft, "calc(100% - 175px)"),
+      videoVolume: GM_getValue(SETTINGS_MAP.videoVolume, 1.0),
+      videoMuted: GM_getValue(SETTINGS_MAP.videoMuted, false),
     },
     {
       set(target, prop, value) {
@@ -46,6 +50,7 @@
     shadow: null,
     _touchStart: { x: 0, y: 0 },
     _lastScroll: 0,
+    _lastTap: 0,
     _decodeAbort: null,
     _galleryMode: "main",
     isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
@@ -62,23 +67,44 @@
     _hasDragged: false,
     _xpageLocked: false,
     _xpageUrl: null,
+    _trackedUnseenElement: null,
+    _observer: null,
 
     init() {
       this.injectGlobalStyles();
       this.createHost();
-      this.setupGlobalEvents();
       this.processInlineElements();
 
-      // Unified single loop monitoring dynamic loads and background swaps
-      const observer = new MutationObserver(() => this.processInlineElements());
-      observer.observe(document.body, { childList: true, subtree: true });
+      this.refreshMediaList();
+      this._refreshVideoList();
+      this._trackInitialUnseenPosition();
+      this.setupGlobalEvents();
+
+      // Mutation observer optimized to throttle executions on broad tree changes
+      let debounceTimeout = null;
+      this._observer = new MutationObserver((mutations) => {
+        const hasRelevantNodes = mutations.some((m) => m.addedNodes.length > 0);
+        if (!hasRelevantNodes) return;
+
+        if (debounceTimeout) clearTimeout(debounceTimeout);
+        debounceTimeout = setTimeout(() => {
+          this._observer.disconnect();
+          this.processInlineElements();
+          this.refreshMediaList();
+          this._refreshVideoList();
+          this._observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+          });
+        }, 200);
+      });
+      this._observer.observe(document.body, { childList: true, subtree: true });
     },
 
     injectGlobalStyles() {
       const style = document.createElement("style");
       style.textContent = `
-        /* --- Dynamic Gallery Overlays --- */
-        img.bbImage.gv-expanded {
+        img.bbImage.gv-expanded, img.bbImage.expanded {
           display: block !important;
           max-width: 100% !important;
           max-height: 94vh !important;
@@ -87,8 +113,6 @@
           object-fit: contain !important;
         }
         body.gv-noscroll { overflow: hidden !important; }
-
-        /* --- Inline Post Layouts --- */
         img.bbImage {
           cursor: pointer;
           transition: all 0.2s ease-in-out;
@@ -96,12 +120,6 @@
           max-width: 200px;
           height: auto;
           margin: 2px;
-        }
-        img.bbImage.expanded {
-          display: block;
-          max-width: 100% !important;
-          max-height: 90vh;
-          margin: 8px auto;
         }
         .sc-expand-btn {
           display: inline-flex;
@@ -121,6 +139,18 @@
         }
         .sc-expand-btn:hover { color: #fff; }
         .sc-expand-btn.is-expanded { color: #3db7c7; }
+
+        /* PREVENT BACKGROUND OVERLAYS FROM PIERCING THROUGH SHADOW BOUNDARIES */
+        body.gv-noscroll .plyr--error .plyr__poster,
+        body.gv-noscroll .plyr--error .plyr__controls,
+        body.gv-noscroll .plyr__video-wrapper + [class*="error"],
+        body.gv-noscroll [id*="video"] [class*="error"],
+        body.gv-noscroll .watermark {
+          display: none !important;
+          opacity: 0 !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
       `;
       document.head.appendChild(style);
     },
@@ -275,7 +305,6 @@
       }
     },
 
-    // ── Inline Expansion Operations ──────────────────────────────────────────
     getBigUrl(src) {
       return src.replace(THUMB_PATTERN, ".$2");
     },
@@ -285,7 +314,6 @@
     },
 
     processInlineElements() {
-      // Process titles and markers on standard thumbnail views
       document
         .querySelectorAll("img.bbImage:not([data-processed-thumb])")
         .forEach((img) => {
@@ -295,7 +323,6 @@
           img.setAttribute("data-processed-thumb", "true");
         });
 
-      // Inject Per-Post Actions next to standard sharing coordinates
       document
         .querySelectorAll(
           ".message-attribution-opposite:not([data-processed-btn])",
@@ -305,8 +332,7 @@
           if (header.querySelector(".sc-expand-btn")) return;
 
           const messageMain = header.closest(".message-main");
-          if (!messageMain) return;
-          const lbContainer = messageMain.querySelector(".js-lbContainer");
+          const lbContainer = messageMain?.querySelector(".js-lbContainer");
           if (!lbContainer) return;
 
           const btn = document.createElement("button");
@@ -318,26 +344,22 @@
             e.preventDefault();
             e.stopPropagation();
             const images = lbContainer.querySelectorAll("img.bbImage");
-            const isExpanded = btn.classList.contains("is-expanded");
+            const expanding = !btn.classList.contains("is-expanded");
 
             images.forEach((img) => {
-              if (!isExpanded) {
-                img.classList.add("expanded");
-                if (!img.dataset.bigLoaded) {
-                  img.dataset.bigLoaded = "true";
-                  img.src = this.getBigUrl(img.src);
-                  img.removeAttribute("srcset");
-                }
-              } else {
-                img.classList.remove("expanded");
+              img.classList.toggle("expanded", expanding);
+              if (expanding && !img.dataset.bigLoaded) {
+                img.dataset.bigLoaded = "true";
+                img.src = this.getBigUrl(img.src);
+                img.removeAttribute("srcset");
               }
             });
 
-            btn.classList.toggle("is-expanded", !isExpanded);
-            btn.textContent = isExpanded ? "⊞ EXP" : "⊟ COL";
-            btn.title = isExpanded
-              ? "Expand all images in this post"
-              : "Collapse all images in this post";
+            btn.classList.toggle("is-expanded", expanding);
+            btn.textContent = expanding ? "⊟ COL" : "⊞ EXP";
+            btn.title = expanding
+              ? "Collapse all images in this post"
+              : "Expand all images in this post";
           });
 
           const li = document.createElement("li");
@@ -346,24 +368,21 @@
         });
     },
 
-    refreshMediaList() {
-      this.mediaList = Array.from(
-        document.querySelectorAll("img.bbImage"),
-      ).filter((el) => {
+    _filterVisibleElements(selector) {
+      return Array.from(document.querySelectorAll(selector)).filter((el) => {
         const rect = el.getBoundingClientRect();
-        return rect.width > 0 || rect.height > 0;
+        return rect.width > 0 || rect.height > 0 || el.tagName === "DIV";
       });
+    },
+
+    refreshMediaList() {
+      this.mediaList = this._filterVisibleElements("img.bbImage");
     },
 
     _refreshVideoList() {
       const selector =
         'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
-      this._videoList = Array.from(document.querySelectorAll(selector)).filter(
-        (el) => {
-          const rect = el.getBoundingClientRect();
-          return rect.width > 0 || rect.height > 0 || el.tagName === "DIV";
-        },
-      );
+      this._videoList = this._filterVisibleElements(selector);
     },
 
     toggleExpand() {
@@ -372,7 +391,6 @@
         img.classList.toggle("gv-expanded", this.isExpanded);
         img.classList.toggle("expanded", this.isExpanded);
 
-        // Swapping higher res resources down when panel expansion button executes
         if (
           this.isExpanded &&
           !img.dataset.bigLoaded &&
@@ -430,7 +448,10 @@
       });
     },
 
-    // ── Cross-page navigation helpers ─────────────────────────────────────
+    _parsePageNum(url) {
+      const m = url.match(/\/page-(\d+)/) || url.match(/[?&]page=(\d+)/);
+      return m ? parseInt(m[1], 10) : null;
+    },
 
     _getMaxPage() {
       let max = 1;
@@ -438,20 +459,14 @@
         ".pageNav a[href], .pageNav li.pageNav-page",
       );
       navs.forEach((el) => {
-        let num;
-        if (el.tagName === "A") {
-          const m =
-            el.href.match(/\/page-(\d+)/) || el.href.match(/[?&]page=(\d+)/);
-          if (m) num = parseInt(m[1], 10);
-        } else {
-          num = parseInt(el.textContent.trim(), 10);
-        }
-        if (num > max) max = num;
+        const num =
+          el.tagName === "A"
+            ? this._parsePageNum(el.href)
+            : parseInt(el.textContent.trim(), 10);
+        if (num && num > max) max = num;
       });
-      const m2 =
-        window.location.href.match(/\/page-(\d+)/) ||
-        window.location.href.match(/[?&]page=(\d+)/);
-      if (m2 && parseInt(m2[1], 10) > max) max = parseInt(m2[1], 10);
+      const current = this._parsePageNum(window.location.href);
+      if (current && current > max) max = current;
       return max;
     },
 
@@ -464,21 +479,15 @@
 
     _getAdjacentPageUrl(dir) {
       const base = (this._xpageUrl || window.location.href).split("#")[0];
-      const pagePathMatch = base.match(/\/page-(\d+)/);
-      const pageQueryMatch = base.match(/[?&]page=(\d+)/);
-
-      let currentPage = 1;
-      if (pagePathMatch) currentPage = parseInt(pagePathMatch[1], 10);
-      else if (pageQueryMatch) currentPage = parseInt(pageQueryMatch[1], 10);
-
+      const currentPage = this._parsePageNum(base) || 1;
       const targetPage = currentPage + (dir > 0 ? 1 : -1);
       const maxPage = this._getMaxPage();
 
       if (targetPage < 1 || targetPage > maxPage) return null;
 
-      if (pagePathMatch) {
+      if (/\/page-\d+/.test(base)) {
         return base.replace(/\/page-\d+/, `/page-${targetPage}`);
-      } else if (pageQueryMatch) {
+      } else if (/[?&]page=\d+/.test(base)) {
         return base.replace(/([?&]page=)\d+/, `$1${targetPage}`);
       } else {
         const qIdx = base.indexOf("?");
@@ -495,22 +504,20 @@
           method: "GET",
           url,
           timeout: 10000,
-          onload(resp) {
+          onload: (resp) => {
             const parser = new DOMParser();
             const doc = parser.parseFromString(resp.responseText, "text/html");
-            let items;
             if (type === "video") {
-              items = Array.from(
-                doc.querySelectorAll(
-                  'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]',
+              const selector =
+                'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
+              resolve(Array.from(doc.querySelectorAll(selector)));
+            } else {
+              resolve(
+                Array.from(doc.querySelectorAll("img.bbImage")).filter(
+                  (el) => el.src,
                 ),
               );
-            } else {
-              items = Array.from(doc.querySelectorAll("img.bbImage")).filter(
-                (el) => el.src,
-              );
             }
-            resolve(items);
           },
           onerror: () => resolve([]),
           ontimeout: () => resolve([]),
@@ -523,7 +530,42 @@
       if (counter) counter.textContent = msg;
     },
 
-    // ── Zoom / pan ─────────────────────────────────────────────────────────
+    _trackInitialUnseenPosition() {
+      const unreadAnchor = document.querySelector(
+        ".u-anchorTarget#unread, .message.is-unread, .message--new",
+      );
+      if (unreadAnchor) {
+        this._trackedUnseenElement = unreadAnchor.closest(".message");
+        return;
+      }
+
+      const messages = document.querySelectorAll(".message");
+      for (const msg of messages) {
+        const rect = msg.getBoundingClientRect();
+        if (rect.top >= -120 && rect.top <= window.innerHeight) {
+          this._trackedUnseenElement = msg;
+          break;
+        }
+      }
+    },
+
+    _getFirstUnseenIdx(list) {
+      if (!list || !list.length) return 0;
+      const firstUnreadMessage = this._trackedUnseenElement;
+      if (!firstUnreadMessage) return 0;
+
+      const idx = list.findIndex((el) => {
+        const msgParent = el.closest(".message");
+        if (!msgParent) return false;
+        if (msgParent === firstUnreadMessage) return true;
+        return !!(
+          firstUnreadMessage.compareDocumentPosition(msgParent) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+        );
+      });
+
+      return idx !== -1 ? idx : 0;
+    },
 
     _getZoomTarget() {
       return (
@@ -580,8 +622,6 @@
       }
     },
 
-    // ── Touch handling ─────────────────────────────────────────────────────
-
     handleTouchStart(e) {
       if (e.touches.length === 2) {
         this._isPinching = true;
@@ -597,17 +637,20 @@
         this._touchStart.x = t.screenX;
         this._touchStart.y = t.screenY;
         const now = Date.now();
-        if (now - (this._lastTap ?? 0) < 300) {
+        if (now - this._lastTap < 300) {
           this._resetZoom();
           this._lastTap = 0;
           return;
-        } else this._lastTap = now;
+        }
+        this._lastTap = now;
 
         if (this._scale > 1) {
           this._isPanning = true;
           this._panStart.x = t.clientX - this._panOffset.x;
           this._panStart.y = t.clientY - this._panOffset.y;
-        } else this._isPanning = false;
+        } else {
+          this._isPanning = false;
+        }
       }
     },
 
@@ -651,14 +694,15 @@
       const dy = yEnd - this._touchStart.y;
       const threshold = 50;
       if (Math.abs(dx) > Math.abs(dy)) {
-        if (Math.abs(dx) > threshold)
+        if (Math.abs(dx) > threshold) {
           this._galleryMode === "video"
             ? this.openVideoGallery(dx > 0 ? -1 : 1)
             : this.openGallery(dx > 0 ? -1 : 1);
-      } else if (Math.abs(dy) > threshold) this.closeGallery();
+        }
+      } else if (Math.abs(dy) > threshold) {
+        this.closeGallery();
+      }
     },
-
-    // ── Internal event binding ─────────────────────────────────────────────
 
     bindInternalEvents() {
       const s = this.shadow;
@@ -677,13 +721,13 @@
         vgallery: () => this.openVideoGallery(0),
       };
 
-      // Handle standard document intercept click requests for direct thumbnail taps
       document.body.addEventListener("click", (e) => {
         const img = e.target.closest("img.bbImage");
-        if (!img) return;
-
-        // Skip interceptions if the user target is located inside a native XenForo overlay container
-        if (e.target.closest("#overlay") || e.target.closest("#gv-p-root"))
+        if (
+          !img ||
+          e.target.closest("#overlay") ||
+          e.target.closest("#gv-p-root")
+        )
           return;
 
         e.preventDefault();
@@ -752,20 +796,21 @@
       overlay.addEventListener(
         "wheel",
         (e) => {
-          const hovered = s.elementFromPoint(e.clientX, e.clientY);
-          if (hovered?.matches("video, iframe")) return;
+          if (
+            s.elementFromPoint(e.clientX, e.clientY)?.matches("video, iframe")
+          )
+            return;
           e.preventDefault();
 
           if (e.buttons === 2) {
             this._applyZoom(
               this._scale + (e.deltaY < 0 ? this._zoomStep : -this._zoomStep),
             );
-          } else {
-            if (Math.abs(e.deltaY) > 30) {
-              const dir = e.deltaY > 0 ? 1 : -1;
-              if (this._galleryMode === "video") this.openVideoGallery(dir);
-              else this.openGallery(dir);
-            }
+          } else if (Math.abs(e.deltaY) > 30) {
+            const dir = e.deltaY > 0 ? 1 : -1;
+            this._galleryMode === "video"
+              ? this.openVideoGallery(dir)
+              : this.openGallery(dir);
           }
         },
         { passive: false },
@@ -784,24 +829,19 @@
       overlay.addEventListener("mousedown", (e) => {
         if (e.button !== 0 || this._scale <= 1 || e.target.tagName !== "IMG")
           return;
-
         e.preventDefault();
         this._isPanning = true;
         this._hasDragged = false;
-
         this._panStart.x = e.clientX - this._panOffset.x;
         this._panStart.y = e.clientY - this._panOffset.y;
-
         e.target.classList.add("dragging");
       });
 
       overlay.addEventListener("mousemove", (e) => {
         if (!this._isPanning) return;
-
         this._hasDragged = true;
         this._panOffset.x = e.clientX - this._panStart.x;
         this._panOffset.y = e.clientY - this._panStart.y;
-
         this._clampPan();
         this._applyTransform();
       });
@@ -809,22 +849,22 @@
       const stopMousePan = () => {
         if (this._isPanning) {
           this._isPanning = false;
-          const img = this._getZoomTarget();
-          if (img) img.classList.remove("dragging");
+          this._getZoomTarget()?.classList.remove("dragging");
         }
       };
-
       overlay.addEventListener("mouseup", stopMousePan);
       overlay.addEventListener("mouseleave", stopMousePan);
     },
-
-    // ── Gallery ────────────────────────────────────────────────────────────
 
     openGallery: async function (dir = 0) {
       this._galleryMode = "main";
 
       if (!this._xpageLocked) this.refreshMediaList();
       if (!this.mediaList.length) return;
+
+      if (dir === 0 && !this._xpageLocked) {
+        this.zoomIdx = this._getFirstUnseenIdx(this.mediaList);
+      }
 
       const nextIdx = this.zoomIdx + dir;
 
@@ -989,6 +1029,10 @@
 
       if (!this._xpageLocked) this._refreshVideoList();
       if (!this._videoList?.length) return;
+
+      if (dir === 0 && !this._xpageLocked) {
+        this._videoIdx = this._getFirstUnseenIdx(this._videoList);
+      }
 
       const nextIdx = (this._videoIdx ?? 0) + dir;
 
@@ -1166,7 +1210,6 @@
 
       if (current.tagName === "IMG") {
         const el = new Image();
-        // Fall back cleanly if an inline asset was already replaced with high res source url
         el.src = current.src;
         const controller = new AbortController();
         this._decodeAbort = controller;
@@ -1177,32 +1220,65 @@
         this._decodeAbort = null;
         container.appendChild(el);
       } else {
-        const directSrc =
+        // Step 1: Safely check for Direct API Video links first
+        let directSrc =
           current.tagName !== "DIV"
             ? await this._fetchTurboCDNSrc(current)
             : null;
-        if (directSrc || current.tagName === "VIDEO") {
+
+        // Step 2: Extract pristine underlying source elements if Plyr components are shielding it
+        if (!directSrc) {
+          const directNode =
+            current.tagName === "VIDEO"
+              ? current
+              : current.querySelector("video, source");
+          if (directNode) {
+            directSrc = directNode.getAttribute("src") || directNode.src;
+          }
+        }
+
+        // Hardened Evaluation Route: Route matching strings to the native pipeline
+        const isDirectStream =
+          directSrc &&
+          /\.(mp4|webm|mov|ogg|m3u8)(\?|$)/i.test(directSrc.split("#")[0]);
+
+        if (
+          isDirectStream ||
+          current.tagName === "VIDEO" ||
+          (directSrc && !current.tagName === "IFRAME")
+        ) {
           const el = document.createElement("video");
           el.src =
-            directSrc || current.src || current.querySelector("source")?.src;
+            directSrc || current.getAttribute("src") || current.currentSrc;
+
+          el.removeAttribute("id");
+          el.className = "";
           el.controls = true;
           el.loop = true;
           el.autoplay = true;
+          el.preload = "auto";
           el.setAttribute("playsinline", "");
-          el.addEventListener(
-            "canplay",
-            () => {
-              el.muted = false;
-            },
-            { once: true },
-          );
+
+          el.volume = settings.videoVolume;
+          el.muted = settings.videoMuted;
+
+          el.addEventListener("volumechange", () => {
+            settings.videoVolume = el.volume;
+            settings.videoMuted = el.muted;
+          });
+
           container.appendChild(el);
+          el.play().catch(() => {
+            el.muted = true;
+            el.play().catch(() => {});
+          });
         } else {
+          // If it's a true cross-origin frame wrapper, build an iframe fallback container securely
           const el = document.createElement("iframe");
           let src =
             current.tagName === "DIV"
               ? current.getAttribute("onclick")?.match(/'([^']+)'/)?.[1]
-              : current.src;
+              : directSrc || current.src;
           if (src?.startsWith("//")) src = "https:" + src;
           el.style.cssText =
             "width: 85vw; height: 85vh; border: none; background: #000;";
@@ -1224,6 +1300,7 @@
       this._resetZoom();
       this._xpageLocked = false;
       this._xpageUrl = null;
+
       const container = this.shadow.getElementById("media-container");
       const video = container.querySelector("video");
       if (video) {
@@ -1238,8 +1315,6 @@
       document.body.classList.remove("gv-noscroll");
       window.focus();
     },
-
-    // ── Global keyboard events ─────────────────────────────────────────────
 
     setupGlobalEvents() {
       window.addEventListener(
