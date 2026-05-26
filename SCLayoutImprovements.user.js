@@ -1,290 +1,146 @@
 // ==UserScript==
 // @name         SC Layout Improvements
-// @version      3.4
+// @version      4.0.1
+// @description  Streamlines thread layouts, centers enlarged media, adds structural toggles, and features a sequential, single-tab unread alert walker.
+// @author       JR
+// @license      MIT
+// @match        *://simpcity.*/*
 // @match        https://simpcity.su/*
 // @match        https://simpcity.cr/*
 // @grant        GM_addStyle
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SCLayoutImprovements.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SCLayoutImprovements.user.js
+// @grant        GM_xmlhttpRequest
+// @run-at       document-end
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  // 1. All Consolidated Styles
+  // =========================================================================
+  // 1. STYLES & INTERFACE CUSTOMIZATION
+  // =========================================================================
+
   GM_addStyle(`
         /* --- General Layout Improvements --- */
-        .p-body-sidebarCol {
-            display: none !important;
-        }
-        .p-body-content {
-            flex: 1 1 auto !important;
-            min-width: 0 !important;
-            max-width: 100% !important;
-        }
-        .p-body-pageContent {
-            width: 100% !important;
-            max-width: 100% !important;
-        }
-        .block--category .block-header {
-            cursor: pointer;
-            user-select: none;
-            display: flex !important;
-            align-items: center;
-            gap: 8px;
-        }
-        .sc-toggle {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 18px;
-            height: 18px;
-            font-size: 10px;
-            line-height: 1;
-            opacity: 0.6;
-            transition: transform 0.2s ease;
-            flex-shrink: 0;
-        }
-        .block--category.is-collapsed .sc-toggle,
-        .sc-sticky-header.is-collapsed .sc-toggle,
-        .sc-notices-header.is-collapsed .sc-toggle {
-            transform: rotate(-90deg);
-        }
-        .block--category.is-collapsed .block-body {
-            display: none !important;
-        }
-        .reactionsBar.js-reactionsList {
-            display: none !important;
-        }
-        .message-user {
-            display: none !important;
-        }
+        .p-body-sidebarCol { display: none !important; }
+        .p-body-content { flex: 1 1 auto !important; min-width: 0 !important; max-width: 100% !important; }
+        .p-body-pageContent { width: 100% !important; max-width: 100% !important; }
+        .block--category .block-header { cursor: pointer; user-select: none; display: flex !important; align-items: center; gap: 8px; }
+        .sc-toggle { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; font-size: 10px; line-height: 1; opacity: 0.6; transition: transform 0.2s ease; flex-shrink: 0; }
+        .block--category.is-collapsed .sc-toggle, .sc-sticky-header.is-collapsed .sc-toggle, .sc-notices-header.is-collapsed .sc-toggle { transform: rotate(-90deg); }
+        .block--category.is-collapsed .block-body, .reactionsBar.js-reactionsList, .message-user { display: none !important; }
 
         /* --- Collapsible Notices Bar --- */
-        .sc-notices-header {
-            cursor: pointer;
-            user-select: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            font-size: 12px;
-            font-weight: 600;
-            color: #e06c75;
-            background: rgba(224, 108, 117, 0.08);
-            border: 1px solid rgba(224, 108, 117, 0.2);
-            border-radius: 4px;
-            margin-bottom: 10px;
-        }
-        .sc-notices-header:hover {
-            background: rgba(224, 108, 117, 0.15);
-        }
-        .notices.js-notices.is-collapsed {
-            display: none !important;
-        }
+        .sc-notices-header { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; font-weight: 600; color: #e06c75; background: rgba(224, 108, 117, 0.08); border: 1px solid rgba(224, 108, 117, 0.2); border-radius: 4px; margin-bottom: 10px; }
+        .sc-notices-header:hover { background: rgba(224, 108, 117, 0.15); }
+        .notices.js-notices.is-collapsed { display: none !important; }
 
         /* --- Streamlined Alerts Dropdown --- */
-        li.alert .contentRow-figure {
-            display: none !important;
-        }
-        li.alert .contentRow-minor {
-            display: none !important;
-        }
-        li.alert .contentRow-extra {
-            display: none !important;
-        }
-        li.alert.menu-row {
-            padding: 6px 12px !important;
-            min-height: auto !important;
-        }
-        li.alert .fauxBlockLink {
-            font-size: 0 !important;
-        }
-        li.alert .fauxBlockLink a.username {
-            display: none !important;
-        }
-        li.alert .fauxBlockLink-blockLink .label,
-        li.alert .fauxBlockLink-blockLink .label-append {
-            display: none !important;
-        }
-        li.alert .fauxBlockLink-blockLink {
-            font-size: 13px !important;
-            line-height: 1.4 !important;
-            display: block !important;
-        }
+        li.alert .contentRow-figure, li.alert .contentRow-minor, li.alert .contentRow-extra, li.alert .fauxBlockLink a.username, li.alert .fauxBlockLink-blockLink .label, li.alert .fauxBlockLink-blockLink .label-append { display: none !important; }
+        li.alert.menu-row { padding: 6px 12px !important; min-height: auto !important; }
+        li.alert .fauxBlockLink { font-size: 0 !important; }
+        li.alert .fauxBlockLink-blockLink { font-size: 13px !important; line-height: 1.4 !important; display: block !important; }
 
         /* --- Sticky Threads Toggle --- */
-        .sc-sticky-header {
-            cursor: pointer;
-            user-select: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 10px;
-            font-size: 13px;
-            font-weight: 600;
-            color: #a5a5a5;
-            background: rgba(0, 0, 0, 0.2);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        }
-        .sc-sticky-header:hover {
-            color: #d1d1d1;
-            background: rgba(0, 0, 0, 0.3);
-        }
-        .structItemContainer-group--sticky.is-collapsed {
-            display: none !important;
-        }
-        hr.stickySeparatortop {
-            display: none !important;
-        }
+        .sc-sticky-header { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 13px; font-weight: 600; color: #a5a5a5; background: rgba(0, 0, 0, 0.2); border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+        .sc-sticky-header:hover { color: #d1d1d1; background: rgba(0, 0, 0, 0.3); }
+        .structItemContainer-group--sticky.is-collapsed, hr.stickySeparatortop { display: none !important; }
 
         /* --- Streamlined Thread Lists --- */
-        .structItem-cell.structItem-cell--meta,
-        .structItem-cell.structItem-cell--latest,
-        .structItem-cell.structItem-cell--iconEnd {
-            display: none !important;
-        }
-        .structItem--thread {
-            border-bottom: 1px solid rgba(255,255,255,0.05) !important;
-        }
-
-        /* Hide parent structural cell containers when the thumbnail inside has been moved */
-        .structItem-cell--icon {
-            display: none !important;
-        }
-
-        /* Safe avatar clean-up: Only hide standard profiles, ignore enlarged thumbnails */
-        .structItem-iconContainer .avatar:not(.dcThumbnail):not([data-gv-thumb="true"]) {
-            display: none !important;
-        }
+        .structItem-cell.structItem-cell--meta, .structItem-cell.structItem-cell--latest, .structItem-cell.structItem-cell--iconEnd { display: none !important; }
+        .structItem--thread { border-bottom: 1px solid rgba(255,255,255,0.05) !important; }
+        .structItem-cell--icon { display: none !important; }
+        .structItem-iconContainer .avatar:not(.dcThumbnail):not([data-gv-thumb="true"]) { display: none !important; }
 
         /* --- Enlarged Thumbnail Display Properties --- */
-        .structItem--thread [data-gv-thumb],
-        .structItem [data-gv-thumb],
-        .block-row [data-gv-thumb],
-        .contentRow [data-gv-thumb] {
-            width: 400px !important;
-            height: 400px !important;
-            display: block !important;
-            margin: 0 auto 12px auto !important; /* Force Perfect Center */
-            position: relative !important;
-            z-index: 5 !important;
-            opacity: 1 !important;
-            filter: none !important;
-        }
+        .structItem--thread [data-gv-thumb], .structItem [data-gv-thumb], .block-row [data-gv-thumb], .contentRow [data-gv-thumb] { width: 400px !important; height: 400px !important; display: block !important; margin: 0 auto 12px auto !important; position: relative !important; z-index: 5 !important; opacity: 1 !important; filter: none !important; }
+        .structItem--thread [data-gv-thumb] img, .structItem [data-gv-thumb] img, .block-row [data-gv-thumb] img, .contentRow [data-gv-thumb] img { width: 100% !important; height: 100% !important; display: block !important; object-fit: cover !important; object-position: center center !important; background-size: cover !important; background-position: center !important; opacity: 1 !important; filter: none !important; }
+        .structItem--thread [data-gv-thumb] img[src*="base64"], .structItem [data-gv-thumb] img[src*="base64"], .block-row [data-gv-thumb] img[src*="base64"], .contentRow [data-gv-thumb] img[src*="base64"] { object-position: -9999px !important; }
 
-        .structItem--thread [data-gv-thumb] img,
-        .structItem [data-gv-thumb] img,
-        .block-row [data-gv-thumb] img,
-        .contentRow [data-gv-thumb] img {
-            width: 100% !important;
-            height: 100% !important;
-            display: block !important;
-            object-fit: cover !important;
-            object-position: center center !important;
-            background-size: cover !important;
-            background-position: center !important;
-            opacity: 1 !important;
-            filter: none !important;
-        }
-
-        /* Base64 Tracker Offsets from original script */
-        .structItem--thread [data-gv-thumb] img[src*="base64"],
-        .structItem [data-gv-thumb] img[src*="base64"],
-        .block-row [data-gv-thumb] img[src*="base64"],
-        .contentRow [data-gv-thumb] img[src*="base64"] {
-            object-position: -9999px !important;
-        }
-
-        /* --- Global Grid Centering Fixes (What's New & Forum Thread Lists) --- */
-        .block-row:has([data-gv-thumb="true"]) .contentRow,
-        .contentRow:has([data-gv-thumb="true"]),
-        .structItem:has([data-gv-thumb="true"]) {
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            justify-content: center !important;
-            width: 100% !important;
-            text-align: center !important;
-            padding-left: 0 !important;
-        }
-
-        .contentRow-main:has([data-gv-thumb="true"]),
-        .structItem-cell.structItem-cell--main:has([data-gv-thumb="true"]) {
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            justify-content: center !important;
-            width: 100% !important;
-            text-align: center !important;
-            margin-left: 0 !important;
-            padding-left: 0 !important;
-        }
-
-        .contentRow-main:has([data-gv-thumb="true"]) .listInline,
-        .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-minor,
-        .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-parts {
-            display: flex !important;
-            justify-content: center !important;
-            align-items: center !important;
-            flex-wrap: wrap !important;
-            padding: 0 !important;
-            margin: 0 auto !important;
-            text-align: center !important;
-        }
-
-        .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-parts > li {
-            display: inline-flex !important;
-            align-items: center !important;
-            float: none !important;
-        }
+        /* --- Global Grid Centering Fixes --- */
+        .block-row:has([data-gv-thumb="true"]) .contentRow, .contentRow:has([data-gv-thumb="true"]), .structItem:has([data-gv-thumb="true"]) { display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: center !important; width: 100% !important; text-align: center !important; padding-left: 0 !important; }
+        .contentRow-main:has([data-gv-thumb="true"]), .structItem-cell.structItem-cell--main:has([data-gv-thumb="true"]) { display: flex !important; flex-direction: column !important; align-items: center !important; justify-content: center !important; width: 100% !important; text-align: center !important; margin-left: 0 !important; padding-left: 0 !important; }
+        .contentRow-main:has([data-gv-thumb="true"]) .listInline, .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-minor, .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-parts { display: flex !important; justify-content: center !important; align-items: center !important; flex-wrap: wrap !important; padding: 0 !important; margin: 0 auto !important; text-align: center !important; }
+        .structItem-cell--main:has([data-gv-thumb="true"]) .structItem-parts > li { display: inline-flex !important; align-items: center !important; float: none !important; }
 
         /* --- Kill All Hover Dim Filters completely --- */
-        .block-row:hover [data-gv-thumb],
-        .contentRow:hover [data-gv-thumb],
-        .structItem:hover [data-gv-thumb],
-        .structItem--thread:hover [data-gv-thumb] {
-            opacity: 1 !important;
-            filter: none !important;
-        }
-    `);
+        .block-row:hover [data-gv-thumb], .contentRow:hover [data-gv-thumb], .structItem:hover [data-gv-thumb], .structItem--thread:hover [data-gv-thumb] { opacity: 1 !important; filter: none !important; }
+  `);
 
   const STORAGE_KEY = "sc_category_collapsed";
 
-  function loadState() {
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    } catch {
-      return {};
+  const StateManager = {
+    load: () => {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      } catch {
+        return {};
+      }
+    },
+    save: (state) => localStorage.setItem(STORAGE_KEY, JSON.stringify(state)),
+  };
+
+  /**
+   * Universal abstraction for creating structural toggle components to keep code DRY.
+   */
+  function setupCollapsible({
+    header,
+    target,
+    stateKey,
+    state,
+    isReversedLogic = false,
+    insertMethod,
+  }) {
+    if (!header || !target || header.querySelector(".sc-toggle")) return;
+
+    const toggle = document.createElement("span");
+    toggle.className = "sc-toggle";
+    toggle.textContent = "▾";
+
+    if (insertMethod) {
+      insertMethod(toggle, header);
+    } else {
+      header.prepend(toggle);
     }
+
+    // "Reversed logic" means the section defaults to collapsed instead of open
+    const isCollapsed = isReversedLogic
+      ? state[stateKey] !== true
+      : state[stateKey] === true;
+
+    if (isCollapsed) {
+      target.classList.add("is-collapsed");
+      if (header !== target) header.classList.add("is-collapsed");
+    }
+
+    header.addEventListener("click", () => {
+      const nowCollapsed = target.classList.toggle("is-collapsed");
+      if (header !== target)
+        header.classList.toggle("is-collapsed", nowCollapsed);
+
+      const current = StateManager.load();
+      const shouldSave = isReversedLogic ? !nowCollapsed : nowCollapsed;
+
+      if (shouldSave) current[stateKey] = true;
+      else delete current[stateKey];
+
+      StateManager.save(current);
+    });
   }
 
-  function saveState(state) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }
-
-  function getCategoryId(block) {
-    const anchor = block.querySelector(".u-anchorTarget");
-    return anchor ? anchor.id : null;
-  }
-
-  // 2. Thread Enlarger Positioning Logic
+  // Thread Enlarger Positioning Logic
   function processThumbnails() {
     const items = document.querySelectorAll(
       ".structItem--thread:not([data-processed]), .structItem:not([data-processed]), .block-row:not([data-processed]), .contentRow:not([data-processed])",
     );
 
-    if (items.length === 0) return;
+    if (!items.length) return;
 
     items.forEach((item) => {
       const thumbLink = item.querySelector(
         ".structItem-iconContainer a, .dcThumbnail",
       );
-      const titleContainer = item.querySelector(
-        ".structItem-title, .contentRow-title",
-      );
+      let target = item.querySelector(".structItem-title, .contentRow-title");
 
-      let target = titleContainer;
       if (!target && thumbLink) {
         target = item.querySelector(
           ".contentRow-main > a[href*='/threads/'], .structItem-cell--main > a[href*='/threads/']",
@@ -300,46 +156,27 @@
     });
   }
 
-  function init() {
-    const state = loadState();
+  function initLayout() {
+    const state = StateManager.load();
 
     processThumbnails();
 
     // --- Category Toggle Logic ---
-    const blocks = document.querySelectorAll(".block--category");
-    blocks.forEach((block) => {
-      const id = getCategoryId(block);
-      if (!id) return;
+    document.querySelectorAll(".block--category").forEach((block) => {
+      const anchor = block.querySelector(".u-anchorTarget");
+      if (!anchor) return;
 
-      const header = block.querySelector(".block-header");
-      if (!header) return;
-
-      if (!header.querySelector(".sc-toggle")) {
-        const toggle = document.createElement("span");
-        toggle.className = "sc-toggle";
-        toggle.textContent = "▾";
-
-        const headerLink = header.querySelector("a");
-        if (headerLink) {
-          headerLink.insertAdjacentElement("afterend", toggle);
-        } else {
-          header.prepend(toggle);
-        }
-      }
-
-      if (state[id]) {
-        block.classList.add("is-collapsed");
-      }
-
-      header.addEventListener("click", () => {
-        const collapsed = block.classList.toggle("is-collapsed");
-        const current = loadState();
-        if (collapsed) {
-          current[id] = true;
-        } else {
-          delete current[id];
-        }
-        saveState(current);
+      setupCollapsible({
+        header: block.querySelector(".block-header"),
+        target: block,
+        stateKey: anchor.id,
+        state: state,
+        insertMethod: (toggle, hdr) => {
+          const headerLink = hdr.querySelector("a");
+          headerLink
+            ? headerLink.insertAdjacentElement("afterend", toggle)
+            : hdr.prepend(toggle);
+        },
       });
     });
 
@@ -350,35 +187,15 @@
     if (stickyGroup && !document.querySelector(".sc-sticky-header")) {
       const header = document.createElement("div");
       header.className = "sc-sticky-header";
-
-      const text = document.createElement("span");
-      text.textContent = "Sticky Threads";
-
-      const toggle = document.createElement("span");
-      toggle.className = "sc-toggle";
-      toggle.textContent = "▾";
-
-      header.appendChild(toggle);
-      header.appendChild(text);
-
+      header.innerHTML = `<span>Sticky Threads</span>`;
       stickyGroup.parentNode.insertBefore(header, stickyGroup);
 
-      if (state["sc_sticky_threads"] !== true) {
-        header.classList.add("is-collapsed");
-        stickyGroup.classList.add("is-collapsed");
-      }
-
-      header.addEventListener("click", () => {
-        const isCollapsed = stickyGroup.classList.toggle("is-collapsed");
-        header.classList.toggle("is-collapsed", isCollapsed);
-
-        const current = loadState();
-        if (!isCollapsed) {
-          current["sc_sticky_threads"] = true;
-        } else {
-          delete current["sc_sticky_threads"];
-        }
-        saveState(current);
+      setupCollapsible({
+        header: header,
+        target: stickyGroup,
+        stateKey: "sc_sticky_threads",
+        state: state,
+        isReversedLogic: true,
       });
     }
 
@@ -387,60 +204,245 @@
     if (noticesBlock && !document.querySelector(".sc-notices-header")) {
       const header = document.createElement("div");
       header.className = "sc-notices-header";
-
-      const text = document.createElement("span");
-      text.textContent = "Important Board Notices";
-
-      const toggle = document.createElement("span");
-      toggle.className = "sc-toggle";
-      toggle.textContent = "▾";
-
-      header.appendChild(toggle);
-      header.appendChild(text);
-
-      // Insert the clean header block directly above the notice list wrapper
+      header.innerHTML = `<span>Important Board Notices</span>`;
       noticesBlock.parentNode.insertBefore(header, noticesBlock);
 
-      // Default to collapsed unless explicitly left open in a previous session
-      if (state["sc_board_notices"] !== true) {
-        header.classList.add("is-collapsed");
-        noticesBlock.classList.add("is-collapsed");
-      }
-
-      header.addEventListener("click", () => {
-        const isCollapsed = noticesBlock.classList.toggle("is-collapsed");
-        header.classList.toggle("is-collapsed", isCollapsed);
-
-        const current = loadState();
-        if (!isCollapsed) {
-          current["sc_board_notices"] = true; // explicitly opened
-        } else {
-          delete current["sc_board_notices"]; // closed/collapsed
-        }
-        saveState(current);
+      setupCollapsible({
+        header: header,
+        target: noticesBlock,
+        stateKey: "sc_board_notices",
+        state: state,
+        isReversedLogic: true,
       });
     }
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
+  // =========================================================================
+  // 2. ALERT TRACKING ENGINE & STATE
+  // =========================================================================
+
+  const AlertEngine = {
+    queue: [],
+    cursor: 0,
+    built: false,
+    btn: null,
+  };
+
+  function withPostFragment(url) {
+    const m = url.match(/\/posts\/(\d+)\/?/);
+    return m ? `${url.split("#")[0].replace(/\/$/, "")}/#post-${m[1]}` : url;
   }
 
-  // 3. Dynamic Observer Loop
-  const observer = new MutationObserver((mutations) => {
-    let shouldProcess = false;
-    for (const mutation of mutations) {
-      if (mutation.addedNodes.length > 0) {
-        shouldProcess = true;
-        break;
-      }
+  function parseUnreadAlerts(doc) {
+    const results = [];
+    doc
+      .querySelectorAll(
+        ".js-alertsMenuBody li.alert.is-unread, ol.listPlain li.alert.is-unread",
+      )
+      .forEach((li) => {
+        const postLink = li.querySelector("a.fauxBlockLink-blockLink");
+        if (!postLink) return;
+        results.push({
+          alertId: li.dataset.alertId || "",
+          postUrl: withPostFragment(postLink.getAttribute("href")),
+          label: postLink.textContent.trim().replace(/\s+/g, " "),
+        });
+      });
+    return results;
+  }
+
+  // Modernized background fetching
+  function fetchAlertsHtml() {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url: `${location.origin}/account/alerts-popup`,
+        timeout: 8000,
+        onload: (resp) => resolve(resp.responseText),
+        onerror: () => resolve(""),
+        ontimeout: () => resolve(""),
+      });
+    });
+  }
+
+  function alertsMenuVisible() {
+    const body = document.querySelector(".js-alertsMenuBody");
+    return !!(body && body.offsetParent !== null);
+  }
+
+  function rebuildFromDOM() {
+    const items = parseUnreadAlerts(document);
+    if (items.length) updateQueueState(items);
+  }
+
+  function updateQueueState(items) {
+    AlertEngine.queue = items;
+    AlertEngine.cursor = 0;
+    AlertEngine.built = true;
+    updateUI();
+  }
+
+  async function ensureQueue() {
+    if (AlertEngine.built) return;
+
+    if (alertsMenuVisible()) {
+      rebuildFromDOM();
+      return;
     }
-    if (shouldProcess) processThumbnails();
+
+    const html = await fetchAlertsHtml();
+    if (html) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+      const items = parseUnreadAlerts(doc);
+      if (items.length) updateQueueState(items);
+    }
+  }
+
+  async function onWalkClick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    await ensureQueue();
+
+    if (!AlertEngine.built || !AlertEngine.queue.length) return;
+
+    if (AlertEngine.cursor >= AlertEngine.queue.length) {
+      // All done — reset for next time
+      AlertEngine.queue = [];
+      AlertEngine.cursor = 0;
+      AlertEngine.built = false;
+      updateUI();
+      return;
+    }
+
+    const entry = AlertEngine.queue[AlertEngine.cursor++];
+    updateUI();
+    location.href = entry.postUrl;
+  }
+
+  function setDisabled(disabled) {
+    AlertEngine.btn.style.pointerEvents = disabled ? "none" : "";
+    AlertEngine.btn.style.cursor = disabled ? "default" : "";
+  }
+
+  function updateUI() {
+    if (!AlertEngine.btn) return;
+
+    const total = AlertEngine.queue.length;
+    const remaining = total - AlertEngine.cursor;
+
+    if (!AlertEngine.built) {
+      AlertEngine.btn.title = "Alert Walker — fetching\u2026";
+      AlertEngine.btn.style.opacity = "0.4";
+      setDisabled(true);
+    } else if (total === 0) {
+      AlertEngine.btn.title = "Alert Walker — no new posts";
+      AlertEngine.btn.style.opacity = "0.3";
+      setDisabled(true);
+    } else if (AlertEngine.cursor >= total) {
+      AlertEngine.btn.title = "Alert Walker — all caught up";
+      AlertEngine.btn.style.opacity = "0.3";
+      setDisabled(true);
+    } else {
+      AlertEngine.btn.title = `Alert Walker \u2014 ${remaining} unread (click to open next)`;
+      AlertEngine.btn.style.opacity = "1";
+      setDisabled(false);
+    }
+  }
+
+  function injectButton() {
+    const alertsLink = document.querySelector(".p-navgroup-link--alerts");
+    if (!alertsLink) return false;
+
+    const btn = document.createElement("a");
+    btn.href = "#";
+    btn.className = "p-navgroup-link p-navgroup-link--iconic aw-walker-btn";
+    btn.title = "Alert Walker";
+    btn.setAttribute("aria-label", "Alert Walker");
+
+    const icon = document.createElement("i");
+    icon.setAttribute("aria-hidden", "true");
+    Object.assign(icon.style, {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      height: "100%",
+    });
+
+    icon.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+      </svg>
+    `;
+
+    const text = document.createElement("span");
+    text.className = "p-navgroup-linkText";
+
+    btn.appendChild(icon);
+    btn.appendChild(text);
+    btn.addEventListener("click", onWalkClick);
+
+    alertsLink.insertAdjacentElement("afterend", btn);
+    AlertEngine.btn = btn;
+    return true;
+  }
+
+  async function afterInject() {
+    updateUI();
+
+    // Pre-fetch queue immediately so it's ready before the user clicks
+    const html = await fetchAlertsHtml();
+    if (html && !AlertEngine.built) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+      const items = parseUnreadAlerts(doc);
+      if (items.length) updateQueueState(items);
+    }
+
+    // Rebuild whenever the live alerts menu opens (catches live socket refreshes)
+    const menuObs = new MutationObserver(() => {
+      if (alertsMenuVisible()) rebuildFromDOM();
+    });
+    menuObs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // =========================================================================
+  // 3. MASTER RUN TIME AND INITIALIZATION
+  // =========================================================================
+
+  function masterInit() {
+    initLayout();
+
+    if (!injectButton()) {
+      const navObs = new MutationObserver(() => {
+        if (injectButton()) {
+          navObs.disconnect();
+          afterInject();
+        }
+      });
+      navObs.observe(document.body, { childList: true, subtree: true });
+    } else {
+      afterInject();
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", masterInit);
+  } else {
+    masterInit();
+  }
+
+  // Debounced Dynamic Mutation Observer Loop (For performance)
+  let thumbnailTimeout;
+  const layoutObserver = new MutationObserver((mutations) => {
+    if (mutations.some((m) => m.addedNodes.length > 0)) {
+      clearTimeout(thumbnailTimeout);
+      thumbnailTimeout = setTimeout(processThumbnails, 50);
+    }
   });
 
-  observer.observe(document.body, {
+  layoutObserver.observe(document.body, {
     childList: true,
     subtree: true,
   });
