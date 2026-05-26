@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Layout Improvements
-// @version      4.0.1
+// @version      1.2
 // @description  Streamlines thread layouts, centers enlarged media, adds structural toggles, and features a sequential, single-tab unread alert walker.
 // @author       JR
 // @license      MIT

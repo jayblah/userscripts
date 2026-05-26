@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
-// @version         1.0.0
+// @version         1.0
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
 // @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
@@ -1036,5 +1036,5 @@
     Actions.processDecoders();
   }
 
-  console.log("Reddit Enhancements + Decoder Loaded (v4.0.0)");
+  console.log("Reddit Enhancements Loaded");
 })();
