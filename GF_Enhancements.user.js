@@ -3,6 +3,7 @@
 // @namespace    https://greasyfork.org/
 // @version      1.2
 // @description  Clean, minimal dark theme for Greasy Fork with centered landing search, inline sorting, integrated search, converted 0..5 star ratings, increased content font sizes, properly stacked description rows, and hidden install help icons.
+// @author       JR
 // @license      MIT
 // @match        https://greasyfork.org/*
 // @match        https://*.greasyfork.org/*

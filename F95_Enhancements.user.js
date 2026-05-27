@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.1
 // @description  Adds developer/game search buttons and auto-collapses site notices.
-// @author       Jay
+// @author       JR
 // @license      MIT
 // @match        https://f95zone.to/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=f95zone.to
