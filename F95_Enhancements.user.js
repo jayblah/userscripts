@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         F95 Layout Improvements
+// @name         F95 Enhancements
 // @namespace    http://tampermonkey.net/
-// @version      3.1.0
-// @description  Adds developer/game search buttons (Steam only) and utility buttons to F95Zone threads.
-// @author       FunkyJustin, TxHx (Merged by AI)
+// @version      3.1.1
+// @description  Adds developer/game search buttons and auto-collapses site notices.
+// @author       Jay
 // @license      MIT
 // @match        https://f95zone.to/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=f95zone.to
@@ -26,6 +26,7 @@
   // --- Styling ---
   const style = document.createElement("style");
   style.innerHTML = `
+        /* Existing Styles */
         .f95-combined-container {
             margin: 10px 0;
             display: flex;
@@ -46,8 +47,13 @@
             transition: opacity 0.2s;
         }
         .f95-action-btn:hover { opacity: 0.8; }
-        .btn-main { background: linear-gradient(45deg, #1b2838, #2a475e); } /* Steam Color Scheme */
+        .btn-main { background: linear-gradient(45deg, #1b2838, #2a475e); }
         .btn-util { background: #333; }
+
+        /* Auto-collapse Notices */
+        .notices.notices--block {
+            display: none !important;
+        }
     `;
   document.head.appendChild(style);
 
@@ -60,7 +66,12 @@
   }
 
   function init() {
+    // Hide notices immediately
+    const notices = document.querySelector(".notices.js-notices");
+    if (notices) notices.style.display = "none";
+
     if (!window.location.pathname.startsWith("/threads/")) return;
+
     const titleElement = document.querySelector(".p-title h1.p-title-value");
     if (!titleElement) return;
 

@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Greasy Fork Enhanced UI
+// @name         GF Enhancements
 // @namespace    https://greasyfork.org/
 // @version      3.2.3
 // @description  Clean, minimal dark theme for Greasy Fork with centered landing search, inline sorting, integrated search, converted 0..5 star ratings, increased content font sizes, properly stacked description rows, and hidden install help icons.

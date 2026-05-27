@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         SC Layout Improvements
+// @name         SC Enhancements
 // @version      1.2
 // @description  Streamlines thread layouts, centers enlarged media, adds structural toggles, and features a sequential, single-tab unread alert walker.
 // @author       JR
