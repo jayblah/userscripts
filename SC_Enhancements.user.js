@@ -7,6 +7,8 @@
 // @match        *://simpcity.*/*
 // @match        https://simpcity.su/*
 // @match        https://simpcity.cr/*
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SC_Enhancements.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SC_Enhancements.user.js
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @run-at       document-end

@@ -10,6 +10,8 @@
 // @match        https://www.instagram.com/*
 // @match        https://www.tiktok.com/*
 // @match        https://app.fanfix.io/*
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SC_LeakFinder.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SC_LeakFinder.user.js
 // @grant        GM.xmlHttpRequest
 // @grant        GM_addStyle
 // ==/UserScript==

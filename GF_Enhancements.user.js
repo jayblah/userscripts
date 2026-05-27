@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Greasy Fork Enhanced UI
 // @namespace    https://greasyfork.org/
-// @version      3.2.2
+// @version      3.2.3
 // @description  Clean, minimal dark theme for Greasy Fork with centered landing search, inline sorting, integrated search, converted 0..5 star ratings, increased content font sizes, properly stacked description rows, and hidden install help icons.
 // @license      MIT
 // @match        https://greasyfork.org/*
@@ -9,8 +9,8 @@
 // @match        https://sleazyfork.org/*
 // @match        https://*.sleazyfork.org/*
 // @icon         https://greasyfork.org/vite/assets/blacklogo96-CxYTSM_T.png
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GreasyForkUI.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GreasyForkUI.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/GF_Enhancements.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/GF_Enhancements.user.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_info
 // @grant        GM_notification
@@ -785,6 +785,7 @@
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   function injectStyle(id, cssText) {
+    if (document.getElementById(id)) return;
     const el = document.createElement("style");
     el.id = id;
     el.textContent = cssText;
@@ -852,7 +853,76 @@
     });
   };
 
-  // ── Combined Core Engine: Processing & Mapping Ratings ───────────────────
+  // ── Parsers & Element Builders (Consolidated Core Engine) ────────────────
+  function buildStarRatingHtml(source, isScriptInfo = false) {
+    if (!source) return "";
+
+    const goodEl = source.querySelector(".good-rating-count");
+    const okEl = source.querySelector(".ok-rating-count");
+    const badEl = source.querySelector(".bad-rating-count");
+
+    if (!goodEl && !okEl && !badEl) return "";
+
+    if (!isScriptInfo) incrementVisibility();
+
+    let feedbackUrl = "#";
+    if (isScriptInfo) {
+      const urlMatch = window.location.pathname.match(/\/scripts\/(\d+)/);
+      if (urlMatch) {
+        feedbackUrl = `${window.location.origin}${window.location.pathname.split("/scripts/")[0]}/scripts/${urlMatch[1]}/feedback`;
+      }
+    } else {
+      const allLinks = source.getElementsByTagName("a");
+      for (let i = 0; i < allLinks.length; i++) {
+        const match = allLinks[i].href.match(/\/scripts\/(\d+)/);
+        if (match) {
+          feedbackUrl = `${allLinks[i].href.split("/scripts/")[0]}/scripts/${match[1]}/feedback`;
+          break;
+        }
+      }
+    }
+
+    const good = parseInt(goodEl?.textContent ?? 0, 10) || 0;
+    const ok = parseInt(okEl?.textContent ?? 0, 10) || 0;
+    const bad = parseInt(badEl?.textContent ?? 0, 10) || 0;
+    const total = good + ok + bad;
+    const avg = total > 0 ? (good * 5 + ok * 3 + bad * 1) / total : 0;
+    const percent = (avg / 5) * 100;
+
+    return `
+        <a href="${feedbackUrl}" class="rating-link" title="Feedback (Avg: ${avg.toFixed(2)})">
+            <div class="rating-box">
+                <span class="rating-num">${avg.toFixed(2)}</span>
+                <div class="star-outer"><div class="star-inner" style="width: ${percent}%"></div></div>
+                <span class="rating-total">(${total.toLocaleString()})</span>
+            </div>
+        </a>
+    `;
+  }
+
+  function extractMetaStats(source) {
+    const totalInstalls =
+      source.querySelector(
+        ".script-list-total-installs + dd, dd.script-list-total-installs",
+      )?.innerHTML || "";
+    const updatedDate =
+      source.querySelector(
+        ".script-list-updated-date + dd, dd.script-list-updated-date",
+      )?.innerHTML || "";
+    return { totalInstalls, updatedDate };
+  }
+
+  function createStatsRowElement(totalInstalls, starRatingHtml, updatedDate) {
+    const statsRow = document.createElement("span");
+    statsRow.className = "gf-custom-stats-row";
+    statsRow.innerHTML = `
+      ${totalInstalls ? `<span class="gf-custom-stat-item">📊 <span>${totalInstalls}</span></span>` : ""}
+      ${starRatingHtml ? `<span class="gf-custom-stat-item">⭐ ${starRatingHtml}</span>` : ""}
+      ${updatedDate ? `<span class="gf-custom-stat-item">🔄 <span>${updatedDate}</span></span>` : ""}
+    `;
+    return statsRow;
+  }
+
   function processMetricsAndRelocate() {
     const listItems = document.querySelectorAll(
       "#browse-script-list > li, article",
@@ -865,64 +935,13 @@
 
         checkLinkBridge(container);
 
-        const goodEl = container.querySelector(".good-rating-count");
-        const okEl = container.querySelector(".ok-rating-count");
-        const badEl = container.querySelector(".bad-rating-count");
-
-        let starRatingHtml = "";
-        if (goodEl || okEl || badEl) {
-          incrementVisibility();
-
-          let feedbackUrl = "#";
-          const allLinks = container.getElementsByTagName("a");
-          for (let i = 0; i < allLinks.length; i++) {
-            const match = allLinks[i].href.match(/\/scripts\/(\d+)/);
-            if (match) {
-              feedbackUrl =
-                allLinks[i].href.split("/scripts/")[0] +
-                "/scripts/" +
-                match[1] +
-                "/feedback";
-              break;
-            }
-          }
-
-          const good = parseInt(goodEl?.textContent ?? 0, 10) || 0;
-          const ok = parseInt(okEl?.textContent ?? 0, 10) || 0;
-          const bad = parseInt(badEl?.textContent ?? 0, 10) || 0;
-          const total = good + ok + bad;
-          const avg = total > 0 ? (good * 5 + ok * 3 + bad * 1) / total : 0;
-          const percent = (avg / 5) * 100;
-
-          starRatingHtml = `
-                <a href="${feedbackUrl}" class="rating-link" title="Feedback (Avg: ${avg.toFixed(2)})">
-                    <div class="rating-box">
-                        <span class="rating-num">${avg.toFixed(2)}</span>
-                        <div class="star-outer"><div class="star-inner" style="width: ${percent}%"></div></div>
-                        <span class="rating-total">(${total.toLocaleString()})</span>
-                    </div>
-                </a>
-            `;
-        }
-
-        const totalInstalls =
-          container.querySelector(
-            ".script-list-total-installs + dd, dd.script-list-total-installs",
-          )?.innerHTML || "";
-        const updatedDate =
-          container.querySelector(
-            ".script-list-updated-date + dd, dd.script-list-updated-date",
-          )?.innerHTML || "";
+        const starRatingHtml = buildStarRatingHtml(container, false);
+        const { totalInstalls, updatedDate } = extractMetaStats(container);
 
         if (totalInstalls || starRatingHtml || updatedDate) {
-          const statsRow = document.createElement("span");
-          statsRow.className = "gf-custom-stats-row";
-          statsRow.innerHTML = `
-            ${totalInstalls ? `<span class="gf-custom-stat-item">📊 <span>${totalInstalls}</span></span>` : ""}
-            ${starRatingHtml ? `<span class="gf-custom-stat-item">⭐ ${starRatingHtml}</span>` : ""}
-            ${updatedDate ? `<span class="gf-custom-stat-item">🔄 <span>${updatedDate}</span></span>` : ""}
-          `;
-          targetHeader.appendChild(statsRow);
+          targetHeader.appendChild(
+            createStatsRowElement(totalInstalls, starRatingHtml, updatedDate),
+          );
         }
       });
     }
@@ -937,59 +956,13 @@
         metaBlock &&
         !targetHeader.querySelector(".gf-custom-stats-row")
       ) {
-        const goodEl = metaBlock.querySelector(".good-rating-count");
-        const okEl = metaBlock.querySelector(".ok-rating-count");
-        const badEl = metaBlock.querySelector(".bad-rating-count");
-
-        let starRatingHtml = "";
-        if (goodEl || okEl || badEl) {
-          let feedbackUrl = "#";
-          const urlMatch = window.location.pathname.match(/\/scripts\/(\d+)/);
-          if (urlMatch) {
-            feedbackUrl =
-              window.location.origin +
-              window.location.pathname.split("/scripts/")[0] +
-              "/scripts/" +
-              urlMatch[1] +
-              "/feedback";
-          }
-
-          const good = parseInt(goodEl?.textContent ?? 0, 10) || 0;
-          const ok = parseInt(okEl?.textContent ?? 0, 10) || 0;
-          const bad = parseInt(badEl?.textContent ?? 0, 10) || 0;
-          const total = good + ok + bad;
-          const avg = total > 0 ? (good * 5 + ok * 3 + bad * 1) / total : 0;
-          const percent = (avg / 5) * 100;
-
-          starRatingHtml = `
-                <a href="${feedbackUrl}" class="rating-link" title="Feedback (Avg: ${avg.toFixed(2)})">
-                    <div class="rating-box">
-                        <span class="rating-num">${avg.toFixed(2)}</span>
-                        <div class="star-outer"><div class="star-inner" style="width: ${percent}%"></div></div>
-                        <span class="rating-total">(${total.toLocaleString()})</span>
-                    </div>
-                </a>
-            `;
-        }
-
-        const totalInstalls =
-          metaBlock.querySelector(
-            ".script-list-total-installs + dd, dd.script-list-total-installs",
-          )?.innerHTML || "";
-        const updatedDate =
-          metaBlock.querySelector(
-            ".script-list-updated-date + dd, dd.script-list-updated-date",
-          )?.innerHTML || "";
+        const starRatingHtml = buildStarRatingHtml(metaBlock, true);
+        const { totalInstalls, updatedDate } = extractMetaStats(metaBlock);
 
         if (totalInstalls || starRatingHtml || updatedDate) {
-          const statsRow = document.createElement("span");
-          statsRow.className = "gf-custom-stats-row";
-          statsRow.innerHTML = `
-            ${totalInstalls ? `<span class="gf-custom-stat-item">📊 <span>${totalInstalls}</span></span>` : ""}
-            ${starRatingHtml ? `<span class="gf-custom-stat-item">⭐ ${starRatingHtml}</span>` : ""}
-            ${updatedDate ? `<span class="gf-custom-stat-item">🔄 <span>${updatedDate}</span></span>` : ""}
-          `;
-          targetHeader.appendChild(statsRow);
+          targetHeader.appendChild(
+            createStatsRowElement(totalInstalls, starRatingHtml, updatedDate),
+          );
         }
       }
     }
@@ -1144,15 +1117,14 @@
     processMetricsAndRelocate();
     revealPage();
 
-    const collapsed = document.querySelectorAll(".expandable.collapsed");
-    for (const el of collapsed) {
+    document.querySelectorAll(".expandable.collapsed").forEach((el) => {
       el.style.cssText += "max-height:none;height:auto;";
       el.classList.remove("collapsed");
-    }
-    const expanders = document.querySelectorAll(".expander");
-    for (const el of expanders) {
+    });
+
+    document.querySelectorAll(".expander").forEach((el) => {
       el.style.display = "none";
-    }
+    });
 
     addScrollTop();
     addKeyboardShortcuts();

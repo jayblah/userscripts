@@ -1,13 +1,14 @@
 // ==UserScript==
-// @name         SC Media Viewer
-// @version      3.1.0
-// @description  Streamlined media viewing experience for SC with mobile & keyboard support. Includes inline click-to-expand, per-post controls, auto-seek to unseen content, and unified multi-media pipelines.
+// @name         XF Media Viewer
+// @version      1.2.0
+// @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, and multi-media pipelines.
 // @author       JR
 // @license      MIT
 // @match        *://simpcity.*/threads/*
+// @match        *://f95zone.to/threads/*
 // @exclude      *://simpcity.com/*
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SCViewer.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SCViewer.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/XFMediaViewer.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/XFMediaViewer.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
@@ -17,7 +18,38 @@
 (function () {
   "use strict";
 
-  const THUMB_PATTERN = /\.(md|th)\.(jpg|webp)$/i;
+  // ── Environment Flags ───────────────────────────────────────────────────
+  const IS_F95 = window.location.hostname.includes("f95zone.to");
+
+  // Unified styling
+  const APP_THEME = "#3db7c7";
+  const APP_NAME = "XF View™";
+  const APP_SHORT = "XF™";
+
+  const SEL_IMG = IS_F95
+    ? "img.bbImage:not(.message-signature img, aside img)"
+    : "img.bbImage";
+
+  const SEL_VID = IS_F95
+    ? [
+        "video",
+        "iframe[src*='youtube.com']",
+        "iframe[src*='youtu.be']",
+        "iframe[src*='vimeo.com']",
+        "iframe[src*='streamtape']",
+        "iframe[src*='doodstream']",
+        "iframe[src*='mixdrop']",
+        "iframe[src*='streamlare']",
+        "iframe[src*='upstream']",
+        "iframe[src*='vidoza']",
+        "iframe[src*='filemoon']",
+        "iframe[src*='mp4upload']",
+        "iframe[src*='gofile']",
+        "iframe",
+      ].join(", ")
+    : 'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
+
+  // ── Settings persistence ────────────────────────────────────────────────
   const SETTINGS_MAP = {
     panelTop: "gv_p_top",
     panelLeft: "gv_p_left",
@@ -43,6 +75,7 @@
     },
   );
 
+  // ── App ─────────────────────────────────────────────────────────────────
   const App = {
     mediaList: [],
     _videoList: [],
@@ -116,6 +149,9 @@
           border: 1px solid #333 !important;
           object-fit: contain !important;
         }
+        .js-lbContainer.expanded > a, .lbContainer.expanded > a {
+          pointer-events: none !important;
+        }
         body.gv-noscroll { overflow: hidden !important; }
         img.bbImage {
           cursor: pointer;
@@ -142,7 +178,7 @@
           transition: color 0.15s;
         }
         .sc-expand-btn:hover { color: #fff; }
-        .sc-expand-btn.is-expanded { color: #3db7c7; }
+        .sc-expand-btn.is-expanded { color: ${APP_THEME}; }
 
         body.gv-noscroll .plyr--error .plyr__poster,
         body.gv-noscroll .plyr--error .plyr__controls,
@@ -166,7 +202,7 @@
 
       const sheet = new CSSStyleSheet();
       sheet.replaceSync(`
-        :host { --teal: #3db7c7; --bg: #171717; --border: #262626; }
+        :host { --theme: ${APP_THEME}; --bg: #171717; --border: #262626; }
         .panel {
           position: fixed; z-index: 9999; background: var(--bg); color: #efefef;
           border-radius: 8px; border: 1px solid var(--border); padding: 12px;
@@ -175,7 +211,7 @@
           user-select: none; touch-action: none;
         }
         .header {
-          text-align: center; font-weight: 900; color: var(--teal); cursor: move;
+          text-align: center; font-weight: 900; color: var(--theme); cursor: move;
           padding-bottom: 6px; font-size: 11px; text-transform: uppercase;
           border-bottom: 1px solid var(--border);
         }
@@ -184,12 +220,12 @@
           display: flex; align-items: center; justify-content: center; cursor: pointer;
           font-weight: 700; color: #aaa; font-size: 11px; transition: all 0.2s ease;
         }
-        .btn:hover { border-color: var(--teal); color: #fff; background: #2a2a2a; }
-        .btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+        .btn:hover { border-color: var(--theme); color: #fff; background: #2a2a2a; }
+        .btn:focus-visible { outline: 2px solid var(--theme); outline-offset: 2px; }
         .row { display: flex; gap: 6px; }
         .scroll-row .btn { flex: 1 1 0; min-width: 0; }
         .lbl-short { display: none; }
-        u { text-decoration: underline; text-decoration-color: var(--teal); text-underline-offset: 3px; }
+        u { text-decoration: underline; text-decoration-color: var(--theme); text-underline-offset: 3px; }
 
         #overlay {
           position: fixed; inset: 0; background: rgba(0,0,0,0.98); display: none;
@@ -197,7 +233,7 @@
           backdrop-filter: blur(4px); outline: none; touch-action: none;
         }
         .z-hint {
-          position: absolute; color: var(--teal); font-size: 11px; font-weight: 900;
+          position: absolute; color: var(--theme); font-size: 11px; font-weight: 900;
           opacity: 0.7; top: 20px; left: 50%; transform: translateX(-50%); text-align: center;
         }
         #media-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
@@ -216,7 +252,7 @@
           display: flex; align-items: center; gap: 8px;
         }
         .counter {
-          color: var(--teal); font-weight: 800; background: rgba(0,0,0,0.8);
+          color: var(--theme); font-weight: 800; background: rgba(0,0,0,0.8);
           padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
           white-space: nowrap; font-family: system-ui, sans-serif; font-size: 13px;
           height: 22px; display: flex; align-items: center;
@@ -233,8 +269,8 @@
           cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
           color: #aaa; position: relative;
         }
-        #btn-slideshow:hover { border-color: var(--teal); color: #fff; background: rgba(61,183,199,0.15); }
-        #btn-slideshow.active { border-color: var(--teal); color: var(--teal); background: rgba(61,183,199,0.12); }
+        #btn-slideshow:hover { border-color: var(--theme); color: #fff; }
+        #btn-slideshow.active { border-color: var(--theme); color: var(--theme); }
         #btn-slideshow svg { display: block; }
 
         .slideshow-input-wrapper { display: flex; align-items: center; padding-left: 4px; padding-right: 8px; }
@@ -244,17 +280,16 @@
           text-align: center; padding: 0; margin: 0; outline: none;
           border-bottom: 1px dashed #555;
         }
-        .slideshow-input:focus { border-bottom-color: var(--teal); }
+        .slideshow-input:focus { border-bottom-color: var(--theme); }
         .slideshow-unit { color: #666; font-size: 10px; font-weight: 700; margin-left: 2px; }
 
-        /* Progress ring */
         #slideshow-ring {
           position: absolute; inset: -1px; border-radius: 50%;
           pointer-events: none; opacity: 0; transition: opacity 0.2s;
         }
         #slideshow-ring.visible { opacity: 1; }
         #slideshow-ring circle {
-          fill: none; stroke: var(--teal); stroke-width: 2;
+          fill: none; stroke: var(--theme); stroke-width: 2;
           stroke-dasharray: 100; stroke-dashoffset: 100;
           stroke-linecap: round;
           transform-origin: center;
@@ -298,8 +333,8 @@
       this.shadow.innerHTML = `
         <div class="panel" id="gv-panel" style="top: ${defaultTop}; left: ${defaultLeft}">
           <div class="header" id="gv-drag">
-            <span class="lbl-full">Goon View™</span>
-            <span class="lbl-short">GV™</span>
+            <span class="lbl-full">${APP_NAME}</span>
+            <span class="lbl-short">${APP_SHORT}</span>
           </div>
           <div class="row scroll-row">
             <div class="btn" role="button" tabindex="0" data-action="top" title="Scroll to top">▴ TOP</div>
@@ -371,8 +406,27 @@
       }
     },
 
-    getBigUrl(src) {
-      return src.replace(THUMB_PATTERN, ".$2");
+    getFullSrc(img) {
+      if (IS_F95) {
+        const candidates = [img.getAttribute("data-src"), img.src].filter(
+          Boolean,
+        );
+        const anchor = img.closest("a[href]");
+        if (anchor) {
+          const href = anchor.href;
+          if (/\.(jpe?g|png|gif|webp|bmp|avif)(\?|$)/i.test(href)) {
+            candidates.unshift(href);
+          }
+        }
+        for (const src of candidates) {
+          const full = src.replace(/\/thumb\//, "/");
+          if (full !== src) return full;
+          if (src) return src;
+        }
+        return img.src;
+      } else {
+        return img.src.replace(/\.(md|th)\.(jpg|webp)$/i, ".$2");
+      }
     },
 
     cleanAttr(str) {
@@ -381,11 +435,12 @@
 
     processInlineElements() {
       document
-        .querySelectorAll("img.bbImage:not([data-processed-thumb])")
+        .querySelectorAll(SEL_IMG + ":not([data-processed-thumb])")
         .forEach((img) => {
-          if (!THUMB_PATTERN.test(img.src)) return;
-          if (img.title) img.title = this.cleanAttr(img.title);
-          if (img.alt) img.alt = this.cleanAttr(img.alt);
+          if (!IS_F95 && /\.(md|th)\.(jpg|webp)$/i.test(img.src)) {
+            if (img.title) img.title = this.cleanAttr(img.title);
+            if (img.alt) img.alt = this.cleanAttr(img.alt);
+          }
           img.setAttribute("data-processed-thumb", "true");
         });
 
@@ -398,7 +453,9 @@
           if (header.querySelector(".sc-expand-btn")) return;
 
           const messageMain = header.closest(".message-main");
-          const lbContainer = messageMain?.querySelector(".js-lbContainer");
+          const lbContainer = messageMain?.querySelector(
+            ".js-lbContainer, .lbContainer",
+          );
           if (!lbContainer) return;
 
           const btn = document.createElement("button");
@@ -409,15 +466,23 @@
           btn.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const images = lbContainer.querySelectorAll("img.bbImage");
+            const images = lbContainer.querySelectorAll(SEL_IMG);
             const expanding = !btn.classList.contains("is-expanded");
 
             images.forEach((img) => {
               img.classList.toggle("expanded", expanding);
-              if (expanding && !img.dataset.bigLoaded) {
-                img.dataset.bigLoaded = "true";
-                img.src = this.getBigUrl(img.src);
-                img.removeAttribute("srcset");
+              if (expanding) {
+                const fullSrc = this.getFullSrc(img);
+                if (fullSrc !== img.src) {
+                  if (!img.dataset.origThumb) img.dataset.origThumb = img.src;
+                  img.src = fullSrc;
+                  img.removeAttribute("srcset");
+                }
+              } else {
+                if (img.dataset.origThumb) {
+                  img.src = img.dataset.origThumb;
+                  delete img.dataset.origThumb;
+                }
               }
             });
 
@@ -442,32 +507,46 @@
     },
 
     refreshMediaPipelines() {
-      this.mediaList = this._filterVisibleElements("img.bbImage");
+      this.mediaList = this._filterVisibleElements(SEL_IMG);
 
-      const vSelector =
-        'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
-      this._videoList = this._filterVisibleElements(vSelector);
+      const rawVideos = this._filterVisibleElements(SEL_VID);
+      const seenVid = new Set();
+      this._videoList = rawVideos.filter((el) => {
+        if (seenVid.has(el)) return false;
+        seenVid.add(el);
+        return true;
+      });
 
-      this._fullList = this._filterVisibleElements(`img.bbImage, ${vSelector}`);
+      const rawFull = this._filterVisibleElements(`${SEL_IMG}, ${SEL_VID}`);
+      const seenFull = new Set();
+      this._fullList = rawFull.filter((el) => {
+        if (seenFull.has(el)) return false;
+        seenFull.add(el);
+        return true;
+      });
     },
 
     toggleExpand() {
       this.isExpanded = !this.isExpanded;
-      document.querySelectorAll("img.bbImage").forEach((img) => {
+      document.querySelectorAll(SEL_IMG).forEach((img) => {
         img.classList.toggle("gv-expanded", this.isExpanded);
         img.classList.toggle("expanded", this.isExpanded);
 
-        if (
-          this.isExpanded &&
-          !img.dataset.bigLoaded &&
-          THUMB_PATTERN.test(img.src)
-        ) {
-          img.dataset.bigLoaded = "true";
-          img.src = this.getBigUrl(img.src);
-          img.removeAttribute("srcset");
+        if (this.isExpanded) {
+          const fullSrc = this.getFullSrc(img);
+          if (fullSrc !== img.src) {
+            if (!img.dataset.origThumb) img.dataset.origThumb = img.src;
+            img.src = fullSrc;
+            img.removeAttribute("srcset");
+          }
+        } else {
+          if (img.dataset.origThumb) {
+            img.src = img.dataset.origThumb;
+            delete img.dataset.origThumb;
+          }
         }
       });
-      if (this.isExpanded) {
+      if (this.isExpanded && !IS_F95) {
         document
           .querySelectorAll('div[onclick*="redgifs.com"]')
           .forEach((div) => div.click());
@@ -476,7 +555,6 @@
     },
 
     // ─── Slideshow & Dynamic Autoplay Layouts ───────────────────────────────
-
     _getInterval() {
       const input = this.shadow.getElementById("ss-duration");
       let secs = parseInt(input?.value, 10);
@@ -598,6 +676,7 @@
 
     _fetchTurboCDNSrc(iframeEl) {
       return new Promise((resolve) => {
+        if (IS_F95) return resolve(null); // Bypass for F95
         const src = iframeEl?.getAttribute("src");
         if (!src) return resolve(null);
         const id = src.split("/embed/")[1]?.split("?")[0];
@@ -694,19 +773,21 @@
           onload: (resp) => {
             const parser = new DOMParser();
             const doc = parser.parseFromString(resp.responseText, "text/html");
-            const vSelector =
-              'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
 
             if (type === "video")
-              resolve(Array.from(doc.querySelectorAll(vSelector)));
+              resolve(
+                Array.from(doc.querySelectorAll(SEL_VID)).filter(
+                  (el) => el.src || el.getAttribute("src"),
+                ),
+              );
             else if (type === "full")
               resolve(
-                Array.from(doc.querySelectorAll(`img.bbImage, ${vSelector}`)),
+                Array.from(doc.querySelectorAll(`${SEL_IMG}, ${SEL_VID}`)),
               );
             else
               resolve(
-                Array.from(doc.querySelectorAll("img.bbImage")).filter(
-                  (el) => el.src,
+                Array.from(doc.querySelectorAll(SEL_IMG)).filter(
+                  (el) => el.src || el.getAttribute("data-src"),
                 ),
               );
           },
@@ -916,7 +997,7 @@
       };
 
       document.body.addEventListener("click", (e) => {
-        const img = e.target.closest("img.bbImage");
+        const img = e.target.closest(SEL_IMG);
         if (
           !img ||
           e.target.closest("#overlay") ||
@@ -929,11 +1010,16 @@
 
         if (img.classList.contains("expanded")) {
           img.classList.remove("expanded");
+          if (img.dataset.origThumb) {
+            img.src = img.dataset.origThumb;
+            delete img.dataset.origThumb;
+          }
         } else {
           img.classList.add("expanded");
-          if (!img.dataset.bigLoaded) {
-            img.dataset.bigLoaded = "true";
-            img.src = this.getBigUrl(img.src);
+          const fullSrc = this.getFullSrc(img);
+          if (fullSrc !== img.src) {
+            if (!img.dataset.origThumb) img.dataset.origThumb = img.src;
+            img.src = fullSrc;
             img.removeAttribute("srcset");
           }
         }
@@ -1070,7 +1156,6 @@
     },
 
     // ─── Unified Gallery Navigation ──────────────────────────────────────────
-
     openGallery(dir = 0) {
       this._navigateGallery("main", dir);
     },
@@ -1087,14 +1172,11 @@
       if (dir !== 0 && !isAutoTick) this._stopSlideshow();
 
       const ssInputWrapper = this.shadow.getElementById("ss-input-wrapper");
-      if (ssInputWrapper) {
+      if (ssInputWrapper)
         ssInputWrapper.style.display = mode === "video" ? "none" : "";
-      }
 
       if (!this._xpageLocked) {
-        if (mode === "video" && this._refreshVideoList)
-          this._refreshVideoList();
-        else this.refreshMediaPipelines();
+        this.refreshMediaPipelines();
       }
 
       let list, currentIdxProp, fetchType;
@@ -1121,7 +1203,6 @@
       const numDir = isAutoTick ? 1 : dir;
       const nextIdx = (this[currentIdxProp] || 0) + numDir;
 
-      // Handle slideshow duration UI visibility for mixed galleries
       if (ssInputWrapper && mode === "full") {
         const activeNode =
           list[
@@ -1162,7 +1243,6 @@
       const currentList = this._getListRef(fetchType);
 
       if (!url) {
-        // Wrapping logic (end of sequence to beginning, or vice versa)
         let targetUrl;
         if (dir > 0) {
           targetUrl = this._getFirstPageUrl();
@@ -1205,7 +1285,6 @@
           );
         }
       } else {
-        // Sequential progression to next/prev page
         const targetClean = url.split("#")[0];
         if (targetClean === liveUrlClean) {
           this._resetPageLockAndRender(currentIdxProp, dir > 0 ? 0 : -1);
@@ -1286,7 +1365,7 @@
 
       if (current.tagName === "IMG") {
         const el = new Image();
-        el.src = current.src;
+        el.src = this.getFullSrc(current);
         const controller = new AbortController();
         this._decodeAbort = controller;
         try {
@@ -1360,18 +1439,21 @@
           el.setAttribute("allowfullscreen", "");
           container.appendChild(el);
           if (src) {
-            const url = new URL(src);
-            url.searchParams.set("autoplay", "1");
-            el.src = url.toString();
+            try {
+              const url = new URL(src);
+              url.searchParams.set("autoplay", "1");
+              el.src = url.toString();
+            } catch {
+              el.src = src;
+            }
           }
         }
       }
 
       const ssInputWrapper = this.shadow.getElementById("ss-input-wrapper");
-      if (ssInputWrapper) {
+      if (ssInputWrapper)
         ssInputWrapper.style.display =
           current && current.tagName !== "IMG" ? "none" : "";
-      }
 
       this.shadow.getElementById("gv-counter").textContent =
         `${idx + 1} / ${total}`;

@@ -3,8 +3,8 @@
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @version         1.0
 // @match           *://*.reddit.com/*
-// @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
-// @downloadURL     https://raw.githubusercontent.com/jayblah/userscripts/main/RedditEnhancements.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
 // @grant           none
 // @run-at          document-start
 // ==/UserScript==
