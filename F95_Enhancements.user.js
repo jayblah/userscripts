@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         F95 Enhancements
 // @namespace    http://tampermonkey.net/
-// @version      3.1.1
+// @version      1.1
 // @description  Adds developer/game search buttons and auto-collapses site notices.
 // @author       Jay
 // @license      MIT

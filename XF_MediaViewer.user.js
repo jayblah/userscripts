@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      1.2.0
+// @version      1.2
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, and multi-media pipelines.
 // @author       JR
 // @license      MIT
