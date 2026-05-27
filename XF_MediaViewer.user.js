@@ -7,8 +7,8 @@
 // @match        *://simpcity.*/threads/*
 // @match        *://f95zone.to/threads/*
 // @exclude      *://simpcity.com/*
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/XFMediaViewer.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/XFMediaViewer.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/XF_MediaViewer.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/XF_MediaViewer.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
