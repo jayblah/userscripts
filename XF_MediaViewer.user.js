@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      1.4
+// @version      1.5
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -336,19 +336,15 @@
         }
 
         @media (max-width: 600px) and (pointer: coarse) {
-          .panel { width: auto; flex-direction: row; flex-wrap: nowrap; align-items: center; padding: 8px 10px; gap: 8px; cursor: grab; }
+          .panel { flex-direction: column; width: 70px; align-items: stretch; padding: 8px 5px; gap: 8px; box-sizing: border-box; cursor: grab; }
           .panel:active { cursor: grabbing; }
-          .header { display: flex; align-items: center; justify-content: center; border-bottom: none; border-right: 1px solid var(--border); padding-bottom: 0; padding-right: 8px; font-size: 10px; min-width: 28px; cursor: grab; }
+          .header { display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--border); border-right: none; padding-bottom: 6px; padding-right: 0; font-size: 10px; min-width: 0; cursor: grab; }
           .header .lbl-full { display: none; }
           .header .lbl-short { display: inline; }
-          .btn { height: 44px; font-size: 13px; padding: 0 12px; border-radius: 7px; }
           .row.scroll-row { display: none; }
           .lbl-full { display: none; }
           .lbl-short { display: inline; }
-          .panel.vertical { flex-direction: column !important; width: 70px !important; align-items: stretch !important; padding: 8px 5px !important; gap: 8px !important; box-sizing: border-box !important; }
-          .panel.vertical .row.scroll-row, .panel.vertical .scroll-row { display: none !important; }
-          .panel.vertical .header { border-right: none !important; border-bottom: 1px solid var(--border) !important; padding-right: 0 !important; padding-bottom: 6px !important; }
-          .panel.vertical .btn { width: 100% !important; height: 38px !important; font-size: 10px !important; padding: 0 2px !important; box-sizing: border-box !important; flex: 0 0 auto !important; }
+          .btn { width: 100%; height: 38px; font-size: 10px; padding: 0 2px; box-sizing: border-box; flex: 0 0 auto; }
           .z-hotkeys { display: none !important; }
         }
       `);
@@ -397,13 +393,13 @@
             <span class="lbl-full"><u>F</u>ULL GALLERY</span>
             <span class="lbl-short">ALL</span>
           </div>
-          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery">
-            <span class="lbl-full">IMAGE&nbsp;<u>G</u>ALLERY</span>
-            <span class="lbl-short">GAL</span>
-          </div>
           <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery">
             <span class="lbl-full"><u>V</u>IDEO GALLERY</span>
             <span class="lbl-short">VID</span>
+          </div>
+          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery">
+            <span class="lbl-full">IMAGE&nbsp;<u>G</u>ALLERY</span>
+            <span class="lbl-short">GAL</span>
           </div>
         </div>
         <div id="overlay" tabindex="-1">
@@ -443,27 +439,27 @@
     },
 
     updateUI() {
-      if (
-        this.isMobile &&
-        this.shadow.getElementById("gv-panel").classList.contains("vertical")
-      ) {
-        this.shadow.querySelector(".scroll-row").style.display = "none";
-      }
       const btnExpand = this.shadow.getElementById("btn-expand");
       btnExpand.innerHTML = this.isExpanded
         ? "<span class='lbl-full'>COLLAPSE ALL</span><span class='lbl-short'>COL</span>"
         : "<span class='lbl-full'>E<u>X</u>PAND ALL</span><span class='lbl-short'>EXP</span>";
     },
 
-    _updatePanelOrientation(panel) {
-      if (!this.isMobile) return;
-      const left = panel.offsetLeft;
-      const screenW = window.innerWidth;
-      const isCurrentlyVertical = panel.classList.contains("vertical");
-      const shouldBeVertical = left <= 100 || left >= screenW - 170;
-      if (shouldBeVertical !== isCurrentlyVertical) {
-        panel.classList.toggle("vertical", shouldBeVertical);
-      }
+    _clampPanelToScreen(panel) {
+      // Defer one frame so offsetWidth/Height are available after layout
+      requestAnimationFrame(() => {
+        const panelW = panel.offsetWidth;
+        const panelH = panel.offsetHeight;
+        if (!panelW || !panelH) return;
+        const maxLeft = window.innerWidth - panelW;
+        const maxTop = window.innerHeight - panelH;
+        const curLeft = panel.offsetLeft;
+        const curTop = panel.offsetTop;
+        const clampedLeft = Math.min(maxLeft, Math.max(0, curLeft));
+        const clampedTop = Math.min(maxTop, Math.max(0, curTop));
+        if (clampedLeft !== curLeft) panel.style.left = `${clampedLeft}px`;
+        if (clampedTop !== curTop) panel.style.top = `${clampedTop}px`;
+      });
     },
 
     getFullSrc(img) {
@@ -633,6 +629,26 @@
       this.updateUI();
     },
 
+    // ── Wake Lock ────────────────────────────────────────────────────────────
+    _wakeLock: null,
+
+    async _acquireWakeLock() {
+      if (!('wakeLock' in navigator)) return;
+      try {
+        this._wakeLock = await navigator.wakeLock.request('screen');
+        this._wakeLock.addEventListener('release', () => {
+          this._wakeLock = null;
+        });
+      } catch {}
+    },
+
+    _releaseWakeLock() {
+      if (this._wakeLock) {
+        this._wakeLock.release().catch(() => {});
+        this._wakeLock = null;
+      }
+    },
+
     // ── Slideshow ────────────────────────────────────────────────────────────
     _getInterval() {
       const input = this.shadow.getElementById("ss-duration");
@@ -644,6 +660,7 @@
     _startSlideshow() {
       this._stopSlideshow();
       this._slideshowActive = true;
+      this._acquireWakeLock();
       this._updateSlideshowButton();
       this._evaluateActiveAutoplayContext();
     },
@@ -712,6 +729,7 @@
         this._slideshowTimer = null;
       }
       this._slideshowActive = false;
+      this._releaseWakeLock();
       this._updateSlideshowButton();
 
       const ring = this.shadow.getElementById("ring-circle");
@@ -1203,13 +1221,18 @@
         const startY = e.clientY - panel.offsetTop;
         dragTarget.setPointerCapture(e.pointerId);
         const move = (m) => {
-          panel.style.left = `${m.clientX - startX}px`;
-          panel.style.top = `${m.clientY - startY}px`;
+          const panelW = panel.offsetWidth;
+          const panelH = panel.offsetHeight;
+          const maxLeft = window.innerWidth - panelW;
+          const maxTop = window.innerHeight - panelH;
+          const newLeft = Math.min(maxLeft, Math.max(0, m.clientX - startX));
+          const newTop = Math.min(maxTop, Math.max(0, m.clientY - startY));
+          panel.style.left = `${newLeft}px`;
+          panel.style.top = `${newTop}px`;
         };
         const up = () => {
           settings.panelLeft = panel.style.left;
           settings.panelTop = panel.style.top;
-          this._updatePanelOrientation(panel);
           dragTarget.removeEventListener("pointermove", move);
           dragTarget.removeEventListener("pointerup", up);
         };
@@ -1217,7 +1240,7 @@
         dragTarget.addEventListener("pointerup", up);
       });
 
-      this._updatePanelOrientation(panel);
+      this._clampPanelToScreen(panel);
 
       // Overlay wheel
       overlay.addEventListener(
