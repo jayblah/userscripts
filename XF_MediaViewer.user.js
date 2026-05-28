@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      1.2
-// @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, and multi-media pipelines.
+// @version      1.4
+// @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
 // @match        *://simpcity.*/threads/*
@@ -50,9 +50,11 @@
     : 'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
 
   // ── Settings persistence ────────────────────────────────────────────────
+  const siteKey = IS_F95 ? "f95" : "sc";
+
   const SETTINGS_MAP = {
-    panelTop: "gv_p_top",
-    panelLeft: "gv_p_left",
+    panelTop: `gv_p_top_${siteKey}`,
+    panelLeft: `gv_p_left_${siteKey}`,
     videoVolume: "gv_v_volume",
     videoMuted: "gv_v_muted",
     slideshowSeconds: "gv_ss_seconds",
@@ -113,17 +115,14 @@
       this.injectGlobalStyles();
       this.createHost();
       this.processInlineElements();
-
       this.refreshMediaPipelines();
       this._trackInitialUnseenPosition();
       this.setupGlobalEvents();
 
-      // Mutation observer optimized to throttle executions on broad tree changes
       let debounceTimeout = null;
       this._observer = new MutationObserver((mutations) => {
         const hasRelevantNodes = mutations.some((m) => m.addedNodes.length > 0);
         if (!hasRelevantNodes) return;
-
         if (debounceTimeout) clearTimeout(debounceTimeout);
         debounceTimeout = setTimeout(() => {
           this._observer.disconnect();
@@ -167,7 +166,6 @@
           justify-content: center;
           font-size: 11px;
           font-weight: 700;
-          font-family: system-ui, sans-serif;
           color: #aaa;
           background: none;
           border: none;
@@ -179,7 +177,6 @@
         }
         .sc-expand-btn:hover { color: #fff; }
         .sc-expand-btn.is-expanded { color: ${APP_THEME}; }
-
         body.gv-noscroll .plyr--error .plyr__poster,
         body.gv-noscroll .plyr--error .plyr__controls,
         body.gv-noscroll .plyr__video-wrapper + [class*="error"],
@@ -202,11 +199,12 @@
 
       const sheet = new CSSStyleSheet();
       sheet.replaceSync(`
-        :host { --theme: ${APP_THEME}; --bg: #171717; --border: #262626; }
+        :host { --theme: ${APP_THEME}; --bg: #171717; --border: #262626; --t: 0.2s ease; font-family: system-ui, -apple-system, sans-serif; }
+        input { font: inherit; }
         .panel {
           position: fixed; z-index: 9999; background: var(--bg); color: #efefef;
           border-radius: 8px; border: 1px solid var(--border); padding: 12px;
-          font-family: system-ui, -apple-system, sans-serif; width: 155px;
+          width: 155px;
           display: flex; flex-direction: column; gap: 10px; box-shadow: 0 12px 40px #000;
           user-select: none; touch-action: none;
         }
@@ -218,8 +216,25 @@
         .btn {
           background: #222; border: 1px solid #333; border-radius: 5px; height: 34px;
           display: flex; align-items: center; justify-content: center; cursor: pointer;
-          font-weight: 700; color: #aaa; font-size: 11px; transition: all 0.2s ease;
+          font-weight: 700; color: #aaa; font-size: 11px; transition: all var(--t);
         }
+        .btn-ss {
+          background: transparent !important;
+          border: none !important;
+          color: #666;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          font-weight: 700;
+          font-size: 16px;
+          height: 24px;
+          width: 24px;
+          transition: color var(--t);
+          user-select: none;
+          outline: none;
+        }
+        .btn-ss:hover { color: var(--theme); }
         .btn:hover { border-color: var(--theme); color: #fff; background: #2a2a2a; }
         .btn:focus-visible { outline: 2px solid var(--theme); outline-offset: 2px; }
         .row { display: flex; gap: 6px; }
@@ -232,12 +247,32 @@
           align-items: center; justify-content: center; z-index: 10000;
           backdrop-filter: blur(4px); outline: none; touch-action: none;
         }
+
         .z-hint {
-          position: absolute; color: var(--theme); font-size: 11px; font-weight: 900;
-          opacity: 0.7; top: 20px; left: 50%; transform: translateX(-50%); text-align: center;
+          position: absolute; font-size: 9.5px; font-weight: 900;
+          opacity: 0.9; top: 20px; left: 50%; transform: translateX(-50%); text-align: center;
+          width: 90%; pointer-events: none;
+          text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 2px 8px rgba(0,0,0,0.9);
         }
+        .z-model-name {
+          font-size: 14px;
+          color: var(--theme);
+          margin-bottom: 6px;
+          text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .z-hotkeys {
+          font-size: 8.5px;
+          color: rgba(255, 255, 255, 0.5);
+          margin-top: 3px;
+        }
+        .z-hotkeys .key { color: #ffffff; }
+
         #media-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-        #media-container :is(img, video, iframe) { max-width: 96%; max-height: 96%; object-fit: contain; }
+        #media-container :is(img, video, iframe) {
+          max-width: 96vw;
+          max-height: calc(100vh - 150px);
+          object-fit: contain;
+        }
         #media-container img {
           transform-origin: center center;
           transition: transform 0.12s ease;
@@ -254,19 +289,21 @@
         .counter {
           color: var(--theme); font-weight: 800; background: rgba(0,0,0,0.8);
           padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
-          white-space: nowrap; font-family: system-ui, sans-serif; font-size: 13px;
+          white-space: nowrap; font-size: 13px;
           height: 22px; display: flex; align-items: center;
         }
+        .counter .dim { opacity: 0.85; font-weight: 600; }
+
         .slideshow-ctrl {
           display: flex; align-items: center; background: rgba(0,0,0,0.8);
           border: 1px solid #333; border-radius: 20px; padding: 2px;
-          gap: 0; transition: all 0.15s ease-in-out;
+          gap: 0; transition: all var(--t);
         }
         #btn-slideshow {
           width: 32px; height: 32px; border-radius: 50%;
           background: #111; border: 1px solid #222;
           display: flex; align-items: center; justify-content: center;
-          cursor: pointer; transition: all 0.2s ease; flex-shrink: 0;
+          cursor: pointer; transition: all var(--t); flex-shrink: 0;
           color: #aaa; position: relative;
         }
         #btn-slideshow:hover { border-color: var(--theme); color: #fff; }
@@ -276,7 +313,7 @@
         .slideshow-input-wrapper { display: flex; align-items: center; padding-left: 4px; padding-right: 8px; }
         .slideshow-input {
           width: 24px; background: transparent; border: none; color: #fff;
-          font-family: system-ui, sans-serif; font-size: 12px; font-weight: 700;
+          font-size: 12px; font-weight: 700;
           text-align: center; padding: 0; margin: 0; outline: none;
           border-bottom: 1px dashed #555;
         }
@@ -307,12 +344,11 @@
           .row.scroll-row { display: none; }
           .lbl-full { display: none; }
           .lbl-short { display: inline; }
-
           .panel.vertical { flex-direction: column !important; width: 70px !important; align-items: stretch !important; padding: 8px 5px !important; gap: 8px !important; box-sizing: border-box !important; }
           .panel.vertical .row.scroll-row, .panel.vertical .scroll-row { display: none !important; }
           .panel.vertical .header { border-right: none !important; border-bottom: 1px solid var(--border) !important; padding-right: 0 !important; padding-bottom: 6px !important; }
           .panel.vertical .btn { width: 100% !important; height: 38px !important; font-size: 10px !important; padding: 0 2px !important; box-sizing: border-box !important; flex: 0 0 auto !important; }
-          .z-hint { display: none !important; }
+          .z-hotkeys { display: none !important; }
         }
       `);
       this.shadow.adoptedStyleSheets = [sheet];
@@ -322,6 +358,19 @@
       this.bindInternalEvents();
     },
 
+    _getModelName() {
+      const h1 = document.querySelector("h1.p-title-value");
+      if (!h1) return "";
+      let name = "";
+      for (const node of h1.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const text = node.textContent.trim();
+          if (text) name = text;
+        }
+      }
+      return name;
+    },
+
     renderBase() {
       const defaultTop = this.isMobile
         ? GM_getValue(SETTINGS_MAP.panelTop, "80px")
@@ -329,6 +378,8 @@
       const defaultLeft = this.isMobile
         ? GM_getValue(SETTINGS_MAP.panelLeft, "10px")
         : settings.panelLeft;
+
+      const modelName = this._getModelName();
 
       this.shadow.innerHTML = `
         <div class="panel" id="gv-panel" style="top: ${defaultTop}; left: ${defaultLeft}">
@@ -341,6 +392,10 @@
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
           </div>
           <div class="btn" role="button" tabindex="0" data-action="expand" id="btn-expand">EXPAND ALL</div>
+          <div class="btn" role="button" tabindex="0" data-action="fullgallery" id="btn-fullgallery" style="border-color: #444;">
+            <span class="lbl-full"><u>F</u>ULL GALLERY</span>
+            <span class="lbl-short">ALL</span>
+          </div>
           <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery">
             <span class="lbl-full">IMAGE&nbsp;<u>G</u>ALLERY</span>
             <span class="lbl-short">GAL</span>
@@ -349,15 +404,18 @@
             <span class="lbl-full"><u>V</u>IDEO GALLERY</span>
             <span class="lbl-short">VID</span>
           </div>
-          <div class="btn" role="button" tabindex="0" data-action="fullgallery" id="btn-fullgallery" style="border-color: #444;">
-            <span class="lbl-full"><u>F</u>ULL GALLERY</span>
-            <span class="lbl-short">FUL</span>
-          </div>
         </div>
         <div id="overlay" tabindex="-1">
           <div class="z-hint">
-            [A/←] PREV · [D/→] NEXT · [W/↑/ESC] EXIT<br>
-            [SPACE] AUTOPLAY · [SCROLL] TIMELINE · [R-CLICK + SCROLL] ZOOM
+            ${modelName ? `<div class="z-model-name">${modelName}</div>` : ""}
+            <div class="z-hotkeys">
+              <span class="key">[A/←]</span> PREV ·
+              <span class="key">[D/→]</span> NEXT ·
+              <span class="key">[W/↑/ESC]</span> EXIT ·
+              <span class="key">[SPACE]</span> AUTOPLAY ·
+              <span class="key">[SCROLL]</span> TIMELINE ·
+              <span class="key">[R-CLICK + SCROLL]</span> ZOOM
+            </div>
           </div>
           <div id="media-container"></div>
           <div class="counter-row">
@@ -371,11 +429,13 @@
                 </svg>
               </div>
               <div class="slideshow-input-wrapper" id="ss-input-wrapper">
-                <input type="text" class="slideshow-input" id="ss-duration" value="${settings.slideshowSeconds}" maxlength="3" title="Duration per image">
+                <div class="btn-ss" data-action="ss-dec">-</div>
+                <input type="text" class="slideshow-input" id="ss-duration" value="${settings.slideshowSeconds}" maxlength="1" title="Duration per image">
                 <span class="slideshow-unit">s</span>
+                <div class="btn-ss" data-action="ss-inc">+</div>
               </div>
             </div>
-            <div class="counter" id="gv-counter"></div>
+            <div class="counter" id="gv-counter" title="Page & Media Index"></div>
           </div>
         </div>
       `;
@@ -400,7 +460,6 @@
       const screenW = window.innerWidth;
       const isCurrentlyVertical = panel.classList.contains("vertical");
       const shouldBeVertical = left <= 100 || left >= screenW - 170;
-
       if (shouldBeVertical !== isCurrentlyVertical) {
         panel.classList.toggle("vertical", shouldBeVertical);
       }
@@ -414,9 +473,8 @@
         const anchor = img.closest("a[href]");
         if (anchor) {
           const href = anchor.href;
-          if (/\.(jpe?g|png|gif|webp|bmp|avif)(\?|$)/i.test(href)) {
+          if (/\.(jpe?g|png|gif|webp|bmp|avif)(\?|$)/i.test(href))
             candidates.unshift(href);
-          }
         }
         for (const src of candidates) {
           const full = src.replace(/\/thumb\//, "/");
@@ -468,7 +526,6 @@
             e.stopPropagation();
             const images = lbContainer.querySelectorAll(SEL_IMG);
             const expanding = !btn.classList.contains("is-expanded");
-
             images.forEach((img) => {
               img.classList.toggle("expanded", expanding);
               if (expanding) {
@@ -485,7 +542,6 @@
                 }
               }
             });
-
             btn.classList.toggle("is-expanded", expanding);
             btn.textContent = expanding ? "⊟ COL" : "⊞ EXP";
             btn.title = expanding
@@ -506,32 +562,60 @@
       });
     },
 
+    // ── Media pipeline helpers ───────────────────────────────────────────────
+
     refreshMediaPipelines() {
       this.mediaList = this._filterVisibleElements(SEL_IMG);
+      this._videoList = [...new Set(this._filterVisibleElements(SEL_VID))];
 
-      const rawVideos = this._filterVisibleElements(SEL_VID);
-      const seenVid = new Set();
-      this._videoList = rawVideos.filter((el) => {
-        if (seenVid.has(el)) return false;
-        seenVid.add(el);
-        return true;
-      });
-
-      const rawFull = this._filterVisibleElements(`${SEL_IMG}, ${SEL_VID}`);
-      const seenFull = new Set();
-      this._fullList = rawFull.filter((el) => {
-        if (seenFull.has(el)) return false;
-        seenFull.add(el);
+      const seen = new Set();
+      this._fullList = [...this.mediaList, ...this._videoList].filter((el) => {
+        if (seen.has(el)) return false;
+        seen.add(el);
         return true;
       });
     },
+
+    // Returns the canonical config for a given gallery mode.
+    _getModeConfig(mode) {
+      if (mode === "video")
+        return {
+          list: this._videoList,
+          idxProp: "_videoIdx",
+          fetchType: "video",
+        };
+      if (mode === "full")
+        return { list: this._fullList, idxProp: "_fullIdx", fetchType: "full" };
+      return { list: this.mediaList, idxProp: "zoomIdx", fetchType: "image" };
+    },
+
+    _updateListRef(fetchType, items) {
+      if (fetchType === "video") this._videoList = items;
+      else if (fetchType === "full") this._fullList = items;
+      else this.mediaList = items;
+    },
+
+    _getListRef(fetchType) {
+      if (fetchType === "video") return this._videoList;
+      if (fetchType === "full") return this._fullList;
+      return this.mediaList;
+    },
+
+    // Builds the counter innerHTML string — single source of truth.
+    _buildCounterHTML(idx, total) {
+      const currentPage =
+        this._parsePageNum(this._xpageUrl || window.location.href) || 1;
+      const maxPage = Math.max(currentPage, this._getMaxPage());
+      return `pg.&nbsp; <span class="dim">${currentPage}</span>&nbsp; / &nbsp;${maxPage} &nbsp;—&nbsp; <span class="dim">${idx + 1}</span>&nbsp; / &nbsp;${total}`;
+    },
+
+    // ── Expand / Collapse ────────────────────────────────────────────────────
 
     toggleExpand() {
       this.isExpanded = !this.isExpanded;
       document.querySelectorAll(SEL_IMG).forEach((img) => {
         img.classList.toggle("gv-expanded", this.isExpanded);
         img.classList.toggle("expanded", this.isExpanded);
-
         if (this.isExpanded) {
           const fullSrc = this.getFullSrc(img);
           if (fullSrc !== img.src) {
@@ -554,7 +638,8 @@
       this.updateUI();
     },
 
-    // ─── Slideshow & Dynamic Autoplay Layouts ───────────────────────────────
+    // ── Slideshow ────────────────────────────────────────────────────────────
+
     _getInterval() {
       const input = this.shadow.getElementById("ss-duration");
       let secs = parseInt(input?.value, 10);
@@ -622,9 +707,9 @@
     },
 
     _getActiveMediaNode() {
-      if (this._galleryMode === "video") return this._videoList[this._videoIdx];
-      if (this._galleryMode === "full") return this._fullList[this._fullIdx];
-      return this.mediaList[this.zoomIdx];
+      return this._getModeConfig(this._galleryMode).list[
+        this[this._getModeConfig(this._galleryMode).idxProp]
+      ];
     },
 
     _stopSlideshow() {
@@ -661,22 +746,18 @@
       const btn = this.shadow.getElementById("btn-slideshow");
       const icon = this.shadow.getElementById("slideshow-icon");
       if (!btn || !icon) return;
-
       btn.classList.toggle("active", this._slideshowActive);
       btn.title = this._slideshowActive ? "Pause slideshow" : "Start slideshow";
-
-      if (this._slideshowActive) {
-        icon.innerHTML = `<rect x="2" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/>`;
-      } else {
-        icon.innerHTML = `<polygon points="3,1 13,7 3,13"/>`;
-      }
+      icon.innerHTML = this._slideshowActive
+        ? `<rect x="2" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/>`
+        : `<polygon points="3,1 13,7 3,13"/>`;
     },
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Cross-page fetching ──────────────────────────────────────────────────
 
     _fetchTurboCDNSrc(iframeEl) {
       return new Promise((resolve) => {
-        if (IS_F95) return resolve(null); // Bypass for F95
+        if (IS_F95) return resolve(null);
         const src = iframeEl?.getAttribute("src");
         if (!src) return resolve(null);
         const id = src.split("/embed/")[1]?.split("?")[0];
@@ -721,8 +802,15 @@
 
     _getMaxPage() {
       let max = 1;
+      const jumpInput = document.querySelector(
+        'input.js-pageJumpPage, input[name="page"]',
+      );
+      if (jumpInput && jumpInput.max) {
+        const val = parseInt(jumpInput.max, 10);
+        if (val && val > max) max = val;
+      }
       const navs = document.querySelectorAll(
-        ".pageNav a[href], .pageNav li.pageNav-page",
+        ".pageNav-main a[href], .pageNav-main li.pageNav-page, .pageNav a[href], .pageNav li.pageNav-page",
       );
       navs.forEach((el) => {
         const num =
@@ -736,32 +824,37 @@
       return max;
     },
 
-    _getFirstPageUrl() {
-      return window.location.href
+    // Returns the base thread URL with page number and fragment stripped.
+    _getBaseThreadUrl(url) {
+      return (url || window.location.href)
         .replace(/\/page-\d+\/?/, "/")
         .replace(/[?&]page=\d+/, "")
         .split("#")[0];
     },
 
-    _getAdjacentPageUrl(dir) {
-      const base = (this._xpageUrl || window.location.href).split("#")[0];
+    _getFirstPageUrl() {
+      return this._getBaseThreadUrl();
+    },
+
+    _getAdjacentPageUrl(dir, baseOverride = null) {
+      const base = (
+        baseOverride ||
+        this._xpageUrl ||
+        window.location.href
+      ).split("#")[0];
       const currentPage = this._parsePageNum(base) || 1;
       const targetPage = currentPage + (dir > 0 ? 1 : -1);
       const maxPage = this._getMaxPage();
-
       if (targetPage < 1 || targetPage > maxPage) return null;
 
-      if (/\/page-\d+/.test(base)) {
+      if (/\/page-\d+/.test(base))
         return base.replace(/\/page-\d+/, `/page-${targetPage}`);
-      } else if (/[?&]page=\d+/.test(base)) {
+      if (/[?&]page=\d+/.test(base))
         return base.replace(/([?&]page=)\d+/, `$1${targetPage}`);
-      } else {
-        const qIdx = base.indexOf("?");
-        const path = qIdx > -1 ? base.substring(0, qIdx) : base;
-        const query = qIdx > -1 ? base.substring(qIdx) : "";
-        const sep = path.endsWith("/") ? "" : "/";
-        return `${path}${sep}page-${targetPage}${query}`;
-      }
+
+      const cleanBase = this._getBaseThreadUrl(base);
+      const sep = cleanBase.endsWith("/") ? "" : "/";
+      return `${cleanBase}${sep}page-${targetPage}`;
     },
 
     _fetchPageMedia(url, type = "image") {
@@ -773,7 +866,6 @@
           onload: (resp) => {
             const parser = new DOMParser();
             const doc = parser.parseFromString(resp.responseText, "text/html");
-
             if (type === "video")
               resolve(
                 Array.from(doc.querySelectorAll(SEL_VID)).filter(
@@ -802,6 +894,8 @@
       if (counter) counter.textContent = msg;
     },
 
+    // ── Unseen tracking ──────────────────────────────────────────────────────
+
     _trackInitialUnseenPosition() {
       const unreadAnchor = document.querySelector(
         ".u-anchorTarget#unread, .message.is-unread, .message--new",
@@ -810,7 +904,6 @@
         this._trackedUnseenElement = unreadAnchor.closest(".message");
         return;
       }
-
       const messages = document.querySelectorAll(".message");
       for (const msg of messages) {
         const rect = msg.getBoundingClientRect();
@@ -825,7 +918,6 @@
       if (!list || !list.length) return 0;
       const firstUnreadMessage = this._trackedUnseenElement;
       if (!firstUnreadMessage) return 0;
-
       const idx = list.findIndex((el) => {
         const msgParent = el.closest(".message");
         if (!msgParent) return false;
@@ -835,9 +927,10 @@
           Node.DOCUMENT_POSITION_FOLLOWING
         );
       });
-
       return idx !== -1 ? idx : 0;
     },
+
+    // ── Zoom / pan ───────────────────────────────────────────────────────────
 
     _getZoomTarget() {
       return (
@@ -894,6 +987,8 @@
       }
     },
 
+    // ── Touch handling ───────────────────────────────────────────────────────
+
     handleTouchStart(e) {
       if (e.touches.length === 2) {
         this._isPinching = true;
@@ -916,7 +1011,6 @@
           return;
         }
         this._lastTap = now;
-
         if (this._scale > 1) {
           this._isPanning = true;
           this._panStart.x = t.clientX - this._panOffset.x;
@@ -969,13 +1063,14 @@
       const threshold = 50;
       if (Math.abs(dx) > Math.abs(dy)) {
         if (Math.abs(dx) > threshold) {
-          this._stopSlideshow();
           this._navigateGallery(this._galleryMode, dx > 0 ? -1 : 1);
         }
       } else if (Math.abs(dy) > threshold) {
         this.closeGallery();
       }
     },
+
+    // ── Event binding ────────────────────────────────────────────────────────
 
     bindInternalEvents() {
       const s = this.shadow;
@@ -991,11 +1086,12 @@
             behavior: "smooth",
           }),
         expand: () => this.toggleExpand(),
-        gallery: () => this.openGallery(0),
-        vgallery: () => this.openVideoGallery(0),
-        fullgallery: () => this.openFullGallery(0),
+        gallery: () => this._navigateGallery("main", 0),
+        vgallery: () => this._navigateGallery("video", 0),
+        fullgallery: () => this._navigateGallery("full", 0),
       };
 
+      // Inline image click expansion
       document.body.addEventListener("click", (e) => {
         const img = e.target.closest(SEL_IMG);
         if (
@@ -1004,10 +1100,8 @@
           e.target.closest("#gv-p-root")
         )
           return;
-
         e.preventDefault();
         e.stopPropagation();
-
         if (img.classList.contains("expanded")) {
           img.classList.remove("expanded");
           if (img.dataset.origThumb) {
@@ -1025,56 +1119,55 @@
         }
       });
 
+      // Duration input logic
       ssInput.addEventListener("change", () => {
         let val = parseInt(ssInput.value, 10);
         if (isNaN(val) || val <= 0) val = 3;
         ssInput.value = val;
         settings.slideshowSeconds = val;
-        if (this._slideshowActive && this._galleryMode !== "video") {
+        if (this._slideshowActive && this._galleryMode !== "video")
           this._startSlideshow();
-        }
       });
       ssInput.addEventListener("keydown", (e) => e.stopPropagation());
 
+      // Combined click handler
       s.addEventListener("click", (e) => {
-        if (this._hasDragged) {
-          setTimeout(() => (this._hasDragged = false), 50);
-          return;
-        }
-
-        if (e.target.closest("#btn-slideshow")) {
-          this._toggleSlideshow();
-          return;
-        }
-
         const btn = e.target.closest(".btn");
-        if (btn) btnActionHandlers[btn.dataset.action]?.();
-        if (["overlay", "media-container"].includes(e.target.id))
-          this.closeGallery();
-      });
+        const btnSs = e.target.closest(".btn-ss");
+        const btnSlideshow = e.target.closest("#btn-slideshow");
 
-      s.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          const btn = e.target.closest(".btn");
-          if (btn) {
-            e.preventDefault();
-            btnActionHandlers[btn.dataset.action]?.();
-          }
-          if (e.target.closest("#btn-slideshow")) {
-            e.preventDefault();
-            this._toggleSlideshow();
-          }
+        const onOverlay =
+          e.target.id === "overlay" || e.target.id === "media-container";
+        const onMedia = e.target.closest("img, video, iframe");
+        const onControls = e.target.closest(".counter-row, .z-hint");
+
+        if (onOverlay && !onMedia && !onControls) {
+          this.closeGallery();
+          return;
+        }
+
+        if (btn && btn.dataset.action) {
+          btnActionHandlers[btn.dataset.action]?.();
+        } else if (btnSlideshow) {
+          this._toggleSlideshow();
+        } else if (btnSs) {
+          let val = parseInt(ssInput.value, 10);
+          if (isNaN(val)) val = 1;
+          if (btnSs.dataset.action === "ss-inc" && val < 9) val++;
+          if (btnSs.dataset.action === "ss-dec" && val > 1) val--;
+          ssInput.value = val;
+          settings.slideshowSeconds = val;
+          if (this._slideshowActive) this._startSlideshow();
         }
       });
 
+      // Dragging logic
       const dragTarget = this.isMobile ? panel : s.getElementById("gv-drag");
-
       dragTarget.addEventListener("pointerdown", (e) => {
-        if (e.target.closest(".btn")) return;
+        if (e.target.closest(".btn, .btn-ss, #ss-duration")) return;
         const startX = e.clientX - panel.offsetLeft;
         const startY = e.clientY - panel.offsetTop;
         dragTarget.setPointerCapture(e.pointerId);
-
         const move = (m) => {
           panel.style.left = `${m.clientX - startX}px`;
           panel.style.top = `${m.clientY - startY}px`;
@@ -1086,13 +1179,13 @@
           dragTarget.removeEventListener("pointermove", move);
           dragTarget.removeEventListener("pointerup", up);
         };
-
         dragTarget.addEventListener("pointermove", move);
         dragTarget.addEventListener("pointerup", up);
       });
 
       this._updatePanelOrientation(panel);
 
+      // Overlay wheel
       overlay.addEventListener(
         "wheel",
         (e) => {
@@ -1101,15 +1194,12 @@
           )
             return;
           e.preventDefault();
-
           if (e.buttons === 2) {
             this._applyZoom(
               this._scale + (e.deltaY < 0 ? this._zoomStep : -this._zoomStep),
             );
           } else if (Math.abs(e.deltaY) > 30) {
-            const dir = e.deltaY > 0 ? 1 : -1;
-            this._stopSlideshow();
-            this._navigateGallery(this._galleryMode, dir);
+            this._navigateGallery(this._galleryMode, e.deltaY > 0 ? 1 : -1);
           }
         },
         { passive: false },
@@ -1130,7 +1220,6 @@
           return;
         e.preventDefault();
         this._isPanning = true;
-        this._hasDragged = false;
         this._panStart.x = e.clientX - this._panOffset.x;
         this._panStart.y = e.clientY - this._panOffset.y;
         e.target.classList.add("dragging");
@@ -1138,7 +1227,6 @@
 
       overlay.addEventListener("mousemove", (e) => {
         if (!this._isPanning) return;
-        this._hasDragged = true;
         this._panOffset.x = e.clientX - this._panStart.x;
         this._panOffset.y = e.clientY - this._panStart.y;
         this._clampPan();
@@ -1155,45 +1243,20 @@
       overlay.addEventListener("mouseleave", stopMousePan);
     },
 
-    // ─── Unified Gallery Navigation ──────────────────────────────────────────
-    openGallery(dir = 0) {
-      this._navigateGallery("main", dir);
-    },
-    openVideoGallery(dir = 0) {
-      this._navigateGallery("video", dir);
-    },
-    openFullGallery(dir = 0) {
-      this._navigateGallery("full", dir);
-    },
+    // ── Gallery navigation ───────────────────────────────────────────────────
 
     async _navigateGallery(mode, dir = 0) {
       this._galleryMode = mode;
       const isAutoTick = dir === "slideshow_tick";
       if (dir !== 0 && !isAutoTick) this._stopSlideshow();
 
-      const ssInputWrapper = this.shadow.getElementById("ss-input-wrapper");
-      if (ssInputWrapper)
-        ssInputWrapper.style.display = mode === "video" ? "none" : "";
+      if (!this._xpageLocked) this.refreshMediaPipelines();
 
-      if (!this._xpageLocked) {
-        this.refreshMediaPipelines();
-      }
-
-      let list, currentIdxProp, fetchType;
-      if (mode === "video") {
-        list = this._videoList;
-        currentIdxProp = "_videoIdx";
-        fetchType = "video";
-      } else if (mode === "full") {
-        list = this._fullList;
-        currentIdxProp = "_fullIdx";
-        fetchType = "full";
-      } else {
-        list = this.mediaList;
-        currentIdxProp = "zoomIdx";
-        fetchType = "image";
-      }
-
+      const {
+        list,
+        idxProp: currentIdxProp,
+        fetchType,
+      } = this._getModeConfig(mode);
       if (!list || !list.length) return;
 
       if (dir === 0 && !this._xpageLocked) {
@@ -1203,22 +1266,10 @@
       const numDir = isAutoTick ? 1 : dir;
       const nextIdx = (this[currentIdxProp] || 0) + numDir;
 
-      if (ssInputWrapper && mode === "full") {
-        const activeNode =
-          list[
-            numDir === 0
-              ? this[currentIdxProp]
-              : (nextIdx + list.length) % list.length
-          ];
-        ssInputWrapper.style.display =
-          activeNode && activeNode.tagName !== "IMG" ? "none" : "";
-      }
-
       if (numDir > 0 && nextIdx >= list.length) {
         await this._handlePageBoundary(1, fetchType, currentIdxProp);
         return;
       }
-
       if (numDir < 0 && nextIdx < 0) {
         await this._handlePageBoundary(-1, fetchType, currentIdxProp);
         return;
@@ -1228,107 +1279,88 @@
         numDir === 0
           ? this[currentIdxProp]
           : (nextIdx + list.length) % list.length;
+
       await this._renderMedia(
         list[this[currentIdxProp]],
         this[currentIdxProp],
         list.length,
       );
-
       if (this._slideshowActive) this._evaluateActiveAutoplayContext();
     },
 
     async _handlePageBoundary(dir, fetchType, currentIdxProp) {
-      const url = this._getAdjacentPageUrl(dir);
+      let attempts = 0;
+      let currentScanUrl = this._xpageUrl || window.location.href;
       const liveUrlClean = window.location.href.split("#")[0];
-      const currentList = this._getListRef(fetchType);
 
-      if (!url) {
-        let targetUrl;
-        if (dir > 0) {
-          targetUrl = this._getFirstPageUrl();
-        } else {
-          const maxPage = this._getMaxPage();
-          const base = this._getFirstPageUrl();
-          if (maxPage <= 1) {
-            targetUrl = base;
+      while (attempts < 10) {
+        attempts++;
+        let nextUrl = this._getAdjacentPageUrl(dir, currentScanUrl);
+
+        if (!nextUrl) {
+          if (dir > 0) {
+            nextUrl = this._getFirstPageUrl();
           } else {
-            const qIdx = base.indexOf("?");
-            const path = qIdx > -1 ? base.substring(0, qIdx) : base;
-            const query = qIdx > -1 ? base.substring(qIdx) : "";
-            const sep = path.endsWith("/") ? "" : "/";
-            targetUrl = `${path}${sep}page-${maxPage}${query}`;
+            const maxPage = this._getMaxPage();
+            const base = this._getFirstPageUrl();
+            if (maxPage <= 1) {
+              nextUrl = base;
+            } else {
+              const sep = base.endsWith("/") ? "" : "/";
+              nextUrl = `${base}${sep}page-${maxPage}`;
+            }
           }
         }
 
-        const currentGalleryUrl = (
-          this._xpageUrl || window.location.href
-        ).split("#")[0];
-
-        if (targetUrl === currentGalleryUrl) {
-          this[currentIdxProp] = dir > 0 ? 0 : currentList.length - 1;
-          await this._renderMedia(
-            currentList[this[currentIdxProp]],
-            this[currentIdxProp],
-            currentList.length,
-          );
-        } else if (targetUrl === liveUrlClean) {
-          this._resetPageLockAndRender(currentIdxProp, dir > 0 ? 0 : -1);
-        } else {
-          this._showCrossPageHint(
-            `Wrapping to ${dir > 0 ? "page 1" : "last page"}…`,
-          );
-          await this._fetchAndRenderNewPage(
-            targetUrl,
-            fetchType,
-            currentIdxProp,
-            dir > 0 ? 0 : -1,
-          );
-        }
-      } else {
-        const targetClean = url.split("#")[0];
-        if (targetClean === liveUrlClean) {
-          this._resetPageLockAndRender(currentIdxProp, dir > 0 ? 0 : -1);
-        } else {
-          this._showCrossPageHint(
-            `Loading ${dir > 0 ? "next" : "previous"} page…`,
-          );
-          await this._fetchAndRenderNewPage(
-            url,
-            fetchType,
-            currentIdxProp,
-            dir > 0 ? 0 : -1,
-          );
-        }
-      }
-      if (this._slideshowActive) this._evaluateActiveAutoplayContext();
-    },
-
-    async _fetchAndRenderNewPage(url, fetchType, currentIdxProp, defaultIdx) {
-      const items = await this._fetchPageMedia(url, fetchType);
-      if (items.length) {
-        this._updateListRef(fetchType, items);
-        this[currentIdxProp] = defaultIdx === -1 ? items.length - 1 : 0;
-        this._xpageLocked = true;
-        this._xpageUrl = url;
-        await this._renderMedia(
-          items[this[currentIdxProp]],
-          this[currentIdxProp],
-          items.length,
+        const targetClean = nextUrl.split("#")[0];
+        this._showCrossPageHint(
+          `Scanning page ${this._parsePageNum(nextUrl) || 1}…`,
         );
+        const items = await this._fetchPageMedia(nextUrl, fetchType);
+
+        if (items.length > 0) {
+          if (targetClean === liveUrlClean) {
+            this._resetPageLockAndRender(
+              currentIdxProp,
+              fetchType,
+              dir > 0 ? 0 : -1,
+            );
+          } else {
+            this._updateListRef(fetchType, items);
+            this[currentIdxProp] = dir > 0 ? 0 : items.length - 1;
+            this._xpageLocked = true;
+            this._xpageUrl = nextUrl;
+            await this._renderMedia(
+              items[this[currentIdxProp]],
+              this[currentIdxProp],
+              items.length,
+            );
+          }
+          if (this._slideshowActive) this._evaluateActiveAutoplayContext();
+          return;
+        }
+
+        currentScanUrl = nextUrl;
       }
+
+      this._showCrossPageHint("Stopped scanning (no media found recently).");
+      this._stopSlideshow();
+
+      setTimeout(() => {
+        const list = this._getListRef(fetchType);
+        const idx = this[currentIdxProp];
+        const counter = this.shadow.getElementById("gv-counter");
+        if (counter && list && list.length) {
+          counter.innerHTML = this._buildCounterHTML(idx, list.length);
+        }
+      }, 2500);
     },
 
-    _resetPageLockAndRender(currentIdxProp, defaultIdx) {
+    _resetPageLockAndRender(currentIdxProp, fetchType, defaultIdx) {
       this._xpageLocked = false;
       this._xpageUrl = null;
       this.refreshMediaPipelines();
-      const list = this._getListRef(
-        currentIdxProp === "_videoIdx"
-          ? "video"
-          : currentIdxProp === "_fullIdx"
-            ? "full"
-            : "image",
-      );
+      const list = this._getListRef(fetchType);
       if (!list || !list.length) return;
       this[currentIdxProp] = defaultIdx === -1 ? list.length - 1 : 0;
       this._renderMedia(
@@ -1338,19 +1370,7 @@
       );
     },
 
-    _updateListRef(fetchType, items) {
-      if (fetchType === "video") this._videoList = items;
-      else if (fetchType === "full") this._fullList = items;
-      else this.mediaList = items;
-    },
-
-    _getListRef(fetchType) {
-      if (fetchType === "video") return this._videoList;
-      if (fetchType === "full") return this._fullList;
-      return this.mediaList;
-    },
-
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Media rendering ──────────────────────────────────────────────────────
 
     _renderMedia: async function (current, idx, total) {
       const overlay = this.shadow.getElementById("overlay");
@@ -1410,17 +1430,14 @@
           el.setAttribute("playsinline", "");
           el.volume = settings.videoVolume;
           el.muted = settings.videoMuted;
-
           el.addEventListener("volumechange", () => {
             settings.videoVolume = el.volume;
             settings.videoMuted = el.muted;
           });
-
           el.addEventListener("ended", () => {
             if (this._slideshowActive)
               this._navigateGallery(this._galleryMode, "slideshow_tick");
           });
-
           container.appendChild(el);
           el.play().catch(() => {
             el.muted = true;
@@ -1450,13 +1467,13 @@
         }
       }
 
+      // Hide slideshow duration input for non-image media
       const ssInputWrapper = this.shadow.getElementById("ss-input-wrapper");
       if (ssInputWrapper)
-        ssInputWrapper.style.display =
-          current && current.tagName !== "IMG" ? "none" : "";
+        ssInputWrapper.style.display = current.tagName !== "IMG" ? "none" : "";
 
-      this.shadow.getElementById("gv-counter").textContent =
-        `${idx + 1} / ${total}`;
+      this.shadow.getElementById("gv-counter").innerHTML =
+        this._buildCounterHTML(idx, total);
       this._updateSlideshowButton();
     },
 
@@ -1481,6 +1498,8 @@
       window.focus();
     },
 
+    // ── Global keyboard events ───────────────────────────────────────────────
+
     setupGlobalEvents() {
       window.addEventListener(
         "keydown",
@@ -1498,7 +1517,7 @@
 
           if (key === "g") {
             e.preventDefault();
-            this.openGallery(0);
+            this._navigateGallery("main", 0);
             return;
           }
           if (key === "x") {
@@ -1508,12 +1527,12 @@
           }
           if (key === "v") {
             e.preventDefault();
-            this.openVideoGallery(0);
+            this._navigateGallery("video", 0);
             return;
           }
           if (key === "f") {
             e.preventDefault();
-            this.openFullGallery(0);
+            this._navigateGallery("full", 0);
             return;
           }
 
@@ -1525,21 +1544,16 @@
               return;
             }
 
-            const shiftDir = (dir) => {
-              this._stopSlideshow();
-              this._navigateGallery(this._galleryMode, dir);
-            };
-
             const actions = {
               escape: () => this.closeGallery(),
               w: () => this.closeGallery(),
               s: () => this.closeGallery(),
               arrowup: () => this.closeGallery(),
               arrowdown: () => this.closeGallery(),
-              a: () => shiftDir(-1),
-              arrowleft: () => shiftDir(-1),
-              d: () => shiftDir(1),
-              arrowright: () => shiftDir(1),
+              a: () => this._navigateGallery(this._galleryMode, -1),
+              arrowleft: () => this._navigateGallery(this._galleryMode, -1),
+              d: () => this._navigateGallery(this._galleryMode, 1),
+              arrowright: () => this._navigateGallery(this._galleryMode, 1),
             };
 
             if (actions[key]) {
