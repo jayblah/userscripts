@@ -362,6 +362,9 @@
     }
 
     .pp_decoder_btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border: none;
       padding: 0 12px;
       height: 26px;
@@ -370,6 +373,7 @@
       font-size: 10px;
       font-weight: 700;
       transition: filter 0.1s;
+      line-height: 1;
     }
 
     .pp_selection_popup {

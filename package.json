@@ -1,6 +1,0 @@
-{
-  "devDependencies": {
-    "prettier-plugin-embed": "^0.5.1",
-    "prettier-plugin-organize-imports": "^4.3.0"
-  }
-}

@@ -23,6 +23,7 @@
 
   // Unified styling
   const APP_THEME = "#3db7c7";
+  const APP_DIM = "#b8f7ff";
   const APP_NAME = "XF View™";
   const APP_SHORT = "XF™";
 
@@ -47,7 +48,7 @@
         "iframe[src*='gofile']",
         "iframe",
       ].join(", ")
-    : 'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], div[onclick*="redgifs.com"]';
+    : 'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], iframe[src*="turbo"], div[onclick*="redgifs.com"]';
 
   // ── Settings persistence ────────────────────────────────────────────────
   const siteKey = IS_F95 ? "f95" : "sc";
@@ -288,20 +289,20 @@
         }
         .counter {
           color: var(--theme); font-weight: 800; background: rgba(0,0,0,0.8);
-          padding: 5px 15px; border-radius: 20px; border: 1px solid #333;
+          padding: 5px 15px; border-radius: 20px; border: none;
           white-space: nowrap; font-size: 13px;
           height: 22px; display: flex; align-items: center;
         }
-        .counter .dim { opacity: 0.85; font-weight: 600; }
+        .dim { color: ${APP_DIM}; }
 
         .slideshow-ctrl {
           display: flex; align-items: center; background: rgba(0,0,0,0.8);
-          border: 1px solid #333; border-radius: 20px; padding: 2px;
+          border: none; border-radius: 20px; padding: 2px;
           gap: 0; transition: all var(--t);
         }
         #btn-slideshow {
           width: 32px; height: 32px; border-radius: 50%;
-          background: #111; border: 1px solid #222;
+          background: #111;
           display: flex; align-items: center; justify-content: center;
           cursor: pointer; transition: all var(--t); flex-shrink: 0;
           color: #aaa; position: relative;
@@ -563,17 +564,12 @@
     },
 
     // ── Media pipeline helpers ───────────────────────────────────────────────
-
     refreshMediaPipelines() {
       this.mediaList = this._filterVisibleElements(SEL_IMG);
       this._videoList = [...new Set(this._filterVisibleElements(SEL_VID))];
-
-      const seen = new Set();
-      this._fullList = [...this.mediaList, ...this._videoList].filter((el) => {
-        if (seen.has(el)) return false;
-        seen.add(el);
-        return true;
-      });
+      this._fullList = [
+        ...new Set(this._filterVisibleElements(`${SEL_IMG}, ${SEL_VID}`)),
+      ];
     },
 
     // Returns the canonical config for a given gallery mode.
@@ -606,11 +602,10 @@
       const currentPage =
         this._parsePageNum(this._xpageUrl || window.location.href) || 1;
       const maxPage = Math.max(currentPage, this._getMaxPage());
-      return `pg.&nbsp; <span class="dim">${currentPage}</span>&nbsp; / &nbsp;${maxPage} &nbsp;—&nbsp; <span class="dim">${idx + 1}</span>&nbsp; / &nbsp;${total}`;
+      return `pg.&nbsp; <span class="dim">${currentPage}</span>&nbsp; / &nbsp;${maxPage}&nbsp; — &nbsp;<span class="dim">${idx + 1}</span>&nbsp; / &nbsp;${total}`;
     },
 
     // ── Expand / Collapse ────────────────────────────────────────────────────
-
     toggleExpand() {
       this.isExpanded = !this.isExpanded;
       document.querySelectorAll(SEL_IMG).forEach((img) => {
@@ -639,7 +634,6 @@
     },
 
     // ── Slideshow ────────────────────────────────────────────────────────────
-
     _getInterval() {
       const input = this.shadow.getElementById("ss-duration");
       let secs = parseInt(input?.value, 10);
@@ -754,7 +748,6 @@
     },
 
     // ── Cross-page fetching ──────────────────────────────────────────────────
-
     _fetchTurboCDNSrc(iframeEl) {
       return new Promise((resolve) => {
         if (IS_F95) return resolve(null);
@@ -895,7 +888,6 @@
     },
 
     // ── Unseen tracking ──────────────────────────────────────────────────────
-
     _trackInitialUnseenPosition() {
       const unreadAnchor = document.querySelector(
         ".u-anchorTarget#unread, .message.is-unread, .message--new",
@@ -931,7 +923,6 @@
     },
 
     // ── Zoom / pan ───────────────────────────────────────────────────────────
-
     _getZoomTarget() {
       return (
         this.shadow.getElementById("media-container")?.querySelector("img") ??
@@ -961,16 +952,16 @@
     _clampPan() {
       const img = this._getZoomTarget();
       if (!img) return;
+
       const maxX = Math.max(
         0,
-        (img.naturalWidth * this._scale - window.innerWidth) / 2 / this._scale,
+        (img.clientWidth * this._scale - window.innerWidth) / 2,
       );
       const maxY = Math.max(
         0,
-        (img.naturalHeight * this._scale - window.innerHeight) /
-          2 /
-          this._scale,
+        (img.clientHeight * this._scale - window.innerHeight) / 2,
       );
+
       this._panOffset.x = Math.min(maxX, Math.max(-maxX, this._panOffset.x));
       this._panOffset.y = Math.min(maxY, Math.max(-maxY, this._panOffset.y));
     },
@@ -988,7 +979,6 @@
     },
 
     // ── Touch handling ───────────────────────────────────────────────────────
-
     handleTouchStart(e) {
       if (e.touches.length === 2) {
         this._isPinching = true;
@@ -1015,6 +1005,7 @@
           this._isPanning = true;
           this._panStart.x = t.clientX - this._panOffset.x;
           this._panStart.y = t.clientY - this._panOffset.y;
+          this._edgeSwipeDelta = 0;
         } else {
           this._isPanning = false;
         }
@@ -1035,9 +1026,32 @@
       } else if (e.touches.length === 1 && this._isPanning) {
         e.preventDefault();
         const t = e.touches[0];
-        this._panOffset.x = t.clientX - this._panStart.x;
-        this._panOffset.y = t.clientY - this._panStart.y;
-        this._clampPan();
+
+        // 1. Calculate the intended un-clamped coordinates first
+        const targetX = t.clientX - this._panStart.x;
+        const targetY = t.clientY - this._panStart.y;
+
+        // 2. Determine if the user is dragging past the horizontal bounds
+        const img = this._getZoomTarget();
+        if (img) {
+          const maxX = Math.max(
+            0,
+            (img.clientWidth * this._scale - window.innerWidth) / 2,
+          );
+
+          if (targetX > maxX) {
+            this._edgeSwipeDelta = targetX - maxX; // Dragging right past the left edge
+          } else if (targetX < -maxX) {
+            this._edgeSwipeDelta = targetX + maxX; // Dragging left past the right edge
+          } else {
+            this._edgeSwipeDelta = 0; // Still inside image bounds
+          }
+        }
+
+        // 3. Apply the coordinates, clamp them, and render
+        this._panOffset.x = targetX;
+        this._panOffset.y = targetY;
+        this._clampPan(); // Uses your new layout-based clientWidth calculation
         this._applyTransform();
       }
     },
@@ -1051,10 +1065,31 @@
         }
         return;
       }
+
       if (this._isPanning) {
-        if (e.touches.length === 0) this._isPanning = false;
+        if (e.touches.length === 0) {
+          this._isPanning = false;
+
+          // ─── EDGE RESISTANCE CHECK ──────────────────────────────────────────
+          const SWIPE_THRESHOLD = 60; // Min pixels past the edge required to swipe
+          if (Math.abs(this._edgeSwipeDelta) > SWIPE_THRESHOLD) {
+            // Dragging right past left edge (delta > 0) -> Prev item (-1)
+            // Dragging left past right edge (delta < 0) -> Next item (1)
+            const direction = this._edgeSwipeDelta > 0 ? -1 : 1;
+
+            // Clean up tracking and reset zoom states for the next item
+            this._edgeSwipeDelta = 0;
+            this._scale = 1;
+            this._panOffset = { x: 0, y: 0 };
+
+            this._navigateGallery(this._galleryMode, direction);
+            return;
+          }
+          // ───────────────────────────────────────────────────────────────────
+        }
         return;
       }
+
       if (e.target.closest("#gv-slideshow-ctrl")) return;
       const xEnd = e.changedTouches[0].screenX;
       const yEnd = e.changedTouches[0].screenY;
@@ -1071,7 +1106,6 @@
     },
 
     // ── Event binding ────────────────────────────────────────────────────────
-
     bindInternalEvents() {
       const s = this.shadow;
       const panel = s.getElementById("gv-panel");
@@ -1244,7 +1278,6 @@
     },
 
     // ── Gallery navigation ───────────────────────────────────────────────────
-
     async _navigateGallery(mode, dir = 0) {
       this._galleryMode = mode;
       const isAutoTick = dir === "slideshow_tick";
@@ -1371,7 +1404,6 @@
     },
 
     // ── Media rendering ──────────────────────────────────────────────────────
-
     _renderMedia: async function (current, idx, total) {
       const overlay = this.shadow.getElementById("overlay");
       const container = this.shadow.getElementById("media-container");
@@ -1499,7 +1531,6 @@
     },
 
     // ── Global keyboard events ───────────────────────────────────────────────
-
     setupGlobalEvents() {
       window.addEventListener(
         "keydown",
