@@ -633,10 +633,10 @@
     _wakeLock: null,
 
     async _acquireWakeLock() {
-      if (!('wakeLock' in navigator)) return;
+      if (!("wakeLock" in navigator)) return;
       try {
-        this._wakeLock = await navigator.wakeLock.request('screen');
-        this._wakeLock.addEventListener('release', () => {
+        this._wakeLock = await navigator.wakeLock.request("screen");
+        this._wakeLock.addEventListener("release", () => {
           this._wakeLock = null;
         });
       } catch {}
