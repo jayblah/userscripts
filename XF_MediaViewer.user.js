@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      1.7
+// @version      1.8
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -21,7 +21,6 @@
   // ── Environment Flags ───────────────────────────────────────────────────
   const IS_F95 = window.location.hostname.includes("f95zone.to");
 
-  // Unified styling
   const APP_THEME = "#3db7c7";
   const APP_DIM = "#b8f7ff";
   const APP_NAME = "XF View™";
@@ -49,6 +48,9 @@
         "iframe",
       ].join(", ")
     : 'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], iframe[src*="turbo"], div[onclick*="redgifs.com"]';
+
+  // Combined selector reused across pipelines
+  const SEL_FULL = `${SEL_IMG}, ${SEL_VID}`;
 
   // ── Settings persistence ────────────────────────────────────────────────
   const siteKey = IS_F95 ? "f95" : "sc";
@@ -91,7 +93,7 @@
     _touchStart: { x: 0, y: 0 },
     _lastTap: 0,
     _decodeAbort: null,
-    _galleryMode: "main", // "main" (images), "video", or "full"
+    _galleryMode: "main", // "main" | "video" | "full"
     isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
       .matches,
     _scale: 1,
@@ -112,6 +114,9 @@
     _slideshowActive: false,
     _mediaListenerAbort: null,
 
+    // ── Cached shadow-DOM element references (populated in bindInternalEvents) ──
+    _el: {},
+
     init() {
       this.injectGlobalStyles();
       this.createHost();
@@ -122,17 +127,11 @@
 
       let debounceTimeout = null;
       this._observer = new MutationObserver((mutations) => {
-        const hasRelevantNodes = mutations.some((m) => m.addedNodes.length > 0);
-        if (!hasRelevantNodes) return;
-        if (debounceTimeout) clearTimeout(debounceTimeout);
+        if (!mutations.some((m) => m.addedNodes.length > 0)) return;
+        clearTimeout(debounceTimeout);
         debounceTimeout = setTimeout(() => {
-          this._observer.disconnect();
           this.processInlineElements();
           this.refreshMediaPipelines();
-          this._observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-          });
         }, 200);
       });
       this._observer.observe(document.body, { childList: true, subtree: true });
@@ -365,24 +364,19 @@
     _getModelName() {
       const h1 = document.querySelector("h1.p-title-value");
       if (!h1) return "";
-      let name = "";
       for (const node of h1.childNodes) {
         if (node.nodeType === Node.TEXT_NODE) {
           const text = node.textContent.trim();
-          if (text) name = text;
+          if (text) return text;
         }
       }
-      return name;
+      return "";
     },
 
     renderBase() {
-      const defaultTop = settings.panelTop;
-      const defaultLeft = settings.panelLeft;
-
       const modelName = this._getModelName();
-
       this.shadow.innerHTML = `
-        <div class="panel" id="gv-panel" style="top: ${defaultTop}; left: ${defaultLeft}">
+        <div class="panel" id="gv-panel" style="top: ${settings.panelTop}; left: ${settings.panelLeft}">
           <div class="header" id="gv-drag">
             <span class="lbl-full">${APP_NAME}</span>
             <span class="lbl-short">${APP_SHORT}</span>
@@ -447,26 +441,24 @@
     },
 
     updateUI() {
-      const btnExpand = this.shadow.getElementById("btn-expand");
+      const btnExpand =
+        this._el.btnExpand || this.shadow.getElementById("btn-expand");
       btnExpand.innerHTML = this.isExpanded
         ? "<span class='lbl-full'>COLLAPSE ALL</span><span class='lbl-short'>COL</span>"
         : "<span class='lbl-full'>E<u>X</u>PAND ALL</span><span class='lbl-short'>EXP</span>";
     },
 
     _clampPanelToScreen(panel) {
-      // Defer one frame so offsetWidth/Height are available after layout
       requestAnimationFrame(() => {
         const panelW = panel.offsetWidth;
         const panelH = panel.offsetHeight;
         if (!panelW || !panelH) return;
         const maxLeft = window.innerWidth - panelW;
         const maxTop = window.innerHeight - panelH;
-        const curLeft = panel.offsetLeft;
-        const curTop = panel.offsetTop;
-        const clampedLeft = Math.min(maxLeft, Math.max(0, curLeft));
-        const clampedTop = Math.min(maxTop, Math.max(0, curTop));
-        if (clampedLeft !== curLeft) panel.style.left = `${clampedLeft}px`;
-        if (clampedTop !== curTop) panel.style.top = `${clampedTop}px`;
+        const newLeft = Math.min(maxLeft, Math.max(0, panel.offsetLeft));
+        const newTop = Math.min(maxTop, Math.max(0, panel.offsetTop));
+        if (newLeft !== panel.offsetLeft) panel.style.left = `${newLeft}px`;
+        if (newTop !== panel.offsetTop) panel.style.top = `${newTop}px`;
       });
     },
 
@@ -487,22 +479,19 @@
           if (src) return src;
         }
         return img.src;
-      } else {
-        return img.src.replace(/\.(md|th)\.(jpg|webp)$/i, ".$2");
       }
+      return img.src.replace(/\.(md|th)\.(jpg|webp)$/i, ".$2");
     },
 
-    cleanAttr(str) {
-      return str.replace(/\.(md|th)(?=\.)/, "");
-    },
+    cleanAttr: (str) => str.replace(/\.(md|th)(?=\.)/, ""),
 
     processInlineElements() {
       document
-        .querySelectorAll(SEL_IMG + ":not([data-processed-thumb])")
+        .querySelectorAll(`${SEL_IMG}:not([data-processed-thumb])`)
         .forEach((img) => {
           if (!IS_F95 && /\.(md|th)\.(jpg|webp)$/i.test(img.src)) {
-            if (img.title) img.title = this.cleanAttr(img.title);
-            if (img.alt) img.alt = this.cleanAttr(img.alt);
+            if (img.title) img.title = App.cleanAttr(img.title);
+            if (img.alt) img.alt = App.cleanAttr(img.alt);
           }
           img.setAttribute("data-processed-thumb", "true");
         });
@@ -515,10 +504,9 @@
           header.setAttribute("data-processed-btn", "true");
           if (header.querySelector(".sc-expand-btn")) return;
 
-          const messageMain = header.closest(".message-main");
-          const lbContainer = messageMain?.querySelector(
-            ".js-lbContainer, .lbContainer",
-          );
+          const lbContainer = header
+            .closest(".message-main")
+            ?.querySelector(".js-lbContainer, .lbContainer");
           if (!lbContainer) return;
 
           const btn = document.createElement("button");
@@ -529,9 +517,10 @@
           btn.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const images = lbContainer.querySelectorAll(SEL_IMG);
             const expanding = !btn.classList.contains("is-expanded");
-            images.forEach((img) => this._applyImageExpand(img, expanding));
+            lbContainer
+              .querySelectorAll(SEL_IMG)
+              .forEach((img) => this._applyImageExpand(img, expanding));
             btn.classList.toggle("is-expanded", expanding);
             btn.textContent = expanding ? "⊟ COL" : "⊞ EXP";
             btn.title = expanding
@@ -545,23 +534,24 @@
         });
     },
 
-    _filterVisibleElements(selector) {
-      return Array.from(document.querySelectorAll(selector)).filter((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 || rect.height > 0 || el.tagName === "DIV";
+    _filterVisible(elements) {
+      return elements.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 || r.height > 0 || el.tagName === "DIV";
       });
     },
 
-    // ── Media pipeline helpers ───────────────────────────────────────────────
+    // ── Media pipeline ───────────────────────────────────────────────────────
     refreshMediaPipelines() {
-      this.mediaList = this._filterVisibleElements(SEL_IMG);
-      this._videoList = [...new Set(this._filterVisibleElements(SEL_VID))];
-      this._fullList = [
-        ...new Set(this._filterVisibleElements(`${SEL_IMG}, ${SEL_VID}`)),
-      ];
+      // Single DOM pass — split into three lists in one shot
+      const all = this._filterVisible(
+        Array.from(document.querySelectorAll(SEL_FULL)),
+      );
+      this._fullList = [...new Set(all)];
+      this.mediaList = all.filter((el) => el.matches(SEL_IMG));
+      this._videoList = [...new Set(all.filter((el) => el.matches(SEL_VID)))];
     },
 
-    // Returns the canonical config for a given gallery mode.
     _getModeConfig(mode) {
       if (mode === "video")
         return {
@@ -586,12 +576,17 @@
       return this.mediaList;
     },
 
-    // Builds the counter innerHTML string — single source of truth.
     _buildCounterHTML(idx, total) {
       const currentPage =
         this._parsePageNum(this._xpageUrl || window.location.href) || 1;
       const maxPage = Math.max(currentPage, this._getMaxPage());
       return `pg.&nbsp; <span class="dim">${currentPage}</span>&nbsp; / &nbsp;${maxPage}&nbsp; — &nbsp;<span class="dim">${idx + 1}</span>&nbsp; / &nbsp;${total}`;
+    },
+
+    // ── Page lock helpers ────────────────────────────────────────────────────
+    _resetPageLock() {
+      this._xpageLocked = false;
+      this._xpageUrl = null;
     },
 
     // ── Expand / Collapse ────────────────────────────────────────────────────
@@ -613,9 +608,9 @@
 
     toggleExpand() {
       this.isExpanded = !this.isExpanded;
-      document.querySelectorAll(SEL_IMG).forEach((img) => {
-        this._applyImageExpand(img, this.isExpanded);
-      });
+      document
+        .querySelectorAll(SEL_IMG)
+        .forEach((img) => this._applyImageExpand(img, this.isExpanded));
       if (this.isExpanded && !IS_F95) {
         document
           .querySelectorAll('div[onclick*="redgifs.com"]')
@@ -644,6 +639,29 @@
       }
     },
 
+    // ── Ring animation helper (DRY) ──────────────────────────────────────────
+    _resetRing() {
+      const ring = this._el.ring;
+      const ringEl = this._el.ringEl;
+      if (ring) {
+        ring.style.transition = "none";
+        ring.style.strokeDashoffset = "100";
+      }
+      if (ringEl) ringEl.classList.remove("visible");
+    },
+
+    _animateRing(intervalMs) {
+      const ring = this._el.ring;
+      const ringEl = this._el.ringEl;
+      if (!ring) return;
+      ring.style.transition = "none";
+      ring.style.strokeDashoffset = "100";
+      void ring.getBoundingClientRect(); // force reflow
+      ring.style.transition = `stroke-dashoffset ${intervalMs}ms linear`;
+      ring.style.strokeDashoffset = "0";
+      if (ringEl) ringEl.classList.add("visible");
+    },
+
     // ── Slideshow ────────────────────────────────────────────────────────────
     _getInterval() {
       const secs = settings.slideshowSeconds;
@@ -661,30 +679,20 @@
     _evaluateActiveAutoplayContext() {
       if (!this._slideshowActive) return;
 
-      // Cancel any in-flight timer before scheduling a new one. Without this,
-      // manual navigation while autoplay is running stacks timers and causes
-      // double-advances or sub-second skips.
-      if (this._slideshowTimer) {
-        clearTimeout(this._slideshowTimer);
-        this._slideshowTimer = null;
-      }
-      // Also reset the ring animation so it restarts cleanly from the new item.
-      const ring = this.shadow.getElementById("ring-circle");
-      if (ring) {
-        ring.style.transition = "none";
-        ring.style.strokeDashoffset = "100";
-      }
+      // Clear any in-flight timer and reset ring before scheduling a fresh one
+      clearTimeout(this._slideshowTimer);
+      this._slideshowTimer = null;
+      this._resetRing();
 
       const currentItem = this._getActiveMediaNode();
-      const isVideoItem = currentItem && currentItem.tagName !== "IMG";
-
-      if (isVideoItem) {
-        const container = this.shadow.getElementById("media-container");
+      if (currentItem && currentItem.tagName !== "IMG") {
+        // Video path — stop looping so `ended` event fires
+        const container = this._el.container;
         const video = container?.querySelector("video");
         if (video) video.loop = false;
 
-        const iframe = container?.querySelector("iframe");
-        if (iframe) {
+        // Iframes get a generous fallback timer
+        if (container?.querySelector("iframe")) {
           this._slideshowTimer = setTimeout(() => {
             if (this._slideshowActive)
               this._navigateGallery(this._galleryMode, "slideshow_tick");
@@ -697,22 +705,10 @@
 
     _scheduleSlideshowTick() {
       if (!this._slideshowActive) return;
-
-      const currentItem = this._getActiveMediaNode();
-      if (currentItem && currentItem.tagName !== "IMG") return;
+      if (this._getActiveMediaNode()?.tagName !== "IMG") return;
 
       const interval = this._getInterval();
-      const ring = this.shadow.getElementById("ring-circle");
-      if (ring) {
-        ring.style.transition = "none";
-        ring.style.strokeDashoffset = "100";
-        void ring.getBoundingClientRect();
-        ring.style.transition = `stroke-dashoffset ${interval}ms linear`;
-        ring.style.strokeDashoffset = "0";
-      }
-
-      const ringEl = this.shadow.getElementById("slideshow-ring");
-      if (ringEl) ringEl.classList.add("visible");
+      this._animateRing(interval);
 
       this._slideshowTimer = setTimeout(() => {
         if (!this._slideshowActive) return;
@@ -726,39 +722,25 @@
     },
 
     _stopSlideshow() {
-      if (this._slideshowTimer) {
-        clearTimeout(this._slideshowTimer);
-        this._slideshowTimer = null;
-      }
+      clearTimeout(this._slideshowTimer);
+      this._slideshowTimer = null;
       this._slideshowActive = false;
       this._releaseWakeLock();
       this._updateSlideshowButton();
+      this._resetRing();
 
-      const ring = this.shadow.getElementById("ring-circle");
-      if (ring) {
-        ring.style.transition = "none";
-        ring.style.strokeDashoffset = "100";
-      }
-      const ringEl = this.shadow.getElementById("slideshow-ring");
-      if (ringEl) ringEl.classList.remove("visible");
-
-      const video = this.shadow
-        .getElementById("media-container")
-        ?.querySelector("video");
+      const video = this._el.container?.querySelector("video");
       if (video) video.loop = true;
     },
 
     _toggleSlideshow() {
-      if (this._slideshowActive) {
-        this._stopSlideshow();
-      } else {
-        this._startSlideshow();
-      }
+      if (this._slideshowActive) this._stopSlideshow();
+      else this._startSlideshow();
     },
 
     _updateSlideshowButton() {
-      const btn = this.shadow.getElementById("btn-slideshow");
-      const icon = this.shadow.getElementById("slideshow-icon");
+      const btn = this._el.btnSlideshow;
+      const icon = this._el.slideshowIcon;
       if (!btn || !icon) return;
       btn.classList.toggle("active", this._slideshowActive);
       btn.title = this._slideshowActive ? "Pause slideshow" : "Start slideshow";
@@ -767,16 +749,15 @@
         : `<polygon points="3,1 13,7 3,13"/>`;
     },
 
-    // ── Slideshow duration adjustment helper ─────────────────────────────────
+    // ── Slideshow duration adjustment ────────────────────────────────────────
     _adjustSlideshowDuration(delta) {
-      const input = this.shadow.getElementById("ss-duration");
+      const input = this._el.ssDuration;
       if (!input) return;
       let val = parseInt(input.value, 10);
       if (isNaN(val)) val = 3;
       val = Math.min(9, Math.max(1, val + delta));
       input.value = val;
       settings.slideshowSeconds = val;
-      // Restart the tick so the new duration takes effect immediately
       if (this._slideshowActive) this._startSlideshow();
     },
 
@@ -831,26 +812,26 @@
       const jumpInput = document.querySelector(
         'input.js-pageJumpPage, input[name="page"]',
       );
-      if (jumpInput && jumpInput.max) {
+      if (jumpInput?.max) {
         const val = parseInt(jumpInput.max, 10);
-        if (val && val > max) max = val;
+        if (val > max) max = val;
       }
-      const navs = document.querySelectorAll(
-        ".pageNav-main a[href], .pageNav-main li.pageNav-page, .pageNav a[href], .pageNav li.pageNav-page",
-      );
-      navs.forEach((el) => {
-        const num =
-          el.tagName === "A"
-            ? this._parsePageNum(el.href)
-            : parseInt(el.textContent.trim(), 10);
-        if (num && num > max) max = num;
-      });
+      document
+        .querySelectorAll(
+          ".pageNav-main a[href], .pageNav-main li.pageNav-page, .pageNav a[href], .pageNav li.pageNav-page",
+        )
+        .forEach((el) => {
+          const num =
+            el.tagName === "A"
+              ? this._parsePageNum(el.href)
+              : parseInt(el.textContent.trim(), 10);
+          if (num && num > max) max = num;
+        });
       const current = this._parsePageNum(window.location.href);
       if (current && current > max) max = current;
       return max;
     },
 
-    // Returns the base thread URL with page number and fragment stripped.
     _getBaseThreadUrl(url) {
       return (url || window.location.href)
         .replace(/\/page-\d+\/?/, "/")
@@ -875,8 +856,7 @@
         return base.replace(/([?&]page=)\d+/, `$1${targetPage}`);
 
       const cleanBase = this._getBaseThreadUrl(base);
-      const sep = cleanBase.endsWith("/") ? "" : "/";
-      return `${cleanBase}${sep}page-${targetPage}`;
+      return `${cleanBase}${cleanBase.endsWith("/") ? "" : "/"}page-${targetPage}`;
     },
 
     _fetchPageMedia(url, type = "image") {
@@ -886,8 +866,10 @@
           url,
           timeout: 10000,
           onload: (resp) => {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(resp.responseText, "text/html");
+            const doc = new DOMParser().parseFromString(
+              resp.responseText,
+              "text/html",
+            );
             if (type === "video")
               resolve(
                 Array.from(doc.querySelectorAll(SEL_VID)).filter(
@@ -895,9 +877,7 @@
                 ),
               );
             else if (type === "full")
-              resolve(
-                Array.from(doc.querySelectorAll(`${SEL_IMG}, ${SEL_VID}`)),
-              );
+              resolve(Array.from(doc.querySelectorAll(SEL_FULL)));
             else
               resolve(
                 Array.from(doc.querySelectorAll(SEL_IMG)).filter(
@@ -912,8 +892,7 @@
     },
 
     _showCrossPageHint(msg) {
-      const counter = this.shadow.getElementById("gv-counter-text");
-      if (counter) counter.textContent = msg;
+      if (this._el.counterText) this._el.counterText.textContent = msg;
     },
 
     // ── Unseen tracking ──────────────────────────────────────────────────────
@@ -925,8 +904,7 @@
         this._trackedUnseenElement = unreadAnchor.closest(".message");
         return;
       }
-      const messages = document.querySelectorAll(".message");
-      for (const msg of messages) {
+      for (const msg of document.querySelectorAll(".message")) {
         const rect = msg.getBoundingClientRect();
         if (rect.top >= -120 && rect.top <= window.innerHeight) {
           this._trackedUnseenElement = msg;
@@ -936,15 +914,13 @@
     },
 
     _getFirstUnseenIdx(list) {
-      if (!list || !list.length) return 0;
-      const firstUnreadMessage = this._trackedUnseenElement;
-      if (!firstUnreadMessage) return 0;
+      if (!list?.length || !this._trackedUnseenElement) return 0;
       const idx = list.findIndex((el) => {
         const msgParent = el.closest(".message");
         if (!msgParent) return false;
-        if (msgParent === firstUnreadMessage) return true;
+        if (msgParent === this._trackedUnseenElement) return true;
         return !!(
-          firstUnreadMessage.compareDocumentPosition(msgParent) &
+          this._trackedUnseenElement.compareDocumentPosition(msgParent) &
           Node.DOCUMENT_POSITION_FOLLOWING
         );
       });
@@ -953,10 +929,7 @@
 
     // ── Zoom / pan ───────────────────────────────────────────────────────────
     _getZoomTarget() {
-      return (
-        this.shadow.getElementById("media-container")?.querySelector("img") ??
-        null
-      );
+      return this._el.container?.querySelector("img") ?? null;
     },
 
     _applyTransform() {
@@ -981,7 +954,6 @@
     _clampPan() {
       const img = this._getZoomTarget();
       if (!img) return;
-
       const maxX = Math.max(
         0,
         (img.clientWidth * this._scale - window.innerWidth) / 2,
@@ -990,7 +962,6 @@
         0,
         (img.clientHeight * this._scale - window.innerHeight) / 2,
       );
-
       this._panOffset.x = Math.min(maxX, Math.max(-maxX, this._panOffset.x));
       this._panOffset.y = Math.min(maxY, Math.max(-maxY, this._panOffset.y));
     },
@@ -1049,38 +1020,31 @@
           b.clientX - a.clientX,
           b.clientY - a.clientY,
         );
-        const ratio = newDist / this._pinchDist;
+        this._applyZoom(this._scale * (newDist / this._pinchDist));
         this._pinchDist = newDist;
-        this._applyZoom(this._scale * ratio);
       } else if (e.touches.length === 1 && this._isPanning) {
         e.preventDefault();
         const t = e.touches[0];
-
-        // 1. Calculate the intended un-clamped coordinates first
         const targetX = t.clientX - this._panStart.x;
         const targetY = t.clientY - this._panStart.y;
 
-        // 2. Determine if the user is dragging past the horizontal bounds
         const img = this._getZoomTarget();
         if (img) {
           const maxX = Math.max(
             0,
             (img.clientWidth * this._scale - window.innerWidth) / 2,
           );
-
-          if (targetX > maxX) {
-            this._edgeSwipeDelta = targetX - maxX; // Dragging right past the left edge
-          } else if (targetX < -maxX) {
-            this._edgeSwipeDelta = targetX + maxX; // Dragging left past the right edge
-          } else {
-            this._edgeSwipeDelta = 0; // Still inside image bounds
-          }
+          this._edgeSwipeDelta =
+            targetX > maxX
+              ? targetX - maxX
+              : targetX < -maxX
+                ? targetX + maxX
+                : 0;
         }
 
-        // 3. Apply the coordinates, clamp them, and render
         this._panOffset.x = targetX;
         this._panOffset.y = targetY;
-        this._clampPan(); // Uses your new layout-based clientWidth calculation
+        this._clampPan();
         this._applyTransform();
       }
     },
@@ -1098,38 +1062,24 @@
       if (this._isPanning) {
         if (e.touches.length === 0) {
           this._isPanning = false;
-
-          // ─── EDGE RESISTANCE CHECK ──────────────────────────────────────────
-          const SWIPE_THRESHOLD = 60; // Min pixels past the edge required to swipe
-          if (Math.abs(this._edgeSwipeDelta) > SWIPE_THRESHOLD) {
-            // Dragging right past left edge (delta > 0) -> Prev item (-1)
-            // Dragging left past right edge (delta < 0) -> Next item (1)
+          if (Math.abs(this._edgeSwipeDelta) > 60) {
             const direction = this._edgeSwipeDelta > 0 ? -1 : 1;
-
-            // Clean up tracking and reset zoom states for the next item
             this._edgeSwipeDelta = 0;
             this._scale = 1;
             this._panOffset = { x: 0, y: 0 };
-
             this._navigateGallery(this._galleryMode, direction);
-            return;
           }
-          // ───────────────────────────────────────────────────────────────────
         }
         return;
       }
 
       if (e.target.closest("#gv-slideshow-ctrl")) return;
-      const xEnd = e.changedTouches[0].screenX;
-      const yEnd = e.changedTouches[0].screenY;
-      const dx = xEnd - this._touchStart.x;
-      const dy = yEnd - this._touchStart.y;
-      const threshold = 50;
+      const dx = e.changedTouches[0].screenX - this._touchStart.x;
+      const dy = e.changedTouches[0].screenY - this._touchStart.y;
       if (Math.abs(dx) > Math.abs(dy)) {
-        if (Math.abs(dx) > threshold) {
+        if (Math.abs(dx) > 50)
           this._navigateGallery(this._galleryMode, dx > 0 ? -1 : 1);
-        }
-      } else if (Math.abs(dy) > threshold) {
+      } else if (Math.abs(dy) > 50) {
         this.closeGallery();
       }
     },
@@ -1137,9 +1087,23 @@
     // ── Event binding ────────────────────────────────────────────────────────
     bindInternalEvents() {
       const s = this.shadow;
-      const panel = s.getElementById("gv-panel");
-      const overlay = s.getElementById("overlay");
-      const ssInput = s.getElementById("ss-duration");
+
+      // Cache frequently accessed shadow-DOM nodes
+      this._el = {
+        panel: s.getElementById("gv-panel"),
+        overlay: s.getElementById("overlay"),
+        container: s.getElementById("media-container"),
+        counterText: s.getElementById("gv-counter-text"),
+        btnExpand: s.getElementById("btn-expand"),
+        btnSlideshow: s.getElementById("btn-slideshow"),
+        slideshowIcon: s.getElementById("slideshow-icon"),
+        ssInputWrapper: s.getElementById("ss-input-wrapper"),
+        ssDuration: s.getElementById("ss-duration"),
+        ring: s.getElementById("ring-circle"),
+        ringEl: s.getElementById("slideshow-ring"),
+      };
+
+      const { panel, overlay } = this._el;
 
       const btnActionHandlers = {
         top: () => window.scrollTo({ top: 0, behavior: "smooth" }),
@@ -1154,7 +1118,7 @@
         fullgallery: () => this._navigateGallery("full", 0),
       };
 
-      // Inline image click expansion
+      // Inline image click — expand/collapse
       document.body.addEventListener("click", (e) => {
         const img = e.target.closest(SEL_IMG);
         if (
@@ -1168,24 +1132,25 @@
         this._applyImageExpand(img, !img.classList.contains("expanded"));
       });
 
-      // Duration input logic
-      ssInput.addEventListener("change", () => {
-        let val = parseInt(ssInput.value, 10);
+      // Duration input
+      this._el.ssDuration.addEventListener("change", () => {
+        let val = parseInt(this._el.ssDuration.value, 10);
         if (isNaN(val) || val <= 0) val = 3;
-        ssInput.value = val;
+        this._el.ssDuration.value = val;
         settings.slideshowSeconds = val;
         if (this._slideshowActive && this._galleryMode !== "video")
           this._startSlideshow();
       });
-      ssInput.addEventListener("keydown", (e) => e.stopPropagation());
+      this._el.ssDuration.addEventListener("keydown", (e) =>
+        e.stopPropagation(),
+      );
 
-      // Combined click handler
+      // Combined shadow click handler
       s.addEventListener("click", (e) => {
         const btn = e.target.closest(".btn");
         const btnSs = e.target.closest(".btn-ss");
-        const btnSlideshow = e.target.closest("#btn-slideshow");
+        const btnSS = e.target.closest("#btn-slideshow");
         const btnJump = e.target.closest(".btn-jump");
-
         const onOverlay =
           e.target.id === "overlay" || e.target.id === "media-container";
         const onMedia = e.target.closest("img, video, iframe");
@@ -1196,34 +1161,29 @@
           return;
         }
 
-        if (btnJump) {
+        if (btnJump)
           this._jumpToEdge(btnJump.id === "btn-jump-first" ? "first" : "last");
-        } else if (btn && btn.dataset.action) {
-          btnActionHandlers[btn.dataset.action]?.();
-        } else if (btnSlideshow) {
-          this._toggleSlideshow();
-        } else if (btnSs) {
-          const delta = btnSs.dataset.action === "ss-inc" ? 1 : -1;
-          this._adjustSlideshowDuration(delta);
-        }
+        else if (btn?.dataset.action) btnActionHandlers[btn.dataset.action]?.();
+        else if (btnSS) this._toggleSlideshow();
+        else if (btnSs)
+          this._adjustSlideshowDuration(
+            btnSs.dataset.action === "ss-inc" ? 1 : -1,
+          );
       });
 
-      // Dragging logic
+      // Panel drag
       const dragTarget = this.isMobile ? panel : s.getElementById("gv-drag");
       dragTarget.addEventListener("pointerdown", (e) => {
         if (e.target.closest(".btn, .btn-ss, #ss-duration")) return;
         const startX = e.clientX - panel.offsetLeft;
         const startY = e.clientY - panel.offsetTop;
         dragTarget.setPointerCapture(e.pointerId);
+
         const move = (m) => {
-          const panelW = panel.offsetWidth;
-          const panelH = panel.offsetHeight;
-          const maxLeft = window.innerWidth - panelW;
-          const maxTop = window.innerHeight - panelH;
-          const newLeft = Math.min(maxLeft, Math.max(0, m.clientX - startX));
-          const newTop = Math.min(maxTop, Math.max(0, m.clientY - startY));
-          panel.style.left = `${newLeft}px`;
-          panel.style.top = `${newTop}px`;
+          const maxLeft = window.innerWidth - panel.offsetWidth;
+          const maxTop = window.innerHeight - panel.offsetHeight;
+          panel.style.left = `${Math.min(maxLeft, Math.max(0, m.clientX - startX))}px`;
+          panel.style.top = `${Math.min(maxTop, Math.max(0, m.clientY - startY))}px`;
         };
         const up = () => {
           settings.panelLeft = panel.style.left;
@@ -1237,7 +1197,7 @@
 
       this._clampPanelToScreen(panel);
 
-      // Overlay wheel
+      // Overlay wheel (scroll = navigate, right-click+scroll = zoom)
       overlay.addEventListener(
         "wheel",
         (e) => {
@@ -1286,10 +1246,9 @@
       });
 
       const stopMousePan = () => {
-        if (this._isPanning) {
-          this._isPanning = false;
-          this._getZoomTarget()?.classList.remove("dragging");
-        }
+        if (!this._isPanning) return;
+        this._isPanning = false;
+        this._getZoomTarget()?.classList.remove("dragging");
       };
       overlay.addEventListener("mouseup", stopMousePan);
       overlay.addEventListener("mouseleave", stopMousePan);
@@ -1298,56 +1257,41 @@
     // ── Gallery navigation ───────────────────────────────────────────────────
     async _navigateGallery(mode, dir = 0) {
       this._galleryMode = mode;
-      const isAutoTick = dir === "slideshow_tick";
-
-      // FIX: Only stop slideshow on explicit user-initiated navigation
-      // (dir !== 0 used to stop it here — removed; closeGallery / spacebar handle that)
+      const isTick = dir === "slideshow_tick";
 
       if (!this._xpageLocked) this.refreshMediaPipelines();
 
-      const {
-        list,
-        idxProp: currentIdxProp,
-        fetchType,
-      } = this._getModeConfig(mode);
-      if (!list || !list.length) return;
+      const { list, idxProp, fetchType } = this._getModeConfig(mode);
+      if (!list?.length) return;
 
       if (dir === 0 && !this._xpageLocked) {
-        this[currentIdxProp] = this._getFirstUnseenIdx(list);
+        this[idxProp] = this._getFirstUnseenIdx(list);
       }
 
-      const numDir = isAutoTick ? 1 : dir;
-      const nextIdx = (this[currentIdxProp] || 0) + numDir;
+      const numDir = isTick ? 1 : dir;
+      const nextIdx = (this[idxProp] || 0) + numDir;
 
       if (numDir > 0 && nextIdx >= list.length) {
-        await this._handlePageBoundary(1, fetchType, currentIdxProp);
+        await this._handlePageBoundary(1, fetchType, idxProp);
         return;
       }
       if (numDir < 0 && nextIdx < 0) {
-        await this._handlePageBoundary(-1, fetchType, currentIdxProp);
+        await this._handlePageBoundary(-1, fetchType, idxProp);
         return;
       }
 
-      this[currentIdxProp] =
-        numDir === 0
-          ? this[currentIdxProp]
-          : (nextIdx + list.length) % list.length;
+      this[idxProp] =
+        numDir === 0 ? this[idxProp] : (nextIdx + list.length) % list.length;
 
-      await this._renderMedia(
-        list[this[currentIdxProp]],
-        this[currentIdxProp],
-        list.length,
-      );
+      await this._renderMedia(list[this[idxProp]], this[idxProp], list.length);
       if (this._slideshowActive) this._evaluateActiveAutoplayContext();
     },
 
     async _handlePageBoundary(dir, fetchType, currentIdxProp) {
-      let attempts = 0;
-      let currentScanUrl = this._xpageUrl || window.location.href;
       const liveUrlClean = window.location.href.split("#")[0];
+      let currentScanUrl = this._xpageUrl || window.location.href;
 
-      while (attempts < 10) {
-        attempts++;
+      for (let attempts = 0; attempts < 10; attempts++) {
         let nextUrl = this._getAdjacentPageUrl(dir, currentScanUrl);
 
         if (!nextUrl) {
@@ -1356,23 +1300,20 @@
           } else {
             const maxPage = this._getMaxPage();
             const base = this._getBaseThreadUrl();
-            if (maxPage <= 1) {
-              nextUrl = base;
-            } else {
-              const sep = base.endsWith("/") ? "" : "/";
-              nextUrl = `${base}${sep}page-${maxPage}`;
-            }
+            nextUrl =
+              maxPage <= 1
+                ? base
+                : `${base}${base.endsWith("/") ? "" : "/"}page-${maxPage}`;
           }
         }
 
-        const targetClean = nextUrl.split("#")[0];
         this._showCrossPageHint(
           `Scanning page ${this._parsePageNum(nextUrl) || 1}…`,
         );
         const items = await this._fetchPageMedia(nextUrl, fetchType);
 
         if (items.length > 0) {
-          if (targetClean === liveUrlClean) {
+          if (nextUrl.split("#")[0] === liveUrlClean) {
             this._resetPageLockAndRender(
               currentIdxProp,
               fetchType,
@@ -1401,20 +1342,20 @@
 
       setTimeout(() => {
         const list = this._getListRef(fetchType);
-        const idx = this[currentIdxProp];
-        const counter = this.shadow.getElementById("gv-counter-text");
-        if (counter && list && list.length) {
-          counter.innerHTML = this._buildCounterHTML(idx, list.length);
+        if (this._el.counterText && list?.length) {
+          this._el.counterText.innerHTML = this._buildCounterHTML(
+            this[currentIdxProp],
+            list.length,
+          );
         }
       }, 2500);
     },
 
     _resetPageLockAndRender(currentIdxProp, fetchType, defaultIdx) {
-      this._xpageLocked = false;
-      this._xpageUrl = null;
+      this._resetPageLock();
       this.refreshMediaPipelines();
       const list = this._getListRef(fetchType);
-      if (!list || !list.length) return;
+      if (!list?.length) return;
       this[currentIdxProp] = defaultIdx === -1 ? list.length - 1 : 0;
       this._renderMedia(
         list[this[currentIdxProp]],
@@ -1424,15 +1365,15 @@
     },
 
     // ── Media rendering ──────────────────────────────────────────────────────
-    _renderMedia: async function (current, idx, total) {
-      const overlay = this.shadow.getElementById("overlay");
-      const container = this.shadow.getElementById("media-container");
+    async _renderMedia(current, idx, total) {
+      const { overlay, container, counterText, ssInputWrapper } = this._el;
       overlay.style.display = "flex";
       document.body.classList.add("gv-noscroll");
       overlay.focus();
 
-      if (this._decodeAbort) this._decodeAbort.abort();
-      if (this._mediaListenerAbort) this._mediaListenerAbort.abort();
+      // Cancel in-flight decode/listener teardown
+      this._decodeAbort?.abort();
+      this._mediaListenerAbort?.abort();
       this._mediaListenerAbort = null;
       container.replaceChildren();
       this._resetZoom();
@@ -1444,8 +1385,8 @@
         this._decodeAbort = controller;
         try {
           await el.decode();
-          if (controller.signal.aborted) return;
         } catch {}
+        if (controller.signal.aborted) return;
         this._decodeAbort = null;
         container.appendChild(el);
       } else {
@@ -1455,12 +1396,11 @@
             : null;
 
         if (!directSrc) {
-          const directNode =
+          const node =
             current.tagName === "VIDEO"
               ? current
               : current.querySelector("video, source");
-          if (directNode)
-            directSrc = directNode.getAttribute("src") || directNode.src;
+          if (node) directSrc = node.getAttribute("src") || node.src;
         }
 
         const isDirectStream =
@@ -1484,16 +1424,18 @@
           el.setAttribute("playsinline", "");
           el.volume = settings.videoVolume;
           el.muted = settings.videoMuted;
+
           const listenerAbort = new AbortController();
           this._mediaListenerAbort = listenerAbort;
-          const listenerOpts = { signal: listenerAbort.signal };
+          const opts = { signal: listenerAbort.signal };
+
           el.addEventListener(
             "volumechange",
             () => {
               settings.videoVolume = el.volume;
               settings.videoMuted = el.muted;
             },
-            listenerOpts,
+            opts,
           );
           el.addEventListener(
             "ended",
@@ -1501,8 +1443,9 @@
               if (this._slideshowActive)
                 this._navigateGallery(this._galleryMode, "slideshow_tick");
             },
-            listenerOpts,
+            opts,
           );
+
           container.appendChild(el);
           el.play().catch(() => {
             el.muted = true;
@@ -1532,27 +1475,21 @@
         }
       }
 
-      // Hide slideshow duration input for non-image media
-      const ssInputWrapper = this.shadow.getElementById("ss-input-wrapper");
       if (ssInputWrapper)
         ssInputWrapper.style.display = current.tagName !== "IMG" ? "none" : "";
-
-      this.shadow.getElementById("gv-counter-text").innerHTML =
-        this._buildCounterHTML(idx, total);
+      if (counterText)
+        counterText.innerHTML = this._buildCounterHTML(idx, total);
       this._updateSlideshowButton();
     },
 
     // ── Jump to first / last on current page ─────────────────────────────────
     _jumpToEdge(edge) {
-      // Always use the live page list — ignores any cross-page lock so the
-      // user always lands on an item that's actually on the current page.
       if (this._xpageLocked) {
-        this._xpageLocked = false;
-        this._xpageUrl = null;
+        this._resetPageLock();
         this.refreshMediaPipelines();
       }
       const { list, idxProp } = this._getModeConfig(this._galleryMode);
-      if (!list || !list.length) return;
+      if (!list?.length) return;
       this[idxProp] = edge === "first" ? 0 : list.length - 1;
       this._renderMedia(list[this[idxProp]], this[idxProp], list.length);
       if (this._slideshowActive) this._evaluateActiveAutoplayContext();
@@ -1561,10 +1498,9 @@
     closeGallery() {
       this._stopSlideshow();
       this._resetZoom();
-      this._xpageLocked = false;
-      this._xpageUrl = null;
+      this._resetPageLock();
 
-      const container = this.shadow.getElementById("media-container");
+      const { container, overlay } = this._el;
       const video = container.querySelector("video");
       if (video) {
         video.pause();
@@ -1574,7 +1510,7 @@
       const iframe = container.querySelector("iframe");
       if (iframe) iframe.src = "";
       container.replaceChildren();
-      this.shadow.getElementById("overlay").style.display = "none";
+      overlay.style.display = "none";
       document.body.classList.remove("gv-noscroll");
       window.focus();
     },
@@ -1591,70 +1527,58 @@
           )
             return;
 
-          const isVisible =
-            this.shadow.getElementById("overlay").style.display === "flex";
+          const isVisible = this._el.overlay?.style.display === "flex";
           const key = e.key.toLowerCase();
 
-          if (key === "g") {
+          // Global hotkeys (work whether or not gallery is open)
+          const globalActions = {
+            g: () => this._navigateGallery("main", 0),
+            x: () => this.toggleExpand(),
+            v: () => this._navigateGallery("video", 0),
+            f: () => this._navigateGallery("full", 0),
+          };
+          if (globalActions[key]) {
             e.preventDefault();
-            this._navigateGallery("main", 0);
-            return;
-          }
-          if (key === "x") {
-            e.preventDefault();
-            this.toggleExpand();
-            return;
-          }
-          if (key === "v") {
-            e.preventDefault();
-            this._navigateGallery("video", 0);
-            return;
-          }
-          if (key === "f") {
-            e.preventDefault();
-            this._navigateGallery("full", 0);
+            globalActions[key]();
             return;
           }
 
-          if (isVisible) {
-            if (e.key === " ") {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              this._toggleSlideshow();
-              return;
-            }
+          if (!isVisible) return;
 
-            // ── Duration hotkeys ─────────────────────────────────────────────
-            if (e.key === "-" || e.key === "_") {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              this._adjustSlideshowDuration(-1);
-              return;
-            }
-            if (e.key === "+" || e.key === "=" || e.key === "Equal") {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              this._adjustSlideshowDuration(1);
-              return;
-            }
+          if (e.key === " ") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            this._toggleSlideshow();
+            return;
+          }
+          if (e.key === "-" || e.key === "_") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            this._adjustSlideshowDuration(-1);
+            return;
+          }
+          if (e.key === "+" || e.key === "=" || e.key === "Equal") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            this._adjustSlideshowDuration(1);
+            return;
+          }
 
-            const actions = {
-              escape: () => this.closeGallery(),
-              w: () => this.closeGallery(),
-              s: () => this.closeGallery(),
-              arrowup: () => this.closeGallery(),
-              arrowdown: () => this.closeGallery(),
-              a: () => this._navigateGallery(this._galleryMode, -1),
-              arrowleft: () => this._navigateGallery(this._galleryMode, -1),
-              d: () => this._navigateGallery(this._galleryMode, 1),
-              arrowright: () => this._navigateGallery(this._galleryMode, 1),
-            };
-
-            if (actions[key]) {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              actions[key]();
-            }
+          const overlayActions = {
+            escape: () => this.closeGallery(),
+            w: () => this.closeGallery(),
+            s: () => this.closeGallery(),
+            arrowup: () => this.closeGallery(),
+            arrowdown: () => this.closeGallery(),
+            a: () => this._navigateGallery(this._galleryMode, -1),
+            arrowleft: () => this._navigateGallery(this._galleryMode, -1),
+            d: () => this._navigateGallery(this._galleryMode, 1),
+            arrowright: () => this._navigateGallery(this._galleryMode, 1),
+          };
+          if (overlayActions[key]) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            overlayActions[key]();
           }
         },
         true,
