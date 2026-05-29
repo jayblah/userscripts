@@ -5,7 +5,7 @@
 // @author       JR
 // @license      MIT
 // @include      /^[^:]*?:\/\/simpcity\.[^/]*?\/threads\/.*?$/
-// @match        *://f95zone.to/threads/*
+// @include      /^[^:]*?:\/\/f95zone\.to\/threads\/.*?$/
 // @exclude      *://simpcity.com/*
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/XF_MediaViewer.user.js
 // @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/XF_MediaViewer.user.js

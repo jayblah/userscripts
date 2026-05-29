@@ -4,9 +4,7 @@
 // @description  Streamlines thread layouts, centers enlarged media, adds structural toggles, and features a sequential, single-tab unread alert walker.
 // @author       JR
 // @license      MIT
-// @match        *://simpcity.*/*
-// @match        https://simpcity.su/*
-// @match        https://simpcity.cr/*
+// @include /^[^:]*?://simpcity\.[^/]*?/.*?$/
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SC_Enhancements.user.js
 // @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SC_Enhancements.user.js
 // @grant        GM_addStyle
