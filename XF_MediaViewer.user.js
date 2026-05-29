@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      1.6
+// @version      1.7
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -89,7 +89,6 @@
     isExpanded: false,
     shadow: null,
     _touchStart: { x: 0, y: 0 },
-    _lastScroll: 0,
     _lastTap: 0,
     _decodeAbort: null,
     _galleryMode: "main", // "main" (images), "video", or "full"
@@ -104,13 +103,14 @@
     _panOffset: { x: 0, y: 0 },
     _panStart: { x: 0, y: 0 },
     _isPanning: false,
-    _hasDragged: false,
+    _edgeSwipeDelta: 0,
     _xpageLocked: false,
     _xpageUrl: null,
     _trackedUnseenElement: null,
     _observer: null,
     _slideshowTimer: null,
     _slideshowActive: false,
+    _mediaListenerAbort: null,
 
     init() {
       this.injectGlobalStyles();
@@ -376,12 +376,8 @@
     },
 
     renderBase() {
-      const defaultTop = this.isMobile
-        ? GM_getValue(SETTINGS_MAP.panelTop, "80px")
-        : settings.panelTop;
-      const defaultLeft = this.isMobile
-        ? GM_getValue(SETTINGS_MAP.panelLeft, "10px")
-        : settings.panelLeft;
+      const defaultTop = settings.panelTop;
+      const defaultLeft = settings.panelLeft;
 
       const modelName = this._getModelName();
 
@@ -535,22 +531,7 @@
             e.stopPropagation();
             const images = lbContainer.querySelectorAll(SEL_IMG);
             const expanding = !btn.classList.contains("is-expanded");
-            images.forEach((img) => {
-              img.classList.toggle("expanded", expanding);
-              if (expanding) {
-                const fullSrc = this.getFullSrc(img);
-                if (fullSrc !== img.src) {
-                  if (!img.dataset.origThumb) img.dataset.origThumb = img.src;
-                  img.src = fullSrc;
-                  img.removeAttribute("srcset");
-                }
-              } else {
-                if (img.dataset.origThumb) {
-                  img.src = img.dataset.origThumb;
-                  delete img.dataset.origThumb;
-                }
-              }
-            });
+            images.forEach((img) => this._applyImageExpand(img, expanding));
             btn.classList.toggle("is-expanded", expanding);
             btn.textContent = expanding ? "⊟ COL" : "⊞ EXP";
             btn.title = expanding
@@ -614,24 +595,26 @@
     },
 
     // ── Expand / Collapse ────────────────────────────────────────────────────
+    _applyImageExpand(img, expanding) {
+      img.classList.toggle("gv-expanded", expanding);
+      img.classList.toggle("expanded", expanding);
+      if (expanding) {
+        const fullSrc = this.getFullSrc(img);
+        if (fullSrc !== img.src) {
+          if (!img.dataset.origThumb) img.dataset.origThumb = img.src;
+          img.src = fullSrc;
+          img.removeAttribute("srcset");
+        }
+      } else if (img.dataset.origThumb) {
+        img.src = img.dataset.origThumb;
+        delete img.dataset.origThumb;
+      }
+    },
+
     toggleExpand() {
       this.isExpanded = !this.isExpanded;
       document.querySelectorAll(SEL_IMG).forEach((img) => {
-        img.classList.toggle("gv-expanded", this.isExpanded);
-        img.classList.toggle("expanded", this.isExpanded);
-        if (this.isExpanded) {
-          const fullSrc = this.getFullSrc(img);
-          if (fullSrc !== img.src) {
-            if (!img.dataset.origThumb) img.dataset.origThumb = img.src;
-            img.src = fullSrc;
-            img.removeAttribute("srcset");
-          }
-        } else {
-          if (img.dataset.origThumb) {
-            img.src = img.dataset.origThumb;
-            delete img.dataset.origThumb;
-          }
-        }
+        this._applyImageExpand(img, this.isExpanded);
       });
       if (this.isExpanded && !IS_F95) {
         document
@@ -663,10 +646,8 @@
 
     // ── Slideshow ────────────────────────────────────────────────────────────
     _getInterval() {
-      const input = this.shadow.getElementById("ss-duration");
-      let secs = parseInt(input?.value, 10);
-      if (isNaN(secs) || secs <= 0) secs = 3;
-      return secs * 1000;
+      const secs = settings.slideshowSeconds;
+      return (secs > 0 ? secs : 3) * 1000;
     },
 
     _startSlideshow() {
@@ -698,16 +679,12 @@
       const isVideoItem = currentItem && currentItem.tagName !== "IMG";
 
       if (isVideoItem) {
-        const video = this.shadow
-          .getElementById("media-container")
-          ?.querySelector("video");
+        const container = this.shadow.getElementById("media-container");
+        const video = container?.querySelector("video");
         if (video) video.loop = false;
 
-        const iframe = this.shadow
-          .getElementById("media-container")
-          ?.querySelector("iframe");
+        const iframe = container?.querySelector("iframe");
         if (iframe) {
-          if (this._slideshowTimer) clearTimeout(this._slideshowTimer);
           this._slideshowTimer = setTimeout(() => {
             if (this._slideshowActive)
               this._navigateGallery(this._galleryMode, "slideshow_tick");
@@ -744,9 +721,8 @@
     },
 
     _getActiveMediaNode() {
-      return this._getModeConfig(this._galleryMode).list[
-        this[this._getModeConfig(this._galleryMode).idxProp]
-      ];
+      const { list, idxProp } = this._getModeConfig(this._galleryMode);
+      return list[this[idxProp]];
     },
 
     _stopSlideshow() {
@@ -880,10 +856,6 @@
         .replace(/\/page-\d+\/?/, "/")
         .replace(/[?&]page=\d+/, "")
         .split("#")[0];
-    },
-
-    _getFirstPageUrl() {
-      return this._getBaseThreadUrl();
     },
 
     _getAdjacentPageUrl(dir, baseOverride = null) {
@@ -1193,21 +1165,7 @@
           return;
         e.preventDefault();
         e.stopPropagation();
-        if (img.classList.contains("expanded")) {
-          img.classList.remove("expanded");
-          if (img.dataset.origThumb) {
-            img.src = img.dataset.origThumb;
-            delete img.dataset.origThumb;
-          }
-        } else {
-          img.classList.add("expanded");
-          const fullSrc = this.getFullSrc(img);
-          if (fullSrc !== img.src) {
-            if (!img.dataset.origThumb) img.dataset.origThumb = img.src;
-            img.src = fullSrc;
-            img.removeAttribute("srcset");
-          }
-        }
+        this._applyImageExpand(img, !img.classList.contains("expanded"));
       });
 
       // Duration input logic
@@ -1245,13 +1203,8 @@
         } else if (btnSlideshow) {
           this._toggleSlideshow();
         } else if (btnSs) {
-          let val = parseInt(ssInput.value, 10);
-          if (isNaN(val)) val = 1;
-          if (btnSs.dataset.action === "ss-inc" && val < 9) val++;
-          if (btnSs.dataset.action === "ss-dec" && val > 1) val--;
-          ssInput.value = val;
-          settings.slideshowSeconds = val;
-          if (this._slideshowActive) this._startSlideshow();
+          const delta = btnSs.dataset.action === "ss-inc" ? 1 : -1;
+          this._adjustSlideshowDuration(delta);
         }
       });
 
@@ -1399,10 +1352,10 @@
 
         if (!nextUrl) {
           if (dir > 0) {
-            nextUrl = this._getFirstPageUrl();
+            nextUrl = this._getBaseThreadUrl();
           } else {
             const maxPage = this._getMaxPage();
-            const base = this._getFirstPageUrl();
+            const base = this._getBaseThreadUrl();
             if (maxPage <= 1) {
               nextUrl = base;
             } else {
@@ -1479,6 +1432,8 @@
       overlay.focus();
 
       if (this._decodeAbort) this._decodeAbort.abort();
+      if (this._mediaListenerAbort) this._mediaListenerAbort.abort();
+      this._mediaListenerAbort = null;
       container.replaceChildren();
       this._resetZoom();
 
@@ -1529,14 +1484,25 @@
           el.setAttribute("playsinline", "");
           el.volume = settings.videoVolume;
           el.muted = settings.videoMuted;
-          el.addEventListener("volumechange", () => {
-            settings.videoVolume = el.volume;
-            settings.videoMuted = el.muted;
-          });
-          el.addEventListener("ended", () => {
-            if (this._slideshowActive)
-              this._navigateGallery(this._galleryMode, "slideshow_tick");
-          });
+          const listenerAbort = new AbortController();
+          this._mediaListenerAbort = listenerAbort;
+          const listenerOpts = { signal: listenerAbort.signal };
+          el.addEventListener(
+            "volumechange",
+            () => {
+              settings.videoVolume = el.volume;
+              settings.videoMuted = el.muted;
+            },
+            listenerOpts,
+          );
+          el.addEventListener(
+            "ended",
+            () => {
+              if (this._slideshowActive)
+                this._navigateGallery(this._galleryMode, "slideshow_tick");
+            },
+            listenerOpts,
+          );
           container.appendChild(el);
           el.play().catch(() => {
             el.muted = true;
