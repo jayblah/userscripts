@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      1.5
+// @version      1.6
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
-// @match        *://simpcity.*/threads/*
+// @include      /^[^:]*?:\/\/simpcity\.[^/]*?\/threads\/.*?$/
 // @match        *://f95zone.to/threads/*
 // @exclude      *://simpcity.com/*
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/XF_MediaViewer.user.js
@@ -294,6 +294,13 @@
           height: 22px; display: flex; align-items: center;
         }
         .dim { color: ${APP_DIM}; }
+        .btn-jump {
+          background: transparent; border: none; color: #555;
+          font-size: 13px; font-weight: 900; cursor: pointer;
+          padding: 0 4px; line-height: 1; transition: color var(--t);
+          user-select: none; outline: none; display: flex; align-items: center;
+        }
+        .btn-jump:hover { color: var(--theme); }
 
         .slideshow-ctrl {
           display: flex; align-items: center; background: rgba(0,0,0,0.8);
@@ -410,6 +417,7 @@
               <span class="key">[D/→]</span> NEXT ·
               <span class="key">[W/↑/ESC]</span> EXIT ·
               <span class="key">[SPACE]</span> AUTOPLAY ·
+              <span class="key">[-/+]</span> DURATION ·
               <span class="key">[SCROLL]</span> TIMELINE ·
               <span class="key">[R-CLICK + SCROLL]</span> ZOOM
             </div>
@@ -432,7 +440,11 @@
                 <div class="btn-ss" data-action="ss-inc">+</div>
               </div>
             </div>
-            <div class="counter" id="gv-counter" title="Page & Media Index"></div>
+            <div class="counter" id="gv-counter" title="Page & Media Index">
+              <button class="btn-jump" id="btn-jump-first" title="First media on this page">&#171;</button>
+              <span id="gv-counter-text"></span>
+              <button class="btn-jump" id="btn-jump-last" title="Last media on this page">&#187;</button>
+            </div>
           </div>
         </div>
       `;
@@ -668,6 +680,20 @@
     _evaluateActiveAutoplayContext() {
       if (!this._slideshowActive) return;
 
+      // Cancel any in-flight timer before scheduling a new one. Without this,
+      // manual navigation while autoplay is running stacks timers and causes
+      // double-advances or sub-second skips.
+      if (this._slideshowTimer) {
+        clearTimeout(this._slideshowTimer);
+        this._slideshowTimer = null;
+      }
+      // Also reset the ring animation so it restarts cleanly from the new item.
+      const ring = this.shadow.getElementById("ring-circle");
+      if (ring) {
+        ring.style.transition = "none";
+        ring.style.strokeDashoffset = "100";
+      }
+
       const currentItem = this._getActiveMediaNode();
       const isVideoItem = currentItem && currentItem.tagName !== "IMG";
 
@@ -763,6 +789,19 @@
       icon.innerHTML = this._slideshowActive
         ? `<rect x="2" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/>`
         : `<polygon points="3,1 13,7 3,13"/>`;
+    },
+
+    // ── Slideshow duration adjustment helper ─────────────────────────────────
+    _adjustSlideshowDuration(delta) {
+      const input = this.shadow.getElementById("ss-duration");
+      if (!input) return;
+      let val = parseInt(input.value, 10);
+      if (isNaN(val)) val = 3;
+      val = Math.min(9, Math.max(1, val + delta));
+      input.value = val;
+      settings.slideshowSeconds = val;
+      // Restart the tick so the new duration takes effect immediately
+      if (this._slideshowActive) this._startSlideshow();
     },
 
     // ── Cross-page fetching ──────────────────────────────────────────────────
@@ -901,7 +940,7 @@
     },
 
     _showCrossPageHint(msg) {
-      const counter = this.shadow.getElementById("gv-counter");
+      const counter = this.shadow.getElementById("gv-counter-text");
       if (counter) counter.textContent = msg;
     },
 
@@ -1187,6 +1226,7 @@
         const btn = e.target.closest(".btn");
         const btnSs = e.target.closest(".btn-ss");
         const btnSlideshow = e.target.closest("#btn-slideshow");
+        const btnJump = e.target.closest(".btn-jump");
 
         const onOverlay =
           e.target.id === "overlay" || e.target.id === "media-container";
@@ -1198,7 +1238,9 @@
           return;
         }
 
-        if (btn && btn.dataset.action) {
+        if (btnJump) {
+          this._jumpToEdge(btnJump.id === "btn-jump-first" ? "first" : "last");
+        } else if (btn && btn.dataset.action) {
           btnActionHandlers[btn.dataset.action]?.();
         } else if (btnSlideshow) {
           this._toggleSlideshow();
@@ -1304,7 +1346,9 @@
     async _navigateGallery(mode, dir = 0) {
       this._galleryMode = mode;
       const isAutoTick = dir === "slideshow_tick";
-      if (dir !== 0 && !isAutoTick) this._stopSlideshow();
+
+      // FIX: Only stop slideshow on explicit user-initiated navigation
+      // (dir !== 0 used to stop it here — removed; closeGallery / spacebar handle that)
 
       if (!this._xpageLocked) this.refreshMediaPipelines();
 
@@ -1405,7 +1449,7 @@
       setTimeout(() => {
         const list = this._getListRef(fetchType);
         const idx = this[currentIdxProp];
-        const counter = this.shadow.getElementById("gv-counter");
+        const counter = this.shadow.getElementById("gv-counter-text");
         if (counter && list && list.length) {
           counter.innerHTML = this._buildCounterHTML(idx, list.length);
         }
@@ -1527,9 +1571,25 @@
       if (ssInputWrapper)
         ssInputWrapper.style.display = current.tagName !== "IMG" ? "none" : "";
 
-      this.shadow.getElementById("gv-counter").innerHTML =
+      this.shadow.getElementById("gv-counter-text").innerHTML =
         this._buildCounterHTML(idx, total);
       this._updateSlideshowButton();
+    },
+
+    // ── Jump to first / last on current page ─────────────────────────────────
+    _jumpToEdge(edge) {
+      // Always use the live page list — ignores any cross-page lock so the
+      // user always lands on an item that's actually on the current page.
+      if (this._xpageLocked) {
+        this._xpageLocked = false;
+        this._xpageUrl = null;
+        this.refreshMediaPipelines();
+      }
+      const { list, idxProp } = this._getModeConfig(this._galleryMode);
+      if (!list || !list.length) return;
+      this[idxProp] = edge === "first" ? 0 : list.length - 1;
+      this._renderMedia(list[this[idxProp]], this[idxProp], list.length);
+      if (this._slideshowActive) this._evaluateActiveAutoplayContext();
     },
 
     closeGallery() {
@@ -1595,6 +1655,20 @@
               e.preventDefault();
               e.stopImmediatePropagation();
               this._toggleSlideshow();
+              return;
+            }
+
+            // ── Duration hotkeys ─────────────────────────────────────────────
+            if (e.key === "-" || e.key === "_") {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              this._adjustSlideshowDuration(-1);
+              return;
+            }
+            if (e.key === "+" || e.key === "=" || e.key === "Equal") {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              this._adjustSlideshowDuration(1);
               return;
             }
 
