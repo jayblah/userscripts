@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.2
+// @version      2.3
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -88,7 +88,6 @@
     zoomIdx: 0,
     _videoIdx: 0,
     _fullIdx: 0,
-    isExpanded: false,
     shadow: null,
     _touchStart: { x: 0, y: 0 },
     _twoFingerStart: { x: 0, y: 0 },
@@ -372,7 +371,6 @@
       this.shadow.adoptedStyleSheets = [sheet];
 
       this.renderBase();
-      this.updateUI();
       this.bindInternalEvents();
     },
 
@@ -400,7 +398,6 @@
             <div class="btn" role="button" tabindex="0" data-action="top" title="Scroll to top">▴ TOP</div>
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
           </div>
-          <div class="btn" role="button" tabindex="0" data-action="expand" id="btn-expand">EXPAND ALL</div>
           <div class="btn" role="button" tabindex="0" data-action="fullgallery" id="btn-fullgallery" style="border-color: #444;">
             <span class="lbl-full"><u>F</u>ULL GALLERY</span>
             <span class="lbl-short">ALL</span>
@@ -458,14 +455,6 @@
       `;
     },
 
-    updateUI() {
-      const btnExpand =
-        this._el.btnExpand || this.shadow.getElementById("btn-expand");
-      btnExpand.innerHTML = this.isExpanded
-        ? "<span class='lbl-full'>COLLAPSE ALL</span><span class='lbl-short'>COL</span>"
-        : "<span class='lbl-full'>E<u>X</u>PAND ALL</span><span class='lbl-short'>EXP</span>";
-    },
-
     _clampPanelToScreen(panel) {
       requestAnimationFrame(() => {
         const panelW = panel.offsetWidth;
@@ -504,6 +493,7 @@
     cleanAttr: (str) => str.replace(/\.(md|th)(?=\.)/, ""),
 
     processInlineElements() {
+      // Clean thumbnail attributes
       document
         .querySelectorAll(`${SEL_IMG}:not([data-processed-thumb])`)
         .forEach((img) => {
@@ -514,6 +504,7 @@
           img.setAttribute("data-processed-thumb", "true");
         });
 
+      // Inject per-post ⊞ EXP buttons
       document
         .querySelectorAll(
           ".message-attribution-opposite:not([data-processed-btn])",
@@ -621,19 +612,6 @@
         img.src = img.dataset.origThumb;
         delete img.dataset.origThumb;
       }
-    },
-
-    toggleExpand() {
-      this.isExpanded = !this.isExpanded;
-      document
-        .querySelectorAll(SEL_IMG)
-        .forEach((img) => this._applyImageExpand(img, this.isExpanded));
-      if (this.isExpanded && !IS_F95) {
-        document
-          .querySelectorAll('div[onclick*="redgifs.com"]')
-          .forEach((div) => div.click());
-      }
-      this.updateUI();
     },
 
     // ── Wake Lock ────────────────────────────────────────────────────────────
@@ -1161,7 +1139,6 @@
         overlay: s.getElementById("overlay"),
         container: s.getElementById("media-container"),
         counterText: s.getElementById("gv-counter-text"),
-        btnExpand: s.getElementById("btn-expand"),
         btnSlideshow: s.getElementById("btn-slideshow"),
         slideshowIcon: s.getElementById("slideshow-icon"),
         ssInputWrapper: s.getElementById("ss-input-wrapper"),
@@ -1179,7 +1156,6 @@
             top: document.body.scrollHeight,
             behavior: "smooth",
           }),
-        expand: () => this.toggleExpand(),
         gallery: () => this._navigateGallery("main", 0),
         vgallery: () => this._navigateGallery("video", 0),
         fullgallery: () => this._navigateGallery("full", 0),
@@ -1684,7 +1660,6 @@
 
           const globalActions = {
             g: () => this._navigateGallery("main", 0),
-            x: () => this.toggleExpand(),
             v: () => this._navigateGallery("video", 0),
             f: () => this._navigateGallery("full", 0),
           };
