@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      1.8
-// @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows, multi-media pipelines, and title extraction.
+// @version      2.2
+// @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
 // @include      /^[^:]*?:\/\/simpcity\.[^/]*?\/threads\/.*?$/
@@ -91,6 +91,7 @@
     isExpanded: false,
     shadow: null,
     _touchStart: { x: 0, y: 0 },
+    _twoFingerStart: { x: 0, y: 0 },
     _lastTap: 0,
     _decodeAbort: null,
     _galleryMode: "main", // "main" | "video" | "full"
@@ -112,9 +113,10 @@
     _observer: null,
     _slideshowTimer: null,
     _slideshowActive: false,
+    _slideshowDirection: 1, // 1 = Forward, -1 = Reverse
     _mediaListenerAbort: null,
 
-    // ── Cached shadow-DOM element references (populated in bindInternalEvents) ──
+    // ── Cached shadow-DOM element references ──
     _el: {},
 
     init() {
@@ -227,7 +229,7 @@
           justify-content: center;
           cursor: pointer;
           font-weight: 700;
-          font-size: 16px;
+          font-size: 20px;
           height: 24px;
           width: 24px;
           transition: color var(--t);
@@ -288,24 +290,37 @@
         }
         .counter {
           color: var(--theme); font-weight: 800; background: rgba(0,0,0,0.8);
-          padding: 5px 15px; border-radius: 20px; border: none;
+          padding: 5px 14px; border-radius: 24px; border: none;
           white-space: nowrap; font-size: 13px;
-          height: 22px; display: flex; align-items: center;
+          height: 28px; display: flex; align-items: center; gap: 6px;
         }
         .dim { color: ${APP_DIM}; }
+
         .btn-jump {
-          background: transparent; border: none; color: #555;
-          font-size: 13px; font-weight: 900; cursor: pointer;
-          padding: 0 4px; line-height: 1; transition: color var(--t);
-          user-select: none; outline: none; display: flex; align-items: center;
+          background: transparent; border: none; color: #666;
+          font-size: 20px; font-weight: 900; cursor: pointer;
+          padding: 4px 8px; line-height: 1; transition: color var(--t), transform 0.1s;
+          user-select: none; outline: none; display: flex; align-items: center; justify-content: center;
+          min-width: 24px; min-height: 24px;
         }
-        .btn-jump:hover { color: var(--theme); }
+        .btn-jump:hover { color: var(--theme); transform: scale(1.15); }
+        .btn-jump:active { transform: scale(0.95); }
 
         .slideshow-ctrl {
           display: flex; align-items: center; background: rgba(0,0,0,0.8);
-          border: none; border-radius: 20px; padding: 2px;
+          border: none; border-radius: 20px; padding: 2px 4px 2px 2px;
           gap: 0; transition: all var(--t);
         }
+        #btn-slideshow-dir {
+          background: transparent; border: none; color: #666;
+          font-size: 15px; font-weight: 900; cursor: pointer;
+          padding: 0 4px 0 6px; line-height: 1; transition: color var(--t), transform 0.1s;
+          user-select: none; outline: none; display: flex; align-items: center; justify-content: center;
+          min-width: 22px; min-height: 24px;
+        }
+        #btn-slideshow-dir:hover { color: var(--theme); transform: scale(1.15); }
+        #btn-slideshow-dir:active { transform: scale(0.95); }
+
         #btn-slideshow {
           width: 32px; height: 32px; border-radius: 50%;
           background: #111;
@@ -361,7 +376,7 @@
       this.bindInternalEvents();
     },
 
-    _getModelName() {
+    _getProjectTitle() {
       const h1 = document.querySelector("h1.p-title-value");
       if (!h1) return "";
       for (const node of h1.childNodes) {
@@ -374,7 +389,7 @@
     },
 
     renderBase() {
-      const modelName = this._getModelName();
+      const titleText = this._getProjectTitle();
       this.shadow.innerHTML = `
         <div class="panel" id="gv-panel" style="top: ${settings.panelTop}; left: ${settings.panelLeft}">
           <div class="header" id="gv-drag">
@@ -401,7 +416,7 @@
         </div>
         <div id="overlay" tabindex="-1">
           <div class="z-hint">
-            ${modelName ? `<div class="z-model-name">${modelName}</div>` : ""}
+            ${titleText ? `<div class="z-model-name">${titleText}</div>` : ""}
             <div class="z-hotkeys">
               <span class="key">[A/←]</span> PREV ·
               <span class="key">[D/→]</span> NEXT ·
@@ -415,6 +430,7 @@
           <div id="media-container"></div>
           <div class="counter-row">
             <div class="slideshow-ctrl" id="gv-slideshow-ctrl">
+              <button id="btn-slideshow-dir" title="Toggle autoplay direction">⟲</button>
               <div id="btn-slideshow" role="button" tabindex="0" title="Slideshow">
                 <svg id="slideshow-ring" viewBox="0 0 40 40" width="34" height="34">
                   <circle cx="20" cy="20" r="15.9" id="ring-circle"/>
@@ -431,9 +447,11 @@
               </div>
             </div>
             <div class="counter" id="gv-counter" title="Page & Media Index">
-              <button class="btn-jump" id="btn-jump-first" title="First media on this page">&#171;</button>
+              <button class="btn-jump" id="btn-thread-first" title="First page of thread">&#171;</button>
+              <button class="btn-jump" id="btn-page-first" title="First media on this page">&#139;</button>
               <span id="gv-counter-text"></span>
-              <button class="btn-jump" id="btn-jump-last" title="Last media on this page">&#187;</button>
+              <button class="btn-jump" id="btn-page-last" title="Last media on this page">&#155;</button>
+              <button class="btn-jump" id="btn-thread-last" title="Last page of thread">&#187;</button>
             </div>
           </div>
         </div>
@@ -543,7 +561,6 @@
 
     // ── Media pipeline ───────────────────────────────────────────────────────
     refreshMediaPipelines() {
-      // Single DOM pass — split into three lists in one shot
       const all = this._filterVisible(
         Array.from(document.querySelectorAll(SEL_FULL)),
       );
@@ -639,7 +656,7 @@
       }
     },
 
-    // ── Ring animation helper (DRY) ──────────────────────────────────────────
+    // ── Ring animation helper ────────────────────────────────────────────────
     _resetRing() {
       const ring = this._el.ring;
       const ringEl = this._el.ringEl;
@@ -656,7 +673,7 @@
       if (!ring) return;
       ring.style.transition = "none";
       ring.style.strokeDashoffset = "100";
-      void ring.getBoundingClientRect(); // force reflow
+      void ring.getBoundingClientRect();
       ring.style.transition = `stroke-dashoffset ${intervalMs}ms linear`;
       ring.style.strokeDashoffset = "0";
       if (ringEl) ringEl.classList.add("visible");
@@ -679,19 +696,16 @@
     _evaluateActiveAutoplayContext() {
       if (!this._slideshowActive) return;
 
-      // Clear any in-flight timer and reset ring before scheduling a fresh one
       clearTimeout(this._slideshowTimer);
       this._slideshowTimer = null;
       this._resetRing();
 
       const currentItem = this._getActiveMediaNode();
       if (currentItem && currentItem.tagName !== "IMG") {
-        // Video path — stop looping so `ended` event fires
         const container = this._el.container;
         const video = container?.querySelector("video");
         if (video) video.loop = false;
 
-        // Iframes get a generous fallback timer
         if (container?.querySelector("iframe")) {
           this._slideshowTimer = setTimeout(() => {
             if (this._slideshowActive)
@@ -738,15 +752,43 @@
       else this._startSlideshow();
     },
 
+    _toggleSlideshowDirection() {
+      this._slideshowDirection = this._slideshowDirection === 1 ? -1 : 1;
+      this._showCrossPageHint(
+        this._slideshowDirection === 1
+          ? "Playback: Forward"
+          : "Playback: Reverse",
+      );
+      this._updateSlideshowButton();
+      if (this._slideshowActive) {
+        this._evaluateActiveAutoplayContext();
+      }
+      setTimeout(() => {
+        const { list, idxProp } = this._getModeConfig(this._galleryMode);
+        if (this._el.counterText && list?.length) {
+          this._el.counterText.innerHTML = this._buildCounterHTML(
+            this[idxProp],
+            list.length,
+          );
+        }
+      }, 1000);
+    },
+
     _updateSlideshowButton() {
       const btn = this._el.btnSlideshow;
       const icon = this._el.slideshowIcon;
       if (!btn || !icon) return;
       btn.classList.toggle("active", this._slideshowActive);
       btn.title = this._slideshowActive ? "Pause slideshow" : "Start slideshow";
-      icon.innerHTML = this._slideshowActive
-        ? `<rect x="2" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/>`
-        : `<polygon points="3,1 13,7 3,13"/>`;
+
+      if (this._slideshowActive) {
+        icon.innerHTML = `<rect x="2" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/>`;
+      } else {
+        icon.innerHTML =
+          this._slideshowDirection === 1
+            ? `<polygon points="3,1 13,7 3,13"/>`
+            : `<polygon points="11,1 1,7 11,13"/>`;
+      }
     },
 
     // ── Slideshow duration adjustment ────────────────────────────────────────
@@ -988,6 +1030,8 @@
           b.clientX - a.clientX,
           b.clientY - a.clientY,
         );
+        this._twoFingerStart.x = (a.screenX + b.screenX) / 2;
+        this._twoFingerStart.y = (a.screenY + b.screenY) / 2;
       } else if (e.touches.length === 1) {
         if (e.target.closest("#gv-slideshow-ctrl")) return;
         this._isPinching = false;
@@ -1051,6 +1095,30 @@
 
     handleTouchEnd(e) {
       if (this._isPinching) {
+        if (e.touches.length === 0) {
+          this._isPinching = false;
+          this._pinchDist = null;
+
+          if (this._scale === 1 && e.changedTouches.length >= 2) {
+            const a = e.changedTouches[0];
+            const b = e.changedTouches[1];
+            const endX = (a.screenX + b.screenX) / 2;
+            const endY = (a.screenY + b.screenY) / 2;
+            const dx = endX - this._twoFingerStart.x;
+            const dy = endY - this._twoFingerStart.y;
+
+            if (Math.abs(dx) > Math.abs(dy)) {
+              if (Math.abs(dx) > 40) {
+                this._jumpToEdge(dx > 0 ? "first" : "last");
+              }
+            } else {
+              if (Math.abs(dy) > 40) {
+                this._jumpToThreadEdge(dy > 0 ? "first" : "last");
+              }
+            }
+            return;
+          }
+        }
         if (e.touches.length < 2) {
           this._isPinching = false;
           this._pinchDist = null;
@@ -1088,7 +1156,6 @@
     bindInternalEvents() {
       const s = this.shadow;
 
-      // Cache frequently accessed shadow-DOM nodes
       this._el = {
         panel: s.getElementById("gv-panel"),
         overlay: s.getElementById("overlay"),
@@ -1118,7 +1185,6 @@
         fullgallery: () => this._navigateGallery("full", 0),
       };
 
-      // Inline image click — expand/collapse
       document.body.addEventListener("click", (e) => {
         const img = e.target.closest(SEL_IMG);
         if (
@@ -1132,7 +1198,6 @@
         this._applyImageExpand(img, !img.classList.contains("expanded"));
       });
 
-      // Duration input
       this._el.ssDuration.addEventListener("change", () => {
         let val = parseInt(this._el.ssDuration.value, 10);
         if (isNaN(val) || val <= 0) val = 3;
@@ -1145,11 +1210,11 @@
         e.stopPropagation(),
       );
 
-      // Combined shadow click handler
       s.addEventListener("click", (e) => {
         const btn = e.target.closest(".btn");
         const btnSs = e.target.closest(".btn-ss");
         const btnSS = e.target.closest("#btn-slideshow");
+        const btnDir = e.target.closest("#btn-slideshow-dir");
         const btnJump = e.target.closest(".btn-jump");
         const onOverlay =
           e.target.id === "overlay" || e.target.id === "media-container";
@@ -1161,20 +1226,29 @@
           return;
         }
 
-        if (btnJump)
-          this._jumpToEdge(btnJump.id === "btn-jump-first" ? "first" : "last");
-        else if (btn?.dataset.action) btnActionHandlers[btn.dataset.action]?.();
-        else if (btnSS) this._toggleSlideshow();
-        else if (btnSs)
+        if (btnJump) {
+          if (btnJump.id === "btn-thread-first")
+            this._jumpToThreadEdge("first");
+          else if (btnJump.id === "btn-thread-last")
+            this._jumpToThreadEdge("last");
+          else if (btnJump.id === "btn-page-first") this._jumpToEdge("first");
+          else if (btnJump.id === "btn-page-last") this._jumpToEdge("last");
+        } else if (btn?.dataset.action)
+          btnActionHandlers[btn.dataset.action]?.();
+        else if (btnSS) {
+          this._toggleSlideshow();
+        } else if (btnDir) {
+          this._toggleSlideshowDirection();
+        } else if (btnSs)
           this._adjustSlideshowDuration(
             btnSs.dataset.action === "ss-inc" ? 1 : -1,
           );
       });
 
-      // Panel drag
       const dragTarget = this.isMobile ? panel : s.getElementById("gv-drag");
       dragTarget.addEventListener("pointerdown", (e) => {
-        if (e.target.closest(".btn, .btn-ss, #ss-duration")) return;
+        if (e.target.closest(".btn, .btn-ss, #ss-duration, #btn-slideshow-dir"))
+          return;
         const startX = e.clientX - panel.offsetLeft;
         const startY = e.clientY - panel.offsetTop;
         dragTarget.setPointerCapture(e.pointerId);
@@ -1197,7 +1271,6 @@
 
       this._clampPanelToScreen(panel);
 
-      // Overlay wheel (scroll = navigate, right-click+scroll = zoom)
       overlay.addEventListener(
         "wheel",
         (e) => {
@@ -1268,7 +1341,7 @@
         this[idxProp] = this._getFirstUnseenIdx(list);
       }
 
-      const numDir = isTick ? 1 : dir;
+      const numDir = isTick ? this._slideshowDirection : dir;
       const nextIdx = (this[idxProp] || 0) + numDir;
 
       if (numDir > 0 && nextIdx >= list.length) {
@@ -1283,7 +1356,12 @@
       this[idxProp] =
         numDir === 0 ? this[idxProp] : (nextIdx + list.length) % list.length;
 
-      await this._renderMedia(list[this[idxProp]], this[idxProp], list.length);
+      await this._renderMedia(
+        list[this[idxProp]],
+        this[idxProp],
+        list.length,
+        numDir,
+      );
       if (this._slideshowActive) this._evaluateActiveAutoplayContext();
     },
 
@@ -1318,6 +1396,7 @@
               currentIdxProp,
               fetchType,
               dir > 0 ? 0 : -1,
+              dir,
             );
           } else {
             this._updateListRef(fetchType, items);
@@ -1328,6 +1407,7 @@
               items[this[currentIdxProp]],
               this[currentIdxProp],
               items.length,
+              dir,
             );
           }
           if (this._slideshowActive) this._evaluateActiveAutoplayContext();
@@ -1351,7 +1431,12 @@
       }, 2500);
     },
 
-    _resetPageLockAndRender(currentIdxProp, fetchType, defaultIdx) {
+    _resetPageLockAndRender(
+      currentIdxProp,
+      fetchType,
+      defaultIdx,
+      fallbackDir = 1,
+    ) {
       this._resetPageLock();
       this.refreshMediaPipelines();
       const list = this._getListRef(fetchType);
@@ -1361,17 +1446,17 @@
         list[this[currentIdxProp]],
         this[currentIdxProp],
         list.length,
+        fallbackDir,
       );
     },
 
     // ── Media rendering ──────────────────────────────────────────────────────
-    async _renderMedia(current, idx, total) {
+    async _renderMedia(current, idx, total, lastDirection = 1) {
       const { overlay, container, counterText, ssInputWrapper } = this._el;
       overlay.style.display = "flex";
       document.body.classList.add("gv-noscroll");
       overlay.focus();
 
-      // Cancel in-flight decode/listener teardown
       this._decodeAbort?.abort();
       this._mediaListenerAbort?.abort();
       this._mediaListenerAbort = null;
@@ -1385,7 +1470,14 @@
         this._decodeAbort = controller;
         try {
           await el.decode();
-        } catch {}
+        } catch {
+          if (!controller.signal.aborted) {
+            this._decodeAbort = null;
+            const fallbackStep = lastDirection === 0 ? 1 : lastDirection;
+            this._navigateGallery(this._galleryMode, fallbackStep);
+            return;
+          }
+        }
         if (controller.signal.aborted) return;
         this._decodeAbort = null;
         container.appendChild(el);
@@ -1482,7 +1574,6 @@
       this._updateSlideshowButton();
     },
 
-    // ── Jump to first / last on current page ─────────────────────────────────
     _jumpToEdge(edge) {
       if (this._xpageLocked) {
         this._resetPageLock();
@@ -1491,8 +1582,69 @@
       const { list, idxProp } = this._getModeConfig(this._galleryMode);
       if (!list?.length) return;
       this[idxProp] = edge === "first" ? 0 : list.length - 1;
-      this._renderMedia(list[this[idxProp]], this[idxProp], list.length);
+      this._renderMedia(
+        list[this[idxProp]],
+        this[idxProp],
+        list.length,
+        edge === "first" ? 1 : -1,
+      );
       if (this._slideshowActive) this._evaluateActiveAutoplayContext();
+    },
+
+    async _jumpToThreadEdge(edge) {
+      const fetchType = this._getModeConfig(this._galleryMode).fetchType;
+      const currentIdxProp = this._getModeConfig(this._galleryMode).idxProp;
+      const liveUrlClean = window.location.href.split("#")[0];
+      const base = this._getBaseThreadUrl();
+
+      let targetUrl = base;
+      if (edge === "last") {
+        const maxPage = this._getMaxPage();
+        targetUrl =
+          maxPage <= 1
+            ? base
+            : `${base}${base.endsWith("/") ? "" : "/"}page-${maxPage}`;
+      }
+
+      if (targetUrl.split("#")[0] === liveUrlClean) {
+        this._resetPageLockAndRender(
+          currentIdxProp,
+          fetchType,
+          edge === "first" ? 0 : -1,
+          edge === "first" ? 1 : -1,
+        );
+        return;
+      }
+
+      this._showCrossPageHint(
+        `Scanning page ${this._parsePageNum(targetUrl) || 1}…`,
+      );
+      const items = await this._fetchPageMedia(targetUrl, fetchType);
+
+      if (items.length > 0) {
+        this._updateListRef(fetchType, items);
+        this[currentIdxProp] = edge === "first" ? 0 : items.length - 1;
+        this._xpageLocked = true;
+        this._xpageUrl = targetUrl;
+        await this._renderMedia(
+          items[this[currentIdxProp]],
+          this[currentIdxProp],
+          items.length,
+          edge === "first" ? 1 : -1,
+        );
+        if (this._slideshowActive) this._evaluateActiveAutoplayContext();
+      } else {
+        this._showCrossPageHint("No media found on destination page.");
+        setTimeout(() => {
+          const list = this._getListRef(fetchType);
+          if (this._el.counterText && list?.length) {
+            this._el.counterText.innerHTML = this._buildCounterHTML(
+              this[currentIdxProp],
+              list.length,
+            );
+          }
+        }, 2000);
+      }
     },
 
     closeGallery() {
@@ -1530,7 +1682,6 @@
           const isVisible = this._el.overlay?.style.display === "flex";
           const key = e.key.toLowerCase();
 
-          // Global hotkeys (work whether or not gallery is open)
           const globalActions = {
             g: () => this._navigateGallery("main", 0),
             x: () => this.toggleExpand(),
