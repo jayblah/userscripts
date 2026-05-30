@@ -23,7 +23,7 @@
 
   const APP_THEME = "#3db7c7";
   const APP_DIM = "#b8f7ff";
-  const APP_NAME = "XF View™";
+  const APP_NAME = "XF View™ 2.3";
   const APP_SHORT = "XF™";
 
   const SEL_IMG = IS_F95
@@ -239,7 +239,12 @@
         .btn:hover { border-color: var(--theme); color: #fff; background: #2a2a2a; }
         .btn:focus-visible { outline: 2px solid var(--theme); outline-offset: 2px; }
         .row { display: flex; gap: 6px; }
-        .scroll-row .btn { flex: 1 1 0; min-width: 0; }
+        .scroll-row .btn {
+          flex: 1 1 0;
+          min-width: 0;
+          font-size: 14px;
+          line-height: 1;
+        }
         .lbl-short { display: none; }
         u { text-decoration: underline; text-decoration-color: var(--theme); text-underline-offset: 3px; }
 
@@ -395,8 +400,8 @@
             <span class="lbl-short">${APP_SHORT}</span>
           </div>
           <div class="row scroll-row">
-            <div class="btn" role="button" tabindex="0" data-action="top" title="Scroll to top">▴ TOP</div>
-            <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">▾ BOT</div>
+            <div class="btn" role="button" tabindex="0" data-action="top" title="Scroll to top">↑</div>
+            <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">↓</div>
           </div>
           <div class="btn" role="button" tabindex="0" data-action="fullgallery" id="btn-fullgallery" style="border-color: #444;">
             <span class="lbl-full"><u>F</u>ULL GALLERY</span>
