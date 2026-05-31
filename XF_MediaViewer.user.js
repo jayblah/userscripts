@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.3
+// @version      2.5
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -18,14 +18,20 @@
 (function () {
   "use strict";
 
-  // ── Environment Flags ───────────────────────────────────────────────────
+  // ── Environment flags ─────────────────────────────────────────────────────
   const IS_F95 = window.location.hostname.includes("f95zone.to");
 
   const APP_THEME = "#3db7c7";
   const APP_DIM = "#b8f7ff";
-  const APP_NAME = "XF View™ 2.3";
+  const APP_NAME = "XF View™ 2.5";
   const APP_SHORT = "XF™";
 
+  // ── Gallery mode constants ────────────────────────────────────────────────
+  // Canonical mode names used throughout. Input aliases ("gallery", "vgallery",
+  // "fullgallery") are normalised to these at entry points.
+  const MODE = Object.freeze({ MAIN: "main", VIDEO: "video", FULL: "full" });
+
+  // ── Selectors ─────────────────────────────────────────────────────────────
   const SEL_IMG = IS_F95
     ? "img.bbImage:not(.message-signature img, aside img)"
     : "img.bbImage";
@@ -47,12 +53,12 @@
         "iframe[src*='gofile']",
         "iframe",
       ].join(", ")
-    : 'video, iframe.saint-iframe, iframe[src*="video"], iframe[src*="redgifs"], iframe[src*="turbo"], div[onclick*="redgifs.com"]';
+    : "video, div.video-container, iframe.saint-iframe, iframe[src*='video'], iframe[src*='redgifs'], iframe[src*='turbo'], div[onclick*='redgifs.com']";
 
   // Combined selector reused across pipelines
   const SEL_FULL = `${SEL_IMG}, ${SEL_VID}`;
 
-  // ── Settings persistence ────────────────────────────────────────────────
+  // ── Settings persistence ──────────────────────────────────────────────────
   const siteKey = IS_F95 ? "f95" : "sc";
 
   const SETTINGS_MAP = {
@@ -80,22 +86,54 @@
     },
   );
 
-  // ── App ─────────────────────────────────────────────────────────────────
+  // ── Shared GM_xmlhttpRequest promise wrapper ──────────────────────────────
+  // Centralises error/timeout handling so _fetchPageMedia and
+  // _fetchTurboCDNSrc don't each maintain their own boilerplate.
+  function gmFetch(url, options = {}) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url,
+        timeout: options.timeout ?? 10000,
+        headers: options.headers,
+        anonymous: options.anonymous ?? false,
+        onload: (resp) => resolve(resp),
+        onerror: () => reject(new Error(`gmFetch error: ${url}`)),
+        ontimeout: () => reject(new Error(`gmFetch timeout: ${url}`)),
+      });
+    });
+  }
+
+  // ── App ───────────────────────────────────────────────────────────────────
   const App = {
-    mediaList: [],
-    _videoList: [],
-    _fullList: [],
-    zoomIdx: 0,
-    _videoIdx: 0,
-    _fullIdx: 0,
+    // ── Media lists & indices ──────────────────────────────────────────────
+    _lists: {
+      [MODE.MAIN]: [],
+      [MODE.VIDEO]: [],
+      [MODE.FULL]: [],
+    },
+    _indices: {
+      [MODE.MAIN]: 0,
+      [MODE.VIDEO]: 0,
+      [MODE.FULL]: 0,
+    },
+
+    // ── State ──────────────────────────────────────────────────────────────
     shadow: null,
+    _galleryMode: MODE.MAIN,
+    isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
+      .matches,
+
+    // Touch state
     _touchStart: { x: 0, y: 0 },
     _twoFingerStart: { x: 0, y: 0 },
     _lastTap: 0,
+
+    // Async/abort handles
     _decodeAbort: null,
-    _galleryMode: "main", // "main" | "video" | "full"
-    isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
-      .matches,
+    _mediaListenerAbort: null,
+
+    // Zoom/pan state
     _scale: 1,
     _minScale: 1,
     _maxScale: 5,
@@ -106,17 +144,27 @@
     _panStart: { x: 0, y: 0 },
     _isPanning: false,
     _edgeSwipeDelta: 0,
+
+    // Cross-page state
     _xpageLocked: false,
     _xpageUrl: null,
+
+    // Unseen tracking
     _trackedUnseenElement: null,
     _observer: null,
+
+    // Slideshow state
     _slideshowTimer: null,
     _slideshowActive: false,
     _slideshowDirection: 1, // 1 = Forward, -1 = Reverse
-    _mediaListenerAbort: null,
 
-    // ── Cached shadow-DOM element references ──
+    // Wake lock
+    _wakeLock: null,
+
+    // Cached shadow-DOM element references (populated in bindInternalEvents)
     _el: {},
+
+    // ── Init ──────────────────────────────────────────────────────────────
 
     init() {
       this.injectGlobalStyles();
@@ -137,6 +185,43 @@
       });
       this._observer.observe(document.body, { childList: true, subtree: true });
     },
+
+    // ── Mode helpers ──────────────────────────────────────────────────────
+
+    // Normalise any public-facing mode alias to a canonical MODE constant.
+    _normaliseMode(raw) {
+      if (raw === "gallery") return MODE.MAIN;
+      if (raw === "vgallery") return MODE.VIDEO;
+      if (raw === "fullgallery") return MODE.FULL;
+      return raw; // already canonical (MODE.MAIN / MODE.VIDEO / MODE.FULL)
+    },
+
+    // Return the list and index for the current (or given) gallery mode.
+    _modeState(mode = this._galleryMode) {
+      const m = this._normaliseMode(mode);
+      return {
+        list: this._lists[m],
+        idx: this._indices[m],
+        setIdx: (v) => {
+          this._indices[m] = v;
+        },
+        mode: m,
+      };
+    },
+
+    // ── Counter helper ────────────────────────────────────────────────────
+
+    _setCounter(idx, total) {
+      if (!this._el.counterText) return;
+      const currentPage =
+        this._parsePageNum(this._xpageUrl || window.location.href) || 1;
+      const maxPage = Math.max(currentPage, this._getMaxPage());
+      this._el.counterText.innerHTML =
+        `pg.&nbsp; <span class="dim">${currentPage}</span>&nbsp; / &nbsp;${maxPage}` +
+        `&nbsp; — &nbsp;<span class="dim">${idx + 1}</span>&nbsp; / &nbsp;${total}`;
+    },
+
+    // ── Styles ────────────────────────────────────────────────────────────
 
     injectGlobalStyles() {
       const style = document.createElement("style");
@@ -192,20 +277,42 @@
       document.head.appendChild(style);
     },
 
+    // ── Shadow DOM host ───────────────────────────────────────────────────
+
     createHost() {
       const host = document.createElement("div");
       host.id = "gv-p-root";
       document.body.appendChild(host);
       this.shadow = host.attachShadow({ mode: "open" });
 
+      // Build the full shadow stylesheet once, then never touch innerHTML for style.
       const sheet = new CSSStyleSheet();
-      sheet.replaceSync(`
-        :host { --theme: ${APP_THEME}; --bg: #171717; --border: #262626; --t: 0.2s ease; font-family: system-ui, -apple-system, sans-serif; }
+      sheet.replaceSync(this._buildShadowCSS());
+      this.shadow.adoptedStyleSheets = [sheet];
+
+      this._renderBase();
+      this._bindInternalEvents();
+    },
+
+    _buildShadowCSS() {
+      // All shadow-scoped styles in one place so they're never split across
+      // an adoptedStyleSheet and an inline <style> block.
+      return `
+        :host {
+          --theme: ${APP_THEME};
+          --dim: ${APP_DIM};
+          --bg: #171717;
+          --border: #262626;
+          --t: 0.2s ease;
+          font-family: system-ui, -apple-system, sans-serif;
+        }
         input { font: inherit; }
+
+        /* ── Panel ── */
         .panel {
           position: fixed; z-index: 9999; background: var(--bg); color: #efefef;
           border-radius: 8px; border: 1px solid var(--border); padding: 12px;
-          width: 155px;
+          width: 155px; box-sizing: border-box;
           display: flex; flex-direction: column; gap: 10px; box-shadow: 0 12px 40px #000;
           user-select: none; touch-action: none;
         }
@@ -214,66 +321,91 @@
           padding-bottom: 6px; font-size: 11px; text-transform: uppercase;
           border-bottom: 1px solid var(--border);
         }
+
+        /* ── Buttons ── */
         .btn {
           background: #222; border: 1px solid #333; border-radius: 5px; height: 34px;
           display: flex; align-items: center; justify-content: center; cursor: pointer;
           font-weight: 700; color: #aaa; font-size: 11px; transition: all var(--t);
         }
-        .btn-ss {
-          background: transparent !important;
-          border: none !important;
-          color: #666;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          font-weight: 700;
-          font-size: 20px;
-          height: 24px;
-          width: 24px;
-          transition: color var(--t);
-          user-select: none;
-          outline: none;
-        }
-        .btn-ss:hover { color: var(--theme); }
         .btn:hover { border-color: var(--theme); color: #fff; background: #2a2a2a; }
         .btn:focus-visible { outline: 2px solid var(--theme); outline-offset: 2px; }
+        .btn-ss {
+          background: transparent; border: none; color: #666;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; font-weight: 700; font-size: 20px;
+          height: 24px; width: 24px;
+          transition: color var(--t); user-select: none; outline: none;
+        }
+        .btn-ss:hover { color: var(--theme); }
+        .btn-jump {
+          background: transparent; border: none; color: #666;
+          font-size: 20px; font-weight: 900; cursor: pointer;
+          padding: 4px 8px; line-height: 1; transition: color var(--t), transform 0.1s;
+          user-select: none; outline: none;
+          display: flex; align-items: center; justify-content: center;
+          min-width: 24px; min-height: 24px;
+        }
+        .btn-jump:hover  { color: var(--theme); transform: scale(1.15); }
+        .btn-jump:active { transform: scale(0.95); }
+        #btn-slideshow-dir {
+          background: transparent; border: none; color: #666;
+          font-size: 15px; font-weight: 900; cursor: pointer;
+          padding: 0 4px 0 6px; line-height: 1;
+          transition: color var(--t), transform 0.1s;
+          user-select: none; outline: none;
+          display: flex; align-items: center; justify-content: center;
+          min-width: 22px; min-height: 24px;
+        }
+        #btn-slideshow-dir:hover  { color: var(--theme); transform: scale(1.15); }
+        #btn-slideshow-dir:active { transform: scale(0.95); }
+        #btn-slideshow {
+          width: 32px; height: 32px; border-radius: 50%; background: #111;
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; transition: all var(--t); flex-shrink: 0;
+          color: #aaa; position: relative;
+        }
+        #btn-slideshow:hover  { border-color: var(--theme); color: #fff; }
+        #btn-slideshow.active { border-color: var(--theme); color: var(--theme); }
+        #btn-slideshow svg    { display: block; }
+
+        /* ── Layout helpers ── */
         .row { display: flex; gap: 6px; }
-        .scroll-row .btn {
-          flex: 1 1 0;
-          min-width: 0;
-          font-size: 14px;
-          line-height: 1;
-        }
+        .scroll-row .btn { flex: 1 1 0; min-width: 0; font-size: 14px; line-height: 1; }
         .lbl-short { display: none; }
-        u { text-decoration: underline; text-decoration-color: var(--theme); text-underline-offset: 3px; }
-
-        #overlay {
-          position: fixed; inset: 0; background: rgba(0,0,0,0.98); display: none;
-          align-items: center; justify-content: center; z-index: 10000;
-          backdrop-filter: blur(4px); outline: none; touch-action: none;
+        u {
+          text-decoration: underline;
+          text-decoration-color: var(--theme);
+          text-underline-offset: 3px;
         }
 
+        /* ── Overlay ── */
+        #overlay {
+          position: fixed; inset: 0; background: rgba(0,0,0,0.98);
+          display: none; align-items: center; justify-content: center;
+          z-index: 10000; backdrop-filter: blur(4px);
+          outline: none; touch-action: none;
+        }
+
+        /* ── Overlay hints ── */
         .z-hint {
           position: absolute; font-size: 9.5px; font-weight: 900;
-          opacity: 0.9; top: 20px; left: 50%; transform: translateX(-50%); text-align: center;
-          width: 90%; pointer-events: none;
+          opacity: 0.9; top: 20px; left: 50%; transform: translateX(-50%);
+          text-align: center; width: 90%; pointer-events: none;
           text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 2px 8px rgba(0,0,0,0.9);
         }
         .z-model-name {
-          font-size: 14px;
-          color: var(--theme);
-          margin-bottom: 6px;
+          font-size: 14px; color: var(--theme); margin-bottom: 6px;
           text-transform: uppercase; letter-spacing: 0.5px;
         }
-        .z-hotkeys {
-          font-size: 8.5px;
-          color: rgba(255, 255, 255, 0.5);
-          margin-top: 3px;
-        }
+        .z-hotkeys { font-size: 8.5px; color: rgba(255,255,255,0.5); margin-top: 3px; }
         .z-hotkeys .key { color: #ffffff; }
 
-        #media-container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+        /* ── Media container ── */
+        #media-container {
+          width: 100%; height: 100%;
+          display: flex; align-items: center; justify-content: center;
+        }
         #media-container :is(img, video, iframe) {
           max-width: 96vw;
           max-height: calc(100vh - 150px);
@@ -285,9 +417,10 @@
           cursor: zoom-in;
           will-change: transform;
         }
-        #media-container img.zoomed { cursor: grab; }
+        #media-container img.zoomed          { cursor: grab; }
         #media-container img.zoomed.dragging { cursor: grabbing; }
 
+        /* ── Counter row ── */
         .counter-row {
           position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
           display: flex; align-items: center; gap: 8px;
@@ -298,45 +431,18 @@
           white-space: nowrap; font-size: 13px;
           height: 28px; display: flex; align-items: center; gap: 6px;
         }
-        .dim { color: ${APP_DIM}; }
+        .dim { color: var(--dim); }
 
-        .btn-jump {
-          background: transparent; border: none; color: #666;
-          font-size: 20px; font-weight: 900; cursor: pointer;
-          padding: 4px 8px; line-height: 1; transition: color var(--t), transform 0.1s;
-          user-select: none; outline: none; display: flex; align-items: center; justify-content: center;
-          min-width: 24px; min-height: 24px;
-        }
-        .btn-jump:hover { color: var(--theme); transform: scale(1.15); }
-        .btn-jump:active { transform: scale(0.95); }
-
+        /* ── Slideshow controls ── */
         .slideshow-ctrl {
           display: flex; align-items: center; background: rgba(0,0,0,0.8);
           border: none; border-radius: 20px; padding: 2px 4px 2px 2px;
           gap: 0; transition: all var(--t);
         }
-        #btn-slideshow-dir {
-          background: transparent; border: none; color: #666;
-          font-size: 15px; font-weight: 900; cursor: pointer;
-          padding: 0 4px 0 6px; line-height: 1; transition: color var(--t), transform 0.1s;
-          user-select: none; outline: none; display: flex; align-items: center; justify-content: center;
-          min-width: 22px; min-height: 24px;
+        .slideshow-input-wrapper {
+          display: flex; align-items: center;
+          padding-left: 4px; padding-right: 8px;
         }
-        #btn-slideshow-dir:hover { color: var(--theme); transform: scale(1.15); }
-        #btn-slideshow-dir:active { transform: scale(0.95); }
-
-        #btn-slideshow {
-          width: 32px; height: 32px; border-radius: 50%;
-          background: #111;
-          display: flex; align-items: center; justify-content: center;
-          cursor: pointer; transition: all var(--t); flex-shrink: 0;
-          color: #aaa; position: relative;
-        }
-        #btn-slideshow:hover { border-color: var(--theme); color: #fff; }
-        #btn-slideshow.active { border-color: var(--theme); color: var(--theme); }
-        #btn-slideshow svg { display: block; }
-
-        .slideshow-input-wrapper { display: flex; align-items: center; padding-left: 4px; padding-right: 8px; }
         .slideshow-input {
           width: 24px; background: transparent; border: none; color: #fff;
           font-size: 12px; font-weight: 700;
@@ -346,6 +452,7 @@
         .slideshow-input:focus { border-bottom-color: var(--theme); }
         .slideshow-unit { color: #666; font-size: 10px; font-weight: 700; margin-left: 2px; }
 
+        /* ── Slideshow ring ── */
         #slideshow-ring {
           position: absolute; inset: -1px; border-radius: 50%;
           pointer-events: none; opacity: 0; transition: opacity 0.2s;
@@ -360,76 +467,75 @@
           transition: stroke-dashoffset linear;
         }
 
+        /* ── Mobile overrides ── */
         @media (max-width: 600px) and (pointer: coarse) {
-          .panel { flex-direction: column; width: 70px; align-items: stretch; padding: 8px 5px; gap: 8px; box-sizing: border-box; cursor: grab; }
+          .panel {
+            flex-direction: column; width: 70px; align-items: stretch;
+            padding: 8px 5px; gap: 14px; cursor: grab;
+          }
           .panel:active { cursor: grabbing; }
-          .header { display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--border); border-right: none; padding-bottom: 6px; padding-right: 0; font-size: 10px; min-width: 0; cursor: grab; }
+          .header {
+            display: flex; align-items: center; justify-content: center;
+            border-bottom: 1px solid var(--border); border-right: none;
+            padding-bottom: 6px; padding-right: 0; font-size: 10px;
+            min-width: 0; cursor: grab;
+          }
           .header .lbl-full { display: none; }
           .header .lbl-short { display: inline; }
           .row.scroll-row { display: none; }
           .lbl-full { display: none; }
           .lbl-short { display: inline; }
-          .btn { width: 100%; height: 38px; font-size: 10px; padding: 0 2px; box-sizing: border-box; flex: 0 0 auto; }
+          .btn { width: 100%; height: 38px; font-size: 10px; padding: 0 2px; flex: 0 0 auto; box-sizing: border-box; }
           .z-hotkeys { display: none !important; }
         }
-      `);
-      this.shadow.adoptedStyleSheets = [sheet];
-
-      this.renderBase();
-      this.bindInternalEvents();
+      `;
     },
 
-    _getProjectTitle() {
-      const h1 = document.querySelector("h1.p-title-value");
-      if (!h1) return "";
-      for (const node of h1.childNodes) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          const text = node.textContent.trim();
-          if (text) return text;
-        }
-      }
-      return "";
-    },
+    // ── Shadow DOM markup ─────────────────────────────────────────────────
 
-    renderBase() {
+    _renderBase() {
       const titleText = this._getProjectTitle();
-      this.shadow.innerHTML = `
+
+      // Build the shadow DOM using a document fragment so we never stomp the
+      // adoptedStyleSheet that was set in createHost().
+      const template = document.createElement("template");
+      template.innerHTML = `
         <div class="panel" id="gv-panel" style="top: ${settings.panelTop}; left: ${settings.panelLeft}">
           <div class="header" id="gv-drag">
             <span class="lbl-full">${APP_NAME}</span>
             <span class="lbl-short">${APP_SHORT}</span>
           </div>
           <div class="row scroll-row">
-            <div class="btn" role="button" tabindex="0" data-action="top" title="Scroll to top">↑</div>
+            <div class="btn" role="button" tabindex="0" data-action="top"    title="Scroll to top">↑</div>
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">↓</div>
           </div>
+          <div class="btn" role="button" tabindex="0" data-action="gallery"     id="btn-gallery">
+            <span class="lbl-full">IMA<u>G</u>ES</span><span class="lbl-short">IMG</span>
+          </div>
+          <div class="btn" role="button" tabindex="0" data-action="vgallery"    id="btn-vgallery">
+            <span class="lbl-full"><u>V</u>IDEOS</span><span class="lbl-short">VID</span>
+          </div>
           <div class="btn" role="button" tabindex="0" data-action="fullgallery" id="btn-fullgallery" style="border-color: #444;">
-            <span class="lbl-full"><u>F</u>ULL GALLERY</span>
-            <span class="lbl-short">ALL</span>
-          </div>
-          <div class="btn" role="button" tabindex="0" data-action="vgallery" id="btn-vgallery">
-            <span class="lbl-full"><u>V</u>IDEO GALLERY</span>
-            <span class="lbl-short">VID</span>
-          </div>
-          <div class="btn" role="button" tabindex="0" data-action="gallery" id="btn-gallery">
-            <span class="lbl-full">IMAGE&nbsp;<u>G</u>ALLERY</span>
-            <span class="lbl-short">GAL</span>
+            <span class="lbl-full"><u>A</u>LL</span><span class="lbl-short">ALL</span>
           </div>
         </div>
+
         <div id="overlay" tabindex="-1">
           <div class="z-hint">
             ${titleText ? `<div class="z-model-name">${titleText}</div>` : ""}
             <div class="z-hotkeys">
-              <span class="key">[A/←]</span> PREV ·
-              <span class="key">[D/→]</span> NEXT ·
+              <span class="key">[G]</span> IMAGES ·
+              <span class="key">[V]</span> VIDEOS ·
+              <span class="key">[A]</span> ALL ·
+              <span class="key">[←/→]</span> PREV/NEXT ·
               <span class="key">[W/↑/ESC]</span> EXIT ·
               <span class="key">[SPACE]</span> AUTOPLAY ·
-              <span class="key">[-/+]</span> DURATION ·
-              <span class="key">[SCROLL]</span> TIMELINE ·
-              <span class="key">[R-CLICK + SCROLL]</span> ZOOM
+              <span class="key">[SCROLL]</span> ZOOM
             </div>
           </div>
+
           <div id="media-container"></div>
+
           <div class="counter-row">
             <div class="slideshow-ctrl" id="gv-slideshow-ctrl">
               <button id="btn-slideshow-dir" title="Toggle autoplay direction">⟲</button>
@@ -443,21 +549,39 @@
               </div>
               <div class="slideshow-input-wrapper" id="ss-input-wrapper">
                 <div class="btn-ss" data-action="ss-dec">-</div>
-                <input type="text" class="slideshow-input" id="ss-duration" value="${settings.slideshowSeconds}" maxlength="1" title="Duration per image">
+                <input type="text" class="slideshow-input" id="ss-duration"
+                       value="${settings.slideshowSeconds}" maxlength="1"
+                       title="Duration per image">
                 <span class="slideshow-unit">s</span>
                 <div class="btn-ss" data-action="ss-inc">+</div>
               </div>
             </div>
+
             <div class="counter" id="gv-counter" title="Page & Media Index">
               <button class="btn-jump" id="btn-thread-first" title="First page of thread">&#171;</button>
-              <button class="btn-jump" id="btn-page-first" title="First media on this page">&#139;</button>
+              <button class="btn-jump" id="btn-page-first"  title="First media on this page">&#139;</button>
               <span id="gv-counter-text"></span>
-              <button class="btn-jump" id="btn-page-last" title="Last media on this page">&#155;</button>
+              <button class="btn-jump" id="btn-page-last"   title="Last media on this page">&#155;</button>
               <button class="btn-jump" id="btn-thread-last" title="Last page of thread">&#187;</button>
             </div>
           </div>
         </div>
       `;
+      this.shadow.appendChild(template.content);
+    },
+
+    // ── DOM utilities ─────────────────────────────────────────────────────
+
+    _getProjectTitle() {
+      const h1 = document.querySelector("h1.p-title-value");
+      if (!h1) return "";
+      for (const node of h1.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const text = node.textContent.trim();
+          if (text) return text;
+        }
+      }
+      return "";
     },
 
     _clampPanelToScreen(panel) {
@@ -473,6 +597,8 @@
         if (newTop !== panel.offsetTop) panel.style.top = `${newTop}px`;
       });
     },
+
+    // ── Image src resolution ──────────────────────────────────────────────
 
     getFullSrc(img) {
       if (IS_F95) {
@@ -497,8 +623,10 @@
 
     cleanAttr: (str) => str.replace(/\.(md|th)(?=\.)/, ""),
 
+    // ── Inline element processing ─────────────────────────────────────────
+
     processInlineElements() {
-      // Clean thumbnail attributes
+      // Clean thumbnail attributes on unprocessed images
       document
         .querySelectorAll(`${SEL_IMG}:not([data-processed-thumb])`)
         .forEach((img) => {
@@ -509,7 +637,7 @@
           img.setAttribute("data-processed-thumb", "true");
         });
 
-      // Inject per-post ⊞ EXP buttons
+      // Inject per-post ⊞ EXP expand buttons
       document
         .querySelectorAll(
           ".message-attribution-opposite:not([data-processed-btn])",
@@ -555,54 +683,21 @@
       });
     },
 
-    // ── Media pipeline ───────────────────────────────────────────────────────
+    // ── Media pipeline ────────────────────────────────────────────────────
+
     refreshMediaPipelines() {
       const all = this._filterVisible(
         Array.from(document.querySelectorAll(SEL_FULL)),
       );
-      this._fullList = [...new Set(all)];
-      this.mediaList = all.filter((el) => el.matches(SEL_IMG));
-      this._videoList = [...new Set(all.filter((el) => el.matches(SEL_VID)))];
+      this._lists[MODE.FULL] = [...new Set(all)];
+      this._lists[MODE.MAIN] = all.filter((el) => el.matches(SEL_IMG));
+      this._lists[MODE.VIDEO] = [
+        ...new Set(all.filter((el) => el.matches(SEL_VID))),
+      ];
     },
 
-    _getModeConfig(mode) {
-      if (mode === "video")
-        return {
-          list: this._videoList,
-          idxProp: "_videoIdx",
-          fetchType: "video",
-        };
-      if (mode === "full")
-        return { list: this._fullList, idxProp: "_fullIdx", fetchType: "full" };
-      return { list: this.mediaList, idxProp: "zoomIdx", fetchType: "image" };
-    },
+    // ── Expand / Collapse ─────────────────────────────────────────────────
 
-    _updateListRef(fetchType, items) {
-      if (fetchType === "video") this._videoList = items;
-      else if (fetchType === "full") this._fullList = items;
-      else this.mediaList = items;
-    },
-
-    _getListRef(fetchType) {
-      if (fetchType === "video") return this._videoList;
-      if (fetchType === "full") return this._fullList;
-      return this.mediaList;
-    },
-
-    _buildCounterHTML(idx, total) {
-      const currentPage =
-        this._parsePageNum(this._xpageUrl || window.location.href) || 1;
-      const maxPage = Math.max(currentPage, this._getMaxPage());
-      return `pg.&nbsp; <span class="dim">${currentPage}</span>&nbsp; / &nbsp;${maxPage}&nbsp; — &nbsp;<span class="dim">${idx + 1}</span>&nbsp; / &nbsp;${total}`;
-    },
-
-    // ── Page lock helpers ────────────────────────────────────────────────────
-    _resetPageLock() {
-      this._xpageLocked = false;
-      this._xpageUrl = null;
-    },
-
-    // ── Expand / Collapse ────────────────────────────────────────────────────
     _applyImageExpand(img, expanding) {
       img.classList.toggle("gv-expanded", expanding);
       img.classList.toggle("expanded", expanding);
@@ -619,8 +714,7 @@
       }
     },
 
-    // ── Wake Lock ────────────────────────────────────────────────────────────
-    _wakeLock: null,
+    // ── Wake lock ─────────────────────────────────────────────────────────
 
     async _acquireWakeLock() {
       if (!("wakeLock" in navigator)) return;
@@ -629,7 +723,9 @@
         this._wakeLock.addEventListener("release", () => {
           this._wakeLock = null;
         });
-      } catch {}
+      } catch {
+        /* permission denied or unsupported — silently ignore */
+      }
     },
 
     _releaseWakeLock() {
@@ -639,10 +735,10 @@
       }
     },
 
-    // ── Ring animation helper ────────────────────────────────────────────────
+    // ── Ring animation ────────────────────────────────────────────────────
+
     _resetRing() {
-      const ring = this._el.ring;
-      const ringEl = this._el.ringEl;
+      const { ring, ringEl } = this._el;
       if (ring) {
         ring.style.transition = "none";
         ring.style.strokeDashoffset = "100";
@@ -651,18 +747,18 @@
     },
 
     _animateRing(intervalMs) {
-      const ring = this._el.ring;
-      const ringEl = this._el.ringEl;
+      const { ring, ringEl } = this._el;
       if (!ring) return;
       ring.style.transition = "none";
       ring.style.strokeDashoffset = "100";
-      void ring.getBoundingClientRect();
+      void ring.getBoundingClientRect(); // force reflow to restart animation
       ring.style.transition = `stroke-dashoffset ${intervalMs}ms linear`;
       ring.style.strokeDashoffset = "0";
       if (ringEl) ringEl.classList.add("visible");
     },
 
-    // ── Slideshow ────────────────────────────────────────────────────────────
+    // ── Slideshow ─────────────────────────────────────────────────────────
+
     _getInterval() {
       const secs = settings.slideshowSeconds;
       return (secs > 0 ? secs : 3) * 1000;
@@ -685,11 +781,11 @@
 
       const currentItem = this._getActiveMediaNode();
       if (currentItem && currentItem.tagName !== "IMG") {
-        const container = this._el.container;
-        const video = container?.querySelector("video");
+        const video = this._el.container?.querySelector("video");
         if (video) video.loop = false;
 
-        if (container?.querySelector("iframe")) {
+        // For iframes (external embeds) use a long fixed timeout as a fallback
+        if (this._el.container?.querySelector("iframe")) {
           this._slideshowTimer = setTimeout(() => {
             if (this._slideshowActive)
               this._navigateGallery(this._galleryMode, "slideshow_tick");
@@ -708,14 +804,14 @@
       this._animateRing(interval);
 
       this._slideshowTimer = setTimeout(() => {
-        if (!this._slideshowActive) return;
-        this._navigateGallery(this._galleryMode, "slideshow_tick");
+        if (this._slideshowActive)
+          this._navigateGallery(this._galleryMode, "slideshow_tick");
       }, interval);
     },
 
     _getActiveMediaNode() {
-      const { list, idxProp } = this._getModeConfig(this._galleryMode);
-      return list[this[idxProp]];
+      const { list, idx } = this._modeState();
+      return list[idx];
     },
 
     _stopSlideshow() {
@@ -743,38 +839,37 @@
           : "Playback: Reverse",
       );
       this._updateSlideshowButton();
-      if (this._slideshowActive) {
-        this._evaluateActiveAutoplayContext();
-      }
+      if (this._slideshowActive) this._evaluateActiveAutoplayContext();
+
+      // Restore the real counter after the hint fades
       setTimeout(() => {
-        const { list, idxProp } = this._getModeConfig(this._galleryMode);
-        if (this._el.counterText && list?.length) {
-          this._el.counterText.innerHTML = this._buildCounterHTML(
-            this[idxProp],
-            list.length,
-          );
-        }
+        const { list, idx } = this._modeState();
+        if (list?.length) this._setCounter(idx, list.length);
       }, 1000);
     },
 
     _updateSlideshowButton() {
-      const btn = this._el.btnSlideshow;
-      const icon = this._el.slideshowIcon;
-      if (!btn || !icon) return;
-      btn.classList.toggle("active", this._slideshowActive);
-      btn.title = this._slideshowActive ? "Pause slideshow" : "Start slideshow";
+      const { btnSlideshow, slideshowIcon } = this._el;
+      if (!btnSlideshow || !slideshowIcon) return;
+
+      btnSlideshow.classList.toggle("active", this._slideshowActive);
+      btnSlideshow.title = this._slideshowActive
+        ? "Pause slideshow"
+        : "Start slideshow";
 
       if (this._slideshowActive) {
-        icon.innerHTML = `<rect x="2" y="1" width="4" height="12" rx="1"/><rect x="8" y="1" width="4" height="12" rx="1"/>`;
+        slideshowIcon.innerHTML = `<rect x="2" y="1" width="4" height="12" rx="1"/>
+                                   <rect x="8" y="1" width="4" height="12" rx="1"/>`;
       } else {
-        icon.innerHTML =
+        slideshowIcon.innerHTML =
           this._slideshowDirection === 1
             ? `<polygon points="3,1 13,7 3,13"/>`
             : `<polygon points="11,1 1,7 11,13"/>`;
       }
     },
 
-    // ── Slideshow duration adjustment ────────────────────────────────────────
+    // ── Slideshow duration ────────────────────────────────────────────────
+
     _adjustSlideshowDuration(delta) {
       const input = this._el.ssDuration;
       if (!input) return;
@@ -786,45 +881,48 @@
       if (this._slideshowActive) this._startSlideshow();
     },
 
-    // ── Cross-page fetching ──────────────────────────────────────────────────
-    _fetchTurboCDNSrc(iframeEl) {
-      return new Promise((resolve) => {
-        if (IS_F95) return resolve(null);
-        const src = iframeEl?.getAttribute("src");
-        if (!src) return resolve(null);
-        const id = src.split("/embed/")[1]?.split("?")[0];
-        if (!id) return resolve(null);
+    // ── Cross-page fetching ───────────────────────────────────────────────
 
-        GM_xmlhttpRequest({
-          method: "GET",
-          url: `https://turbo.cr/api/sign?v=${id}`,
+    async _fetchTurboCDNSrc(iframeEl) {
+      if (IS_F95) return null;
+      const src = iframeEl?.getAttribute("src");
+      if (!src) return null;
+      const id = src.split("/embed/")[1]?.split("?")[0];
+      if (!id) return null;
+
+      try {
+        const resp = await gmFetch(`https://turbo.cr/api/sign?v=${id}`, {
+          timeout: 8000,
           headers: {
             Referer: `https://turbo.cr/embed/${id}`,
             Origin: "https://turbo.cr",
           },
           anonymous: false,
-          timeout: 8000,
-          onload(resp) {
-            try {
-              const data = JSON.parse(resp.responseText);
-              const url =
-                data.url ||
-                data.src ||
-                data.signed_url ||
-                data.stream ||
-                Object.values(data).find(
-                  (v) => typeof v === "string" && v.includes("http"),
-                );
-              resolve(url || null);
-            } catch {
-              const match = resp.responseText.match(/https?:\/\/\S+/);
-              resolve(match?.[0] ?? null);
-            }
-          },
-          onerror: () => resolve(null),
-          ontimeout: () => resolve(null),
         });
-      });
+        const data = JSON.parse(resp.responseText);
+        return (
+          data.url ||
+          data.src ||
+          data.signed_url ||
+          data.stream ||
+          Object.values(data).find(
+            (v) => typeof v === "string" && v.includes("http"),
+          ) ||
+          null
+        );
+      } catch {
+        // Fallback: scan raw text for any URL
+        try {
+          const raw = (
+            await gmFetch(`https://turbo.cr/api/sign?v=${id}`, {
+              timeout: 8000,
+            })
+          ).responseText;
+          return raw.match(/https?:\/\/\S+/)?.[0] ?? null;
+        } catch {
+          return null;
+        }
+      }
     },
 
     _parsePageNum(url) {
@@ -884,43 +982,40 @@
       return `${cleanBase}${cleanBase.endsWith("/") ? "" : "/"}page-${targetPage}`;
     },
 
-    _fetchPageMedia(url, type = "image") {
-      return new Promise((resolve) => {
-        GM_xmlhttpRequest({
-          method: "GET",
-          url,
-          timeout: 10000,
-          onload: (resp) => {
-            const doc = new DOMParser().parseFromString(
-              resp.responseText,
-              "text/html",
-            );
-            if (type === "video")
-              resolve(
-                Array.from(doc.querySelectorAll(SEL_VID)).filter(
-                  (el) => el.src || el.getAttribute("src"),
-                ),
-              );
-            else if (type === "full")
-              resolve(Array.from(doc.querySelectorAll(SEL_FULL)));
-            else
-              resolve(
-                Array.from(doc.querySelectorAll(SEL_IMG)).filter(
-                  (el) => el.src || el.getAttribute("data-src"),
-                ),
-              );
-          },
-          onerror: () => resolve([]),
-          ontimeout: () => resolve([]),
-        });
-      });
+    async _fetchPageMedia(url, mode = MODE.MAIN) {
+      try {
+        const resp = await gmFetch(url);
+        const doc = new DOMParser().parseFromString(
+          resp.responseText,
+          "text/html",
+        );
+        if (mode === MODE.VIDEO)
+          return Array.from(doc.querySelectorAll(SEL_VID)).filter(
+            (el) => el.src || el.getAttribute("src"),
+          );
+        if (mode === MODE.FULL)
+          return Array.from(doc.querySelectorAll(SEL_FULL));
+        return Array.from(doc.querySelectorAll(SEL_IMG)).filter(
+          (el) => el.src || el.getAttribute("data-src"),
+        );
+      } catch {
+        return [];
+      }
     },
 
     _showCrossPageHint(msg) {
       if (this._el.counterText) this._el.counterText.textContent = msg;
     },
 
-    // ── Unseen tracking ──────────────────────────────────────────────────────
+    // ── Page-lock helpers ─────────────────────────────────────────────────
+
+    _resetPageLock() {
+      this._xpageLocked = false;
+      this._xpageUrl = null;
+    },
+
+    // ── Unseen tracking ───────────────────────────────────────────────────
+
     _trackInitialUnseenPosition() {
       const unreadAnchor = document.querySelector(
         ".u-anchorTarget#unread, .message.is-unread, .message--new",
@@ -952,7 +1047,8 @@
       return idx !== -1 ? idx : 0;
     },
 
-    // ── Zoom / pan ───────────────────────────────────────────────────────────
+    // ── Zoom / pan ────────────────────────────────────────────────────────
+
     _getZoomTarget() {
       return this._el.container?.querySelector("img") ?? null;
     },
@@ -1003,7 +1099,8 @@
       }
     },
 
-    // ── Touch handling ───────────────────────────────────────────────────────
+    // ── Touch handling ────────────────────────────────────────────────────
+
     handleTouchStart(e) {
       if (e.touches.length === 2) {
         this._isPinching = true;
@@ -1085,19 +1182,15 @@
           if (this._scale === 1 && e.changedTouches.length >= 2) {
             const a = e.changedTouches[0];
             const b = e.changedTouches[1];
-            const endX = (a.screenX + b.screenX) / 2;
-            const endY = (a.screenY + b.screenY) / 2;
-            const dx = endX - this._twoFingerStart.x;
-            const dy = endY - this._twoFingerStart.y;
+            const dx = (a.screenX + b.screenX) / 2 - this._twoFingerStart.x;
+            const dy = (a.screenY + b.screenY) / 2 - this._twoFingerStart.y;
 
             if (Math.abs(dx) > Math.abs(dy)) {
-              if (Math.abs(dx) > 40) {
+              if (Math.abs(dx) > 40)
                 this._jumpToEdge(dx > 0 ? "first" : "last");
-              }
             } else {
-              if (Math.abs(dy) > 40) {
+              if (Math.abs(dy) > 40)
                 this._jumpToThreadEdge(dy > 0 ? "first" : "last");
-              }
             }
             return;
           }
@@ -1135,10 +1228,12 @@
       }
     },
 
-    // ── Event binding ────────────────────────────────────────────────────────
-    bindInternalEvents() {
+    // ── Event binding ─────────────────────────────────────────────────────
+
+    _bindInternalEvents() {
       const s = this.shadow;
 
+      // Cache all frequently-accessed shadow DOM elements once.
       this._el = {
         panel: s.getElementById("gv-panel"),
         overlay: s.getElementById("overlay"),
@@ -1154,6 +1249,7 @@
 
       const { panel, overlay } = this._el;
 
+      // Panel action buttons
       const btnActionHandlers = {
         top: () => window.scrollTo({ top: 0, behavior: "smooth" }),
         bottom: () =>
@@ -1161,11 +1257,12 @@
             top: document.body.scrollHeight,
             behavior: "smooth",
           }),
-        gallery: () => this._navigateGallery("main", 0),
-        vgallery: () => this._navigateGallery("video", 0),
-        fullgallery: () => this._navigateGallery("full", 0),
+        gallery: () => this._navigateGallery(MODE.MAIN, 0),
+        vgallery: () => this._navigateGallery(MODE.VIDEO, 0),
+        fullgallery: () => this._navigateGallery(MODE.FULL, 0),
       };
 
+      // Delegate image-click expand/collapse to document body
       document.body.addEventListener("click", (e) => {
         const img = e.target.closest(SEL_IMG);
         if (
@@ -1179,18 +1276,20 @@
         this._applyImageExpand(img, !img.classList.contains("expanded"));
       });
 
+      // Slideshow duration input
       this._el.ssDuration.addEventListener("change", () => {
         let val = parseInt(this._el.ssDuration.value, 10);
         if (isNaN(val) || val <= 0) val = 3;
         this._el.ssDuration.value = val;
         settings.slideshowSeconds = val;
-        if (this._slideshowActive && this._galleryMode !== "video")
+        if (this._slideshowActive && this._galleryMode !== MODE.VIDEO)
           this._startSlideshow();
       });
       this._el.ssDuration.addEventListener("keydown", (e) =>
         e.stopPropagation(),
       );
 
+      // Delegated click handler for the entire shadow root
       s.addEventListener("click", (e) => {
         const btn = e.target.closest(".btn");
         const btnSs = e.target.closest(".btn-ss");
@@ -1208,24 +1307,27 @@
         }
 
         if (btnJump) {
-          if (btnJump.id === "btn-thread-first")
-            this._jumpToThreadEdge("first");
-          else if (btnJump.id === "btn-thread-last")
-            this._jumpToThreadEdge("last");
-          else if (btnJump.id === "btn-page-first") this._jumpToEdge("first");
-          else if (btnJump.id === "btn-page-last") this._jumpToEdge("last");
-        } else if (btn?.dataset.action)
+          const actions = {
+            "btn-thread-first": () => this._jumpToThreadEdge("first"),
+            "btn-thread-last": () => this._jumpToThreadEdge("last"),
+            "btn-page-first": () => this._jumpToEdge("first"),
+            "btn-page-last": () => this._jumpToEdge("last"),
+          };
+          actions[btnJump.id]?.();
+        } else if (btn?.dataset.action) {
           btnActionHandlers[btn.dataset.action]?.();
-        else if (btnSS) {
+        } else if (btnSS) {
           this._toggleSlideshow();
         } else if (btnDir) {
           this._toggleSlideshowDirection();
-        } else if (btnSs)
+        } else if (btnSs) {
           this._adjustSlideshowDuration(
             btnSs.dataset.action === "ss-inc" ? 1 : -1,
           );
+        }
       });
 
+      // Panel drag
       const dragTarget = this.isMobile ? panel : s.getElementById("gv-drag");
       dragTarget.addEventListener("pointerdown", (e) => {
         if (e.target.closest(".btn, .btn-ss, #ss-duration, #btn-slideshow-dir"))
@@ -1234,24 +1336,25 @@
         const startY = e.clientY - panel.offsetTop;
         dragTarget.setPointerCapture(e.pointerId);
 
-        const move = (m) => {
+        const onMove = (m) => {
           const maxLeft = window.innerWidth - panel.offsetWidth;
           const maxTop = window.innerHeight - panel.offsetHeight;
           panel.style.left = `${Math.min(maxLeft, Math.max(0, m.clientX - startX))}px`;
           panel.style.top = `${Math.min(maxTop, Math.max(0, m.clientY - startY))}px`;
         };
-        const up = () => {
+        const onUp = () => {
           settings.panelLeft = panel.style.left;
           settings.panelTop = panel.style.top;
-          dragTarget.removeEventListener("pointermove", move);
-          dragTarget.removeEventListener("pointerup", up);
+          dragTarget.removeEventListener("pointermove", onMove);
+          dragTarget.removeEventListener("pointerup", onUp);
         };
-        dragTarget.addEventListener("pointermove", move);
-        dragTarget.addEventListener("pointerup", up);
+        dragTarget.addEventListener("pointermove", onMove);
+        dragTarget.addEventListener("pointerup", onUp);
       });
 
       this._clampPanelToScreen(panel);
 
+      // Scroll-wheel navigation and zoom
       overlay.addEventListener(
         "wheel",
         (e) => {
@@ -1271,6 +1374,7 @@
         { passive: false },
       );
 
+      // Touch events on overlay
       overlay.addEventListener("touchstart", (e) => this.handleTouchStart(e), {
         passive: true,
       });
@@ -1281,6 +1385,7 @@
         passive: true,
       });
 
+      // Mouse pan on zoomed images
       overlay.addEventListener("mousedown", (e) => {
         if (e.button !== 0 || this._scale <= 1 || e.target.tagName !== "IMG")
           return;
@@ -1290,7 +1395,6 @@
         this._panStart.y = e.clientY - this._panOffset.y;
         e.target.classList.add("dragging");
       });
-
       overlay.addEventListener("mousemove", (e) => {
         if (!this._isPanning) return;
         this._panOffset.x = e.clientX - this._panStart.x;
@@ -1298,7 +1402,6 @@
         this._clampPan();
         this._applyTransform();
       });
-
       const stopMousePan = () => {
         if (!this._isPanning) return;
         this._isPanning = false;
@@ -1308,49 +1411,80 @@
       overlay.addEventListener("mouseleave", stopMousePan);
     },
 
-    // ── Gallery navigation ───────────────────────────────────────────────────
-    async _navigateGallery(mode, dir = 0) {
-      this._galleryMode = mode;
+    // ── Gallery navigation ────────────────────────────────────────────────
+
+    async _navigateGallery(rawMode, dir = 0) {
+      this._galleryMode = this._normaliseMode(rawMode);
       const isTick = dir === "slideshow_tick";
 
       if (!this._xpageLocked) this.refreshMediaPipelines();
 
-      const { list, idxProp, fetchType } = this._getModeConfig(mode);
+      const state = this._modeState();
+      const { list, idx, setIdx, mode } = state;
+
+      // Flash the button red if the gallery is empty
+      if (!list?.length && dir === 0 && !this._xpageLocked) {
+        this._flashEmptyButton(mode);
+        return;
+      }
       if (!list?.length) return;
 
       if (dir === 0 && !this._xpageLocked) {
-        this[idxProp] = this._getFirstUnseenIdx(list);
+        setIdx(this._getFirstUnseenIdx(list));
       }
 
       const numDir = isTick ? this._slideshowDirection : dir;
-      const nextIdx = (this[idxProp] || 0) + numDir;
+      const nextIdx = (this._indices[mode] || 0) + numDir;
 
       if (numDir > 0 && nextIdx >= list.length) {
-        await this._handlePageBoundary(1, fetchType, idxProp);
+        await this._handlePageBoundary(1, mode);
         return;
       }
       if (numDir < 0 && nextIdx < 0) {
-        await this._handlePageBoundary(-1, fetchType, idxProp);
+        await this._handlePageBoundary(-1, mode);
         return;
       }
 
-      this[idxProp] =
-        numDir === 0 ? this[idxProp] : (nextIdx + list.length) % list.length;
+      setIdx(
+        numDir === 0
+          ? this._indices[mode]
+          : (nextIdx + list.length) % list.length,
+      );
 
       await this._renderMedia(
-        list[this[idxProp]],
-        this[idxProp],
+        list[this._indices[mode]],
+        this._indices[mode],
         list.length,
         numDir,
       );
       if (this._slideshowActive) this._evaluateActiveAutoplayContext();
     },
 
-    async _handlePageBoundary(dir, fetchType, currentIdxProp) {
+    // Flash the relevant panel button red briefly when no media is found.
+    _flashEmptyButton(mode) {
+      const btnId = {
+        [MODE.VIDEO]: "btn-vgallery",
+        [MODE.MAIN]: "btn-gallery",
+        [MODE.FULL]: "btn-fullgallery",
+      }[mode];
+      if (!btnId) return;
+      const btn = this.shadow.getElementById(btnId);
+      if (!btn) return;
+      btn.style.borderColor = "#ff3b30";
+      btn.style.color = "#fff";
+      btn.style.backgroundColor = "#ff3b30";
+      setTimeout(() => {
+        btn.style.borderColor = "";
+        btn.style.color = "";
+        btn.style.backgroundColor = "";
+      }, 1500);
+    },
+
+    async _handlePageBoundary(dir, mode) {
       const liveUrlClean = window.location.href.split("#")[0];
       let currentScanUrl = this._xpageUrl || window.location.href;
 
-      for (let attempts = 0; attempts < 10; attempts++) {
+      for (let attempt = 0; attempt < 10; attempt++) {
         let nextUrl = this._getAdjacentPageUrl(dir, currentScanUrl);
 
         if (!nextUrl) {
@@ -1369,24 +1503,19 @@
         this._showCrossPageHint(
           `Scanning page ${this._parsePageNum(nextUrl) || 1}…`,
         );
-        const items = await this._fetchPageMedia(nextUrl, fetchType);
+        const items = await this._fetchPageMedia(nextUrl, mode);
 
         if (items.length > 0) {
           if (nextUrl.split("#")[0] === liveUrlClean) {
-            this._resetPageLockAndRender(
-              currentIdxProp,
-              fetchType,
-              dir > 0 ? 0 : -1,
-              dir,
-            );
+            this._resetPageLockAndRender(mode, dir > 0 ? 0 : -1, dir);
           } else {
-            this._updateListRef(fetchType, items);
-            this[currentIdxProp] = dir > 0 ? 0 : items.length - 1;
+            this._lists[mode] = items;
+            this._indices[mode] = dir > 0 ? 0 : items.length - 1;
             this._xpageLocked = true;
             this._xpageUrl = nextUrl;
             await this._renderMedia(
-              items[this[currentIdxProp]],
-              this[currentIdxProp],
+              items[this._indices[mode]],
+              this._indices[mode],
               items.length,
               dir,
             );
@@ -1402,42 +1531,34 @@
       this._stopSlideshow();
 
       setTimeout(() => {
-        const list = this._getListRef(fetchType);
-        if (this._el.counterText && list?.length) {
-          this._el.counterText.innerHTML = this._buildCounterHTML(
-            this[currentIdxProp],
-            list.length,
-          );
-        }
+        const list = this._lists[mode];
+        if (list?.length) this._setCounter(this._indices[mode], list.length);
       }, 2500);
     },
 
-    _resetPageLockAndRender(
-      currentIdxProp,
-      fetchType,
-      defaultIdx,
-      fallbackDir = 1,
-    ) {
+    _resetPageLockAndRender(mode, defaultIdx, fallbackDir = 1) {
       this._resetPageLock();
       this.refreshMediaPipelines();
-      const list = this._getListRef(fetchType);
+      const list = this._lists[mode];
       if (!list?.length) return;
-      this[currentIdxProp] = defaultIdx === -1 ? list.length - 1 : 0;
+      this._indices[mode] = defaultIdx === -1 ? list.length - 1 : 0;
       this._renderMedia(
-        list[this[currentIdxProp]],
-        this[currentIdxProp],
+        list[this._indices[mode]],
+        this._indices[mode],
         list.length,
         fallbackDir,
       );
     },
 
-    // ── Media rendering ──────────────────────────────────────────────────────
+    // ── Media rendering ───────────────────────────────────────────────────
+
     async _renderMedia(current, idx, total, lastDirection = 1) {
-      const { overlay, container, counterText, ssInputWrapper } = this._el;
+      const { overlay, container, ssInputWrapper } = this._el;
       overlay.style.display = "flex";
       document.body.classList.add("gv-noscroll");
       overlay.focus();
 
+      // Cancel any in-flight decode or media event listeners
       this._decodeAbort?.abort();
       this._mediaListenerAbort?.abort();
       this._mediaListenerAbort = null;
@@ -1445,127 +1566,160 @@
       this._resetZoom();
 
       if (current.tagName === "IMG") {
-        const el = new Image();
-        el.src = this.getFullSrc(current);
-        const controller = new AbortController();
-        this._decodeAbort = controller;
-        try {
-          await el.decode();
-        } catch {
-          if (!controller.signal.aborted) {
-            this._decodeAbort = null;
-            const fallbackStep = lastDirection === 0 ? 1 : lastDirection;
-            this._navigateGallery(this._galleryMode, fallbackStep);
-            return;
-          }
-        }
-        if (controller.signal.aborted) return;
-        this._decodeAbort = null;
-        container.appendChild(el);
+        await this._renderImage(current, lastDirection);
       } else {
-        let directSrc =
-          current.tagName !== "DIV"
-            ? await this._fetchTurboCDNSrc(current)
-            : null;
-
-        if (!directSrc) {
-          const node =
-            current.tagName === "VIDEO"
-              ? current
-              : current.querySelector("video, source");
-          if (node) directSrc = node.getAttribute("src") || node.src;
-        }
-
-        const isDirectStream =
-          directSrc &&
-          /\.(mp4|webm|mov|ogg|m3u8)(\?|$)/i.test(directSrc.split("#")[0]);
-
-        if (
-          isDirectStream ||
-          current.tagName === "VIDEO" ||
-          (directSrc && current.tagName !== "IFRAME")
-        ) {
-          const el = document.createElement("video");
-          el.src =
-            directSrc || current.getAttribute("src") || current.currentSrc;
-          el.removeAttribute("id");
-          el.className = "";
-          el.controls = true;
-          el.loop = !this._slideshowActive;
-          el.autoplay = true;
-          el.preload = "auto";
-          el.setAttribute("playsinline", "");
-          el.volume = settings.videoVolume;
-          el.muted = settings.videoMuted;
-
-          const listenerAbort = new AbortController();
-          this._mediaListenerAbort = listenerAbort;
-          const opts = { signal: listenerAbort.signal };
-
-          el.addEventListener(
-            "volumechange",
-            () => {
-              settings.videoVolume = el.volume;
-              settings.videoMuted = el.muted;
-            },
-            opts,
-          );
-          el.addEventListener(
-            "ended",
-            () => {
-              if (this._slideshowActive)
-                this._navigateGallery(this._galleryMode, "slideshow_tick");
-            },
-            opts,
-          );
-
-          container.appendChild(el);
-          el.play().catch(() => {
-            el.muted = true;
-            el.play().catch(() => {});
-          });
-        } else {
-          const el = document.createElement("iframe");
-          let src =
-            current.tagName === "DIV"
-              ? current.getAttribute("onclick")?.match(/'([^']+)'/)?.[1]
-              : directSrc || current.src;
-          if (src?.startsWith("//")) src = "https:" + src;
-          el.style.cssText =
-            "width: 85vw; height: 85vh; border: none; background: #000;";
-          el.allow = "fullscreen; autoplay";
-          el.setAttribute("allowfullscreen", "");
-          container.appendChild(el);
-          if (src) {
-            try {
-              const url = new URL(src);
-              url.searchParams.set("autoplay", "1");
-              el.src = url.toString();
-            } catch {
-              el.src = src;
-            }
-          }
-        }
+        await this._renderVideoOrEmbed(current);
       }
 
       if (ssInputWrapper)
         ssInputWrapper.style.display = current.tagName !== "IMG" ? "none" : "";
-      if (counterText)
-        counterText.innerHTML = this._buildCounterHTML(idx, total);
+
+      this._setCounter(idx, total);
       this._updateSlideshowButton();
     },
+
+    async _renderImage(current, lastDirection) {
+      const el = new Image();
+      el.src = this.getFullSrc(current);
+      const controller = new AbortController();
+      this._decodeAbort = controller;
+
+      try {
+        await el.decode();
+      } catch {
+        if (!controller.signal.aborted) {
+          // Image failed to decode — skip it
+          this._decodeAbort = null;
+          const fallbackStep = lastDirection === 0 ? 1 : lastDirection;
+          this._navigateGallery(this._galleryMode, fallbackStep);
+        }
+        return;
+      }
+
+      if (controller.signal.aborted) return;
+      this._decodeAbort = null;
+      this._el.container.appendChild(el);
+    },
+
+    async _renderVideoOrEmbed(current) {
+      // Try to resolve a direct CDN URL from iframe embed services
+      let directSrc =
+        current.tagName !== "DIV" ||
+        current.classList.contains("video-container")
+          ? await this._fetchTurboCDNSrc(current)
+          : null;
+
+      // Fall back to extracting src from <video> or <source> elements
+      if (!directSrc) {
+        const node =
+          current.tagName === "VIDEO"
+            ? current
+            : current.querySelector("video");
+        if (node) {
+          directSrc =
+            node.getAttribute("src") ||
+            node.src ||
+            node.querySelector("source")?.getAttribute("src");
+        } else if (current.querySelector("source")) {
+          directSrc = current.querySelector("source").getAttribute("src");
+        }
+      }
+
+      const isDirectStream =
+        directSrc &&
+        /\.(mp4|webm|mov|ogg|m3u8)(\?|$)/i.test(directSrc.split("#")[0]);
+
+      if (
+        isDirectStream ||
+        current.tagName === "VIDEO" ||
+        (directSrc && current.tagName !== "IFRAME")
+      ) {
+        this._mountVideoElement(
+          directSrc || current.getAttribute("src") || current.currentSrc,
+        );
+      } else {
+        this._mountIframeElement(current, directSrc);
+      }
+    },
+
+    _mountVideoElement(src) {
+      const el = document.createElement("video");
+      el.src = src;
+      el.controls = true;
+      el.loop = !this._slideshowActive;
+      el.autoplay = true;
+      el.preload = "auto";
+      el.volume = settings.videoVolume;
+      el.muted = settings.videoMuted;
+      el.setAttribute("playsinline", "");
+
+      const listenerAbort = new AbortController();
+      this._mediaListenerAbort = listenerAbort;
+      const opts = { signal: listenerAbort.signal };
+
+      el.addEventListener(
+        "volumechange",
+        () => {
+          settings.videoVolume = el.volume;
+          settings.videoMuted = el.muted;
+        },
+        opts,
+      );
+      el.addEventListener(
+        "ended",
+        () => {
+          if (this._slideshowActive)
+            this._navigateGallery(this._galleryMode, "slideshow_tick");
+        },
+        opts,
+      );
+
+      this._el.container.appendChild(el);
+      el.play().catch(() => {
+        el.muted = true;
+        el.play().catch(() => {});
+      });
+    },
+
+    _mountIframeElement(current, directSrc) {
+      const el = document.createElement("iframe");
+      let src =
+        current.tagName === "DIV"
+          ? current.getAttribute("onclick")?.match(/'([^']+)'/)?.[1]
+          : directSrc || current.src;
+      if (src?.startsWith("//")) src = "https:" + src;
+
+      el.style.cssText =
+        "width: 85vw; height: 85vh; border: none; background: #000;";
+      el.allow = "fullscreen; autoplay";
+      el.setAttribute("allowfullscreen", "");
+      this._el.container.appendChild(el);
+
+      if (src) {
+        try {
+          const url = new URL(src);
+          url.searchParams.set("autoplay", "1");
+          el.src = url.toString();
+        } catch {
+          el.src = src;
+        }
+      }
+    },
+
+    // ── Edge / thread jump ────────────────────────────────────────────────
 
     _jumpToEdge(edge) {
       if (this._xpageLocked) {
         this._resetPageLock();
         this.refreshMediaPipelines();
       }
-      const { list, idxProp } = this._getModeConfig(this._galleryMode);
+      const { list, setIdx, mode } = this._modeState();
       if (!list?.length) return;
-      this[idxProp] = edge === "first" ? 0 : list.length - 1;
+      const targetIdx = edge === "first" ? 0 : list.length - 1;
+      setIdx(targetIdx);
       this._renderMedia(
-        list[this[idxProp]],
-        this[idxProp],
+        list[targetIdx],
+        targetIdx,
         list.length,
         edge === "first" ? 1 : -1,
       );
@@ -1573,8 +1727,7 @@
     },
 
     async _jumpToThreadEdge(edge) {
-      const fetchType = this._getModeConfig(this._galleryMode).fetchType;
-      const currentIdxProp = this._getModeConfig(this._galleryMode).idxProp;
+      const mode = this._normaliseMode(this._galleryMode);
       const liveUrlClean = window.location.href.split("#")[0];
       const base = this._getBaseThreadUrl();
 
@@ -1589,8 +1742,7 @@
 
       if (targetUrl.split("#")[0] === liveUrlClean) {
         this._resetPageLockAndRender(
-          currentIdxProp,
-          fetchType,
+          mode,
           edge === "first" ? 0 : -1,
           edge === "first" ? 1 : -1,
         );
@@ -1600,16 +1752,16 @@
       this._showCrossPageHint(
         `Scanning page ${this._parsePageNum(targetUrl) || 1}…`,
       );
-      const items = await this._fetchPageMedia(targetUrl, fetchType);
+      const items = await this._fetchPageMedia(targetUrl, mode);
 
       if (items.length > 0) {
-        this._updateListRef(fetchType, items);
-        this[currentIdxProp] = edge === "first" ? 0 : items.length - 1;
+        this._lists[mode] = items;
+        this._indices[mode] = edge === "first" ? 0 : items.length - 1;
         this._xpageLocked = true;
         this._xpageUrl = targetUrl;
         await this._renderMedia(
-          items[this[currentIdxProp]],
-          this[currentIdxProp],
+          items[this._indices[mode]],
+          this._indices[mode],
           items.length,
           edge === "first" ? 1 : -1,
         );
@@ -1617,21 +1769,24 @@
       } else {
         this._showCrossPageHint("No media found on destination page.");
         setTimeout(() => {
-          const list = this._getListRef(fetchType);
-          if (this._el.counterText && list?.length) {
-            this._el.counterText.innerHTML = this._buildCounterHTML(
-              this[currentIdxProp],
-              list.length,
-            );
-          }
+          const list = this._lists[mode];
+          if (list?.length) this._setCounter(this._indices[mode], list.length);
         }, 2000);
       }
     },
+
+    // ── Close gallery ─────────────────────────────────────────────────────
 
     closeGallery() {
       this._stopSlideshow();
       this._resetZoom();
       this._resetPageLock();
+
+      // Abort any in-flight decode or media listeners
+      this._decodeAbort?.abort();
+      this._decodeAbort = null;
+      this._mediaListenerAbort?.abort();
+      this._mediaListenerAbort = null;
 
       const { container, overlay } = this._el;
       const video = container.querySelector("video");
@@ -1648,7 +1803,8 @@
       window.focus();
     },
 
-    // ── Global keyboard events ───────────────────────────────────────────────
+    // ── Keyboard events ───────────────────────────────────────────────────
+
     setupGlobalEvents() {
       window.addEventListener(
         "keydown",
@@ -1656,26 +1812,32 @@
           if (
             document.activeElement.matches("input, textarea") ||
             document.activeElement.isContentEditable ||
-            e.target.closest(".slideshow-input")
+            e.target.closest?.(".slideshow-input")
           )
             return;
 
           const isVisible = this._el.overlay?.style.display === "flex";
           const key = e.key.toLowerCase();
 
-          const globalActions = {
-            g: () => this._navigateGallery("main", 0),
-            v: () => this._navigateGallery("video", 0),
-            f: () => this._navigateGallery("full", 0),
-          };
-          if (globalActions[key]) {
-            e.preventDefault();
-            globalActions[key]();
-            return;
+          // Global hotkeys (work regardless of overlay state)
+          // Note: 'a' opens the full gallery when overlay is closed, but
+          // navigates left when overlay is open — handled in overlayActions below.
+          if (!isVisible) {
+            const globalActions = {
+              g: () => this._navigateGallery(MODE.MAIN, 0),
+              v: () => this._navigateGallery(MODE.VIDEO, 0),
+              a: () => this._navigateGallery(MODE.FULL, 0),
+            };
+            if (globalActions[key]) {
+              e.preventDefault();
+              globalActions[key]();
+              return;
+            }
           }
 
           if (!isVisible) return;
 
+          // Overlay-specific hotkeys
           if (e.key === " ") {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -1705,7 +1867,11 @@
             arrowleft: () => this._navigateGallery(this._galleryMode, -1),
             d: () => this._navigateGallery(this._galleryMode, 1),
             arrowright: () => this._navigateGallery(this._galleryMode, 1),
+            // When overlay is open, G/V/A switch gallery modes without closing
+            g: () => this._navigateGallery(MODE.MAIN, 0),
+            v: () => this._navigateGallery(MODE.VIDEO, 0),
           };
+
           if (overlayActions[key]) {
             e.preventDefault();
             e.stopImmediatePropagation();
