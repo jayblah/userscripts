@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.5
+// @version      2.5.2
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -487,6 +487,23 @@
           .lbl-short { display: inline; }
           .btn { width: 100%; height: 38px; font-size: 10px; padding: 0 2px; flex: 0 0 auto; box-sizing: border-box; }
           .z-hotkeys { display: none !important; }
+          .counter-row {
+            flex-direction: column; align-items: center; gap: 5px;
+            bottom: 12px; left: 50%; transform: translateX(-50%);
+            width: calc(100vw - 16px); max-width: 340px;
+          }
+          .counter {
+            font-size: 11px; padding: 4px 8px; gap: 3px;
+            height: 24px; white-space: nowrap;
+            width: 100%; justify-content: center; box-sizing: border-box;
+          }
+          .slideshow-ctrl {
+            width: 100%; justify-content: center; box-sizing: border-box;
+          }
+          #btn-slideshow-dir {
+            font-size: 13px; min-width: 18px; padding: 0 2px 0 4px;
+          }
+          .btn-jump { font-size: 16px; min-width: 18px; padding: 2px 4px; }
         }
       `;
     },
@@ -1187,7 +1204,7 @@
 
             if (Math.abs(dx) > Math.abs(dy)) {
               if (Math.abs(dx) > 40)
-                this._jumpToEdge(dx > 0 ? "first" : "last");
+                this._jumpToThreadEdge(dx > 0 ? "first" : "last");
             } else {
               if (Math.abs(dy) > 40)
                 this._jumpToThreadEdge(dy > 0 ? "first" : "last");
