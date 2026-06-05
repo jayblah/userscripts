@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.5.2
+// @version      2.5.6
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -157,6 +157,9 @@
     _slideshowTimer: null,
     _slideshowActive: false,
     _slideshowDirection: 1, // 1 = Forward, -1 = Reverse
+
+    // Expand-all state
+    _allExpanded: false,
 
     // Wake lock
     _wakeLock: null,
@@ -330,6 +333,7 @@
         }
         .btn:hover { border-color: var(--theme); color: #fff; background: #2a2a2a; }
         .btn:focus-visible { outline: 2px solid var(--theme); outline-offset: 2px; }
+        .btn.is-expanded { border-color: var(--theme); color: var(--theme); }
         .btn-ss {
           background: transparent; border: none; color: #666;
           display: flex; align-items: center; justify-content: center;
@@ -526,6 +530,9 @@
             <div class="btn" role="button" tabindex="0" data-action="top"    title="Scroll to top">↑</div>
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">↓</div>
           </div>
+          <div class="btn" role="button" tabindex="0" data-action="expand-all" id="btn-expand-all" title="Expand all images on page">
+            <span class="lbl-full">E<u>X</u>P ALL</span><span class="lbl-short">EXP</span>
+          </div>
           <div class="btn" role="button" tabindex="0" data-action="gallery"     id="btn-gallery">
             <span class="lbl-full">IMA<u>G</u>ES</span><span class="lbl-short">IMG</span>
           </div>
@@ -670,7 +677,7 @@
 
           const btn = document.createElement("button");
           btn.className = "sc-expand-btn";
-          btn.textContent = "⊞ EXP";
+          btn.textContent = "EXP";
           btn.title = "Expand all images in this post";
 
           btn.addEventListener("click", (e) => {
@@ -681,7 +688,7 @@
               .querySelectorAll(SEL_IMG)
               .forEach((img) => this._applyImageExpand(img, expanding));
             btn.classList.toggle("is-expanded", expanding);
-            btn.textContent = expanding ? "⊟ COL" : "⊞ EXP";
+            btn.textContent = expanding ? "COL" : "EXP";
             btn.title = expanding
               ? "Collapse all images in this post"
               : "Expand all images in this post";
@@ -728,6 +735,39 @@
       } else if (img.dataset.origThumb) {
         img.src = img.dataset.origThumb;
         delete img.dataset.origThumb;
+      }
+    },
+
+    _toggleExpandAll() {
+      // Derive truth from the DOM: if any image is currently collapsed, expand all.
+      // This handles the case where per-post buttons have been used individually.
+      const imgs = this._lists[MODE.MAIN];
+      const expanding = imgs.some(
+        (img) => !img.classList.contains("gv-expanded"),
+      );
+      this._allExpanded = expanding;
+
+      imgs.forEach((img) => this._applyImageExpand(img, expanding));
+
+      // Sync per-post EXP buttons to match the new global state
+      document.querySelectorAll(".sc-expand-btn").forEach((btn) => {
+        btn.classList.toggle("is-expanded", expanding);
+        btn.textContent = expanding ? "COL" : "EXP";
+        btn.title = expanding
+          ? "Collapse all images in this post"
+          : "Expand all images in this post";
+      });
+
+      const { btnExpandAll } = this._el;
+      if (btnExpandAll) {
+        btnExpandAll.classList.toggle("is-expanded", expanding);
+        btnExpandAll.title = expanding
+          ? "Collapse all images on page"
+          : "Expand all images on page";
+        const full = btnExpandAll.querySelector(".lbl-full");
+        const short = btnExpandAll.querySelector(".lbl-short");
+        if (full) full.innerHTML = expanding ? "COL ALL" : "E<u>X</u>P ALL";
+        if (short) short.textContent = expanding ? "COL" : "EXP";
       }
     },
 
@@ -1262,6 +1302,7 @@
         ssDuration: s.getElementById("ss-duration"),
         ring: s.getElementById("ring-circle"),
         ringEl: s.getElementById("slideshow-ring"),
+        btnExpandAll: s.getElementById("btn-expand-all"),
       };
 
       const { panel, overlay } = this._el;
@@ -1274,6 +1315,7 @@
             top: document.body.scrollHeight,
             behavior: "smooth",
           }),
+        "expand-all": () => this._toggleExpandAll(),
         gallery: () => this._navigateGallery(MODE.MAIN, 0),
         vgallery: () => this._navigateGallery(MODE.VIDEO, 0),
         fullgallery: () => this._navigateGallery(MODE.FULL, 0),
@@ -1637,8 +1679,9 @@
             node.getAttribute("src") ||
             node.src ||
             node.querySelector("source")?.getAttribute("src");
-        } else if (current.querySelector("source")) {
-          directSrc = current.querySelector("source").getAttribute("src");
+        } else {
+          const sourceEl = current.querySelector("source");
+          if (sourceEl) directSrc = sourceEl.getAttribute("src");
         }
       }
 
@@ -1844,6 +1887,7 @@
               g: () => this._navigateGallery(MODE.MAIN, 0),
               v: () => this._navigateGallery(MODE.VIDEO, 0),
               a: () => this._navigateGallery(MODE.FULL, 0),
+              x: () => this._toggleExpandAll(),
             };
             if (globalActions[key]) {
               e.preventDefault();
