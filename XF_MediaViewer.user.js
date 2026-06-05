@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.5.6
+// @version      2.5.8
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -236,6 +236,16 @@
           margin: 15px auto !important;
           border: 1px solid #333 !important;
           object-fit: contain !important;
+        }
+        iframe.gv-expanded, video.gv-expanded, div.video-container.gv-expanded,
+        div[onclick*='redgifs.com'].gv-expanded, iframe.saint-iframe.gv-expanded {
+          display: block !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          aspect-ratio: 16 / 9 !important;
+          height: auto !important;
+          margin: 15px auto !important;
+          border: 1px solid #333 !important;
         }
         .js-lbContainer.expanded > a, .lbContainer.expanded > a {
           pointer-events: none !important;
@@ -678,7 +688,7 @@
           const btn = document.createElement("button");
           btn.className = "sc-expand-btn";
           btn.textContent = "EXP";
-          btn.title = "Expand all images in this post";
+          btn.title = "Expand all media in this post";
 
           btn.addEventListener("click", (e) => {
             e.preventDefault();
@@ -687,11 +697,14 @@
             lbContainer
               .querySelectorAll(SEL_IMG)
               .forEach((img) => this._applyImageExpand(img, expanding));
+            lbContainer
+              .querySelectorAll(SEL_VID)
+              .forEach((el) => this._applyEmbedExpand(el, expanding));
             btn.classList.toggle("is-expanded", expanding);
             btn.textContent = expanding ? "COL" : "EXP";
             btn.title = expanding
-              ? "Collapse all images in this post"
-              : "Expand all images in this post";
+              ? "Collapse all media in this post"
+              : "Expand all media in this post";
           });
 
           const li = document.createElement("li");
@@ -738,24 +751,60 @@
       }
     },
 
+    _applyEmbedExpand(el, expanding) {
+      if (!expanding) {
+        el.classList.remove("gv-expanded");
+        // If the placeholder was already replaced by an iframe, shrink that too
+        const next = el.nextElementSibling;
+        if (next?.tagName === "IFRAME" && next.src?.includes("redgifs"))
+          next.classList.remove("gv-expanded");
+        return;
+      }
+
+      // If this is a redgifs onclick placeholder div that hasn't been activated yet,
+      // fire its onclick to trigger SC's own iframe injection, then size the result.
+      if (el.tagName === "DIV" && el.hasAttribute("onclick")) {
+        el.classList.add("gv-expanded");
+        el.click();
+
+        // The onclick replaces or follows the div with an iframe — watch for it.
+        const parent = el.parentElement;
+        if (!parent) return;
+        const observer = new MutationObserver(() => {
+          const iframe = parent.querySelector("iframe[src*='redgifs']");
+          if (iframe) {
+            observer.disconnect();
+            iframe.classList.add("gv-expanded");
+          }
+        });
+        observer.observe(parent, { childList: true, subtree: true });
+        // Safety timeout — disconnect if iframe never appears
+        setTimeout(() => observer.disconnect(), 5000);
+      } else {
+        el.classList.add("gv-expanded");
+      }
+    },
+
     _toggleExpandAll() {
-      // Derive truth from the DOM: if any image is currently collapsed, expand all.
+      // Derive truth from the DOM: if any media is currently collapsed, expand all.
       // This handles the case where per-post buttons have been used individually.
       const imgs = this._lists[MODE.MAIN];
-      const expanding = imgs.some(
-        (img) => !img.classList.contains("gv-expanded"),
-      );
+      const vids = this._lists[MODE.VIDEO];
+      const expanding =
+        imgs.some((el) => !el.classList.contains("gv-expanded")) ||
+        vids.some((el) => !el.classList.contains("gv-expanded"));
       this._allExpanded = expanding;
 
-      imgs.forEach((img) => this._applyImageExpand(img, expanding));
+      imgs.forEach((el) => this._applyImageExpand(el, expanding));
+      vids.forEach((el) => this._applyEmbedExpand(el, expanding));
 
       // Sync per-post EXP buttons to match the new global state
       document.querySelectorAll(".sc-expand-btn").forEach((btn) => {
         btn.classList.toggle("is-expanded", expanding);
         btn.textContent = expanding ? "COL" : "EXP";
         btn.title = expanding
-          ? "Collapse all images in this post"
-          : "Expand all images in this post";
+          ? "Collapse all media in this post"
+          : "Expand all media in this post";
       });
 
       const { btnExpandAll } = this._el;
