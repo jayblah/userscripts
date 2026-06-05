@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.5.8
+// @version      2.5.10
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -157,9 +157,6 @@
     _slideshowTimer: null,
     _slideshowActive: false,
     _slideshowDirection: 1, // 1 = Forward, -1 = Reverse
-
-    // Expand-all state
-    _allExpanded: false,
 
     // Wake lock
     _wakeLock: null,
@@ -540,7 +537,7 @@
             <div class="btn" role="button" tabindex="0" data-action="top"    title="Scroll to top">↑</div>
             <div class="btn" role="button" tabindex="0" data-action="bottom" title="Scroll to bottom">↓</div>
           </div>
-          <div class="btn" role="button" tabindex="0" data-action="expand-all" id="btn-expand-all" title="Expand all images on page">
+          <div class="btn" role="button" tabindex="0" data-action="expand-all" id="btn-expand-all" title="Expand all media on page">
             <span class="lbl-full">E<u>X</u>P ALL</span><span class="lbl-short">EXP</span>
           </div>
           <div class="btn" role="button" tabindex="0" data-action="gallery"     id="btn-gallery">
@@ -726,7 +723,7 @@
       const all = this._filterVisible(
         Array.from(document.querySelectorAll(SEL_FULL)),
       );
-      this._lists[MODE.FULL] = [...new Set(all)];
+      this._lists[MODE.FULL] = all;
       this._lists[MODE.MAIN] = all.filter((el) => el.matches(SEL_IMG));
       this._lists[MODE.VIDEO] = [
         ...new Set(all.filter((el) => el.matches(SEL_VID))),
@@ -754,10 +751,14 @@
     _applyEmbedExpand(el, expanding) {
       if (!expanding) {
         el.classList.remove("gv-expanded");
-        // If the placeholder was already replaced by an iframe, shrink that too
-        const next = el.nextElementSibling;
-        if (next?.tagName === "IFRAME" && next.src?.includes("redgifs"))
-          next.classList.remove("gv-expanded");
+        // Also collapse any redgifs iframe that was injected when this was expanded
+        const injectedId = el.dataset.gvIframeId;
+        if (injectedId) {
+          const iframe = el.parentElement?.querySelector(
+            `iframe[data-gv-id="${injectedId}"]`,
+          );
+          if (iframe) iframe.classList.remove("gv-expanded");
+        }
         return;
       }
 
@@ -765,20 +766,33 @@
       // fire its onclick to trigger SC's own iframe injection, then size the result.
       if (el.tagName === "DIV" && el.hasAttribute("onclick")) {
         el.classList.add("gv-expanded");
+
+        // If already activated (data-gv-iframe-id set), just re-expand the iframe directly.
+        if (el.dataset.gvIframeId) {
+          const iframe = el.parentElement?.querySelector(
+            `iframe[data-gv-id="${el.dataset.gvIframeId}"]`,
+          );
+          if (iframe) iframe.classList.add("gv-expanded");
+          return;
+        }
+
         el.click();
 
-        // The onclick replaces or follows the div with an iframe — watch for it.
+        // The onclick replaces or inserts an iframe — watch for it.
         const parent = el.parentElement;
         if (!parent) return;
+        const uid = Math.random().toString(36).slice(2);
+        el.dataset.gvIframeId = uid;
+
         const observer = new MutationObserver(() => {
           const iframe = parent.querySelector("iframe[src*='redgifs']");
-          if (iframe) {
+          if (iframe && !iframe.dataset.gvId) {
             observer.disconnect();
+            iframe.dataset.gvId = uid;
             iframe.classList.add("gv-expanded");
           }
         });
         observer.observe(parent, { childList: true, subtree: true });
-        // Safety timeout — disconnect if iframe never appears
         setTimeout(() => observer.disconnect(), 5000);
       } else {
         el.classList.add("gv-expanded");
@@ -793,7 +807,6 @@
       const expanding =
         imgs.some((el) => !el.classList.contains("gv-expanded")) ||
         vids.some((el) => !el.classList.contains("gv-expanded"));
-      this._allExpanded = expanding;
 
       imgs.forEach((el) => this._applyImageExpand(el, expanding));
       vids.forEach((el) => this._applyEmbedExpand(el, expanding));
@@ -807,16 +820,14 @@
           : "Expand all media in this post";
       });
 
-      const { btnExpandAll } = this._el;
+      const { btnExpandAll, btnExpandAllFull, btnExpandAllShort } = this._el;
       if (btnExpandAll) {
         btnExpandAll.classList.toggle("is-expanded", expanding);
         btnExpandAll.title = expanding
-          ? "Collapse all images on page"
-          : "Expand all images on page";
-        const full = btnExpandAll.querySelector(".lbl-full");
-        const short = btnExpandAll.querySelector(".lbl-short");
-        if (full) full.innerHTML = expanding ? "COL ALL" : "E<u>X</u>P ALL";
-        if (short) short.textContent = expanding ? "COL" : "EXP";
+          ? "Collapse all media on page"
+          : "Expand all media on page";
+        if (btnExpandAllFull) btnExpandAllFull.innerHTML = expanding ? "COL ALL" : "E<u>X</u>P ALL";
+        if (btnExpandAllShort) btnExpandAllShort.textContent = expanding ? "COL" : "EXP";
       }
     },
 
@@ -1352,6 +1363,8 @@
         ring: s.getElementById("ring-circle"),
         ringEl: s.getElementById("slideshow-ring"),
         btnExpandAll: s.getElementById("btn-expand-all"),
+        btnExpandAllFull: s.getElementById("btn-expand-all")?.querySelector(".lbl-full"),
+        btnExpandAllShort: s.getElementById("btn-expand-all")?.querySelector(".lbl-short"),
       };
 
       const { panel, overlay } = this._el;
