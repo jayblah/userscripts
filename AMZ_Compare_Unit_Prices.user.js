@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Unit Price Comparator for Amazon
 // @namespace    https://github.com/jayblah/userscripts
-// @version      2.3.1
+// @version      2.4.4
 // @description  Highlights lowest unit price cards with per-unit colors, legend, labels, jump buttons, and cross-unit weight conversion
-// @author       Jay
+// @author       JR
 // @match        *://*.amazon.com/*
 // @match        *://*.amazon.co.uk/*
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/AMZ_Compare_Unit_Prices.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/AMZ_Compare_Unit_Prices.user.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // ==/UserScript==
@@ -16,12 +18,11 @@
   // ─── Constants ────────────────────────────────────────────────────────────
 
   const CARD_SELECTOR = ".puis-card-container";
-  const UNIT_PRICE_SELECTOR = ".a-unit-price";
+  const UNIT_PRICE_SELECTOR = ".s-price-instructions-style";
   const LABEL_ATTR = "data-ulp-label";
   const WINNER_ATTR = "data-ulp-winner";
   const EXACT_ATTR = "data-ulp-exact";
   const STORAGE_KEY_POS = "ulp_panel_pos";
-  const STORAGE_KEY_CACHE = "ulp_cache";
 
   // [border, background]
   const PALETTE = [
@@ -87,116 +88,150 @@
   // Conversion to grams for cross-unit weight comparison.
   // Units not listed here are non-convertible (count, sheet, etc.)
   // and only compete within their own group.
-  const TO_GRAMS = {
-    g: 1,
-    kg: 1000,
-    mg: 0.001,
-    oz: 28.3495,
-    lb: 453.592,
-  };
+  const TO_GRAMS = { g: 1, kg: 1000, mg: 0.001, oz: 28.3495, lb: 453.592 };
 
   // Volume units → ml
-  const TO_ML = {
-    ml: 1,
-    l: 1000,
-    fl_oz: 29.5735,
-  };
+  const TO_ML = { ml: 1, l: 1000, fl_oz: 29.5735 };
+
+  // ─── Unit helpers ─────────────────────────────────────────────────────────
 
   // The canonical "compare group" merges weight units and volume units
   // so $/oz competes with $/lb and $/g etc.
   function compareGroup(unit) {
     if (unit in TO_GRAMS) return "weight";
     if (unit in TO_ML) return "volume";
-    return unit; // everything else is its own group
+    return unit;
   }
 
   // Normalise price to a per-gram or per-ml basis for cross-unit comparison.
-  // Returns null if the unit isn't convertible.
   function normalisePrice(price, unit) {
     if (unit in TO_GRAMS) return price / TO_GRAMS[unit];
     if (unit in TO_ML) return price / TO_ML[unit];
     return null;
   }
 
-  // ─── State ────────────────────────────────────────────────────────────────
+  // ─── Color state ──────────────────────────────────────────────────────────
 
-  const unitColorMap = new Map(); // canonical unit → [border, bg]
-  // groupColorMap maps a compare-group → color, so all weight units share one color slot
+  // groupColorMap maps compare-group → color slot, so all weight units share one color.
+  // unitColorMap caches the resolved color per canonical unit.
+  const unitColorMap = new Map();
   const groupColorMap = new Map();
 
-  function colorForUnit(unit) {
+  function assignColorForUnit(unit) {
     if (!unitColorMap.has(unit)) {
       const group = compareGroup(unit);
       if (!groupColorMap.has(group)) {
-        const idx = groupColorMap.size % PALETTE.length;
-        groupColorMap.set(group, PALETTE[idx]);
+        groupColorMap.set(group, PALETTE[groupColorMap.size % PALETTE.length]);
       }
       unitColorMap.set(unit, groupColorMap.get(group));
     }
     return unitColorMap.get(unit);
   }
 
+  function clearColorState() {
+    unitColorMap.clear();
+    groupColorMap.clear();
+  }
+
   // ─── Parsing ──────────────────────────────────────────────────────────────
 
-  function parseUnitPrice(text) {
-    const clean = text.replace(/\s+/g, " ").trim();
-    const m = clean.match(/[\$£€](\d+(?:\.\d+)?)\/([a-zA-Z]+(?:\s[a-zA-Z]+)?)/);
-    if (!m) return null;
-    const price = parseFloat(m[1]);
-    const rawUnit = m[2].trim().toLowerCase().replace(/\s+/g, " ");
+  // Amazon no longer uses a dedicated .a-unit-price element. The unit price
+  // lives inside .s-price-instructions-style as plain text, e.g.:
+  //   "Price, product page$1.99$1.99 ($0.12$0.12/ounce)..."
+  // The per-unit price is the second .a-price.a-text-price element (the first
+  // is the total price). We reconstruct it from the whole/fraction spans and
+  // find the unit from the surrounding text content.
+  function parseUnitPrice(section) {
+    // .a-price.a-text-price contains the per-unit price as plain text "$0.12$0.12"
+    // (duplicated by Amazon for screen readers — take the first match only).
+    const unitPriceEl = section.querySelector(".a-price.a-text-price");
+    if (!unitPriceEl) return null;
+
+    // Grab the first currency+number from the raw text, ignoring the duplicate
+    const priceText = unitPriceEl.textContent;
+    const priceMatch = priceText.match(/([\$£€])(\d+\.?\d*)/);
+    if (!priceMatch) return null;
+    const symbol = priceMatch[1];
+    const price = parseFloat(priceMatch[2]);
+    if (isNaN(price) || price <= 0) return null;
+
+    // Unit lives in the section text as "/ounce", "/oz", "/count" etc.
+    const sectionText = section.textContent.replace(/\s+/g, " ");
+    const unitMatch = sectionText.match(/\/([a-zA-Z]+(?:\s[a-zA-Z]+)?)/);
+    if (!unitMatch) return null;
+
+    const rawUnit = unitMatch[1].trim().toLowerCase();
     const unit = UNIT_ALIASES[rawUnit] ?? rawUnit;
-    return { price, unit, display: `$${price.toFixed(2)}/${rawUnit}` };
+    return { price, unit, display: `${symbol}${price.toFixed(2)}/${rawUnit}` };
   }
 
   // ─── Card helpers ─────────────────────────────────────────────────────────
 
+  // Prefer a specific title element; fall back to the heading span Amazon uses.
+  // Avoids a full innerText reflow on every card.
   function getCardTitle(card) {
-    // Amazon's title element selector varies — instead read the card's innerText
-    // and take the first non-empty line, which is reliably the product title.
-    const lines = card.innerText
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
-    return lines[0] ?? "";
+    const el =
+      card.querySelector("h2 span") ??
+      card.querySelector("[data-cy='title-recipe-title']") ??
+      card.querySelector(".a-size-medium");
+    if (el) return el.textContent.trim();
+    // Last-resort: first non-empty line of visible text
+    return (
+      card.innerText
+        .split("\n")
+        .map((l) => l.trim())
+        .find(Boolean) ?? ""
+    );
+  }
+
+  function ensureRelative(el) {
+    if (getComputedStyle(el).position === "static") {
+      el.style.position = "relative";
+    }
+  }
+
+  // Shared badge factory — eliminates the duplicated Object.assign blocks.
+  function createBadge({ text, bg, large = false }) {
+    const badge = document.createElement("div");
+    badge.setAttribute(LABEL_ATTR, "");
+    badge.textContent = text;
+    Object.assign(badge.style, {
+      position: "absolute",
+      top: "6px",
+      right: "6px",
+      background: bg,
+      color: "#fff",
+      fontSize: large ? "13px" : "12px",
+      fontWeight: "bold",
+      padding: large ? "4px 8px" : "3px 7px",
+      borderRadius: "5px",
+      zIndex: "9",
+      pointerEvents: "none",
+    });
+    return badge;
   }
 
   function applyHighlight(card, unit, displayLabel, exactMatch) {
-    const [border, bg] = colorForUnit(unit);
+    const [border, bg] = assignColorForUnit(unit);
     card.style.border = `4px solid ${border}`;
     card.style.backgroundColor = bg;
     card.setAttribute(WINNER_ATTR, unit);
 
-    // Exact match gets a gold inner ring via outline
     if (exactMatch) {
       card.style.outline = "3px solid #f5a623";
       card.style.outlineOffset = "-7px";
       card.setAttribute(EXACT_ATTR, "");
     }
 
-    // Stamp a unit price label badge onto the card if not already there
     if (!card.querySelector(`[${LABEL_ATTR}]`)) {
-      const badge = document.createElement("div");
-      badge.setAttribute(LABEL_ATTR, "");
-      badge.textContent = exactMatch
-        ? `★ ${displayLabel} ✓`
-        : `★ ${displayLabel}`;
-      Object.assign(badge.style, {
-        position: "absolute",
-        top: "6px",
-        right: "6px",
-        background: exactMatch ? "#f5a623" : border,
-        color: "#fff",
-        fontSize: "11px",
-        fontWeight: "bold",
-        padding: "2px 6px",
-        borderRadius: "4px",
-        zIndex: "9",
-        pointerEvents: "none",
-      });
-      if (getComputedStyle(card).position === "static") {
-        card.style.position = "relative";
-      }
-      card.appendChild(badge);
+      ensureRelative(card);
+      card.appendChild(
+        createBadge({
+          text: exactMatch ? `★ ${displayLabel} ✓` : `★ ${displayLabel}`,
+          bg: exactMatch ? "#f5a623" : border,
+          large: true,
+        }),
+      );
     }
   }
 
@@ -210,75 +245,59 @@
         card.style.outlineOffset = "";
         card.removeAttribute(WINNER_ATTR);
         card.removeAttribute(EXACT_ATTR);
-        card.querySelector(`[${LABEL_ATTR}]`)?.remove();
       });
-    // Also remove injected per-card unit price labels on non-winners
+    // Remove all badges — both winner badges (above) and non-winner grey badges
+    // added by injectUnitPriceLabels. Two passes are intentional: the first
+    // resets card styles, this second cleans up any orphaned label elements.
     document.querySelectorAll(`[${LABEL_ATTR}]`).forEach((el) => el.remove());
   }
 
-  // Inject a small grey unit price label onto every card that has one,
-  // so cards Amazon doesn't show the price on still display it.
+  // Inject a small grey unit price badge onto every non-winner card that has a
+  // parsed unit price, so the figure is always visible regardless of Amazon's layout.
   function injectUnitPriceLabels(allParsed) {
     allParsed.forEach(({ card, parsed }) => {
-      if (card.querySelector(`[${LABEL_ATTR}]`)) return; // winner badge already there
-      const badge = document.createElement("div");
-      badge.setAttribute(LABEL_ATTR, "");
-      badge.textContent = parsed.display;
-      Object.assign(badge.style, {
-        position: "absolute",
-        top: "6px",
-        right: "6px",
-        background: "#555",
-        color: "#fff",
-        fontSize: "10px",
-        padding: "2px 5px",
-        borderRadius: "4px",
-        zIndex: "9",
-        pointerEvents: "none",
-      });
-      if (getComputedStyle(card).position === "static") {
-        card.style.position = "relative";
-      }
-      card.appendChild(badge);
+      if (card.querySelector(`[${LABEL_ATTR}]`)) return; // winner badge already present
+      ensureRelative(card);
+      card.appendChild(createBadge({ text: parsed.display, bg: "#555" }));
     });
   }
 
-  // ─── Search query ─────────────────────────────────────────────────────────
+  // ─── Search / exact-match ─────────────────────────────────────────────────
 
   function getSearchQuery() {
     const params = new URLSearchParams(window.location.search);
-    const q = params.get("k") ?? params.get("field-keywords") ?? "";
-    return q.trim().toLowerCase();
+    return (params.get("k") ?? params.get("field-keywords") ?? "")
+      .trim()
+      .toLowerCase();
   }
 
   function isExactMatch(card, query) {
     if (!query) return false;
     const title = getCardTitle(card).toLowerCase();
-    if (!title) return false;
-    return query.split(/\s+/).every((word) => {
-      const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return new RegExp(`\\b${escaped}\\b`).test(title);
-    });
+    return (
+      !!title &&
+      query.split(/\s+/).every((word) => {
+        const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(`\\b${escaped}\\b`).test(title);
+      })
+    );
   }
 
-  // winners: { [compareGroup]: { normPrice, price, unit, display, cards: Set } }
-  let lastWinners = {};
+  // ─── Core run ─────────────────────────────────────────────────────────────
 
-  function run() {
-    clearHighlights();
-    unitColorMap.clear();
-    groupColorMap.clear();
-
-    const query = getSearchQuery();
+  function collectGroups(query) {
     const allParsed = [];
-
-    // First pass: collect everything
-    const groups = {}; // compareGroup → { exact: {normPrice, unit, display, cards: Map}, any: {same} }
+    // groups: compareGroup → { exact: winner | null, any: winner | null }
+    // winner: { normPrice, unit, display, cards: Map<card, isExact> }
+    const groups = {};
 
     document.querySelectorAll(CARD_SELECTOR).forEach((card) => {
+      // Only parse the dedicated unit price element; don't fall back to raw
+      // card text, which is too noisy and triggers unnecessary reflows.
       const unitPriceEl = card.querySelector(UNIT_PRICE_SELECTOR);
-      const text = unitPriceEl ? unitPriceEl.innerText : card.innerText;
-      const parsed = parseUnitPrice(text);
+      if (!unitPriceEl) return;
+
+      const parsed = parseUnitPrice(unitPriceEl); // unitPriceEl is now the section
       if (!parsed) return;
 
       allParsed.push({ card, parsed });
@@ -290,63 +309,52 @@
 
       if (!groups[group]) groups[group] = { exact: null, any: null };
 
-      // Track best among exact matches only
-      if (exact) {
-        const e = groups[group].exact;
-        if (!e || normPrice < e.normPrice) {
-          groups[group].exact = {
+      function updateBest(bucket, isExact) {
+        const current = groups[group][bucket];
+        if (!current || normPrice < current.normPrice) {
+          groups[group][bucket] = {
             normPrice,
             unit,
             display,
-            cards: new Map([[card, true]]),
+            cards: new Map([[card, isExact]]),
           };
-        } else if (normPrice === e.normPrice) {
-          e.cards.set(card, true);
+        } else if (normPrice === current.normPrice) {
+          current.cards.set(card, isExact);
         }
       }
 
-      // Track best among all cards (fallback when no exact matches exist)
-      const a = groups[group].any;
-      if (!a || normPrice < a.normPrice) {
-        groups[group].any = {
-          normPrice,
-          unit,
-          display,
-          cards: new Map([[card, exact]]),
-        };
-      } else if (normPrice === a.normPrice) {
-        a.cards.set(card, exact);
-      }
+      if (exact) updateBest("exact", true);
+      updateBest("any", exact);
     });
 
-    // Second pass: for each group, winners are exact-match pool if it exists,
-    // otherwise fall back to the global best.
+    return { allParsed, groups };
+  }
+
+  function resolveWinners(groups) {
+    // For each group, prefer exact-match winners; fall back to global best.
     const winners = {};
     Object.entries(groups).forEach(([group, { exact, any }]) => {
       winners[group] = exact ?? any;
     });
+    return winners;
+  }
 
-    Object.entries(winners).forEach(([, { unit, display, cards }]) => {
+  function run() {
+    clearHighlights();
+    clearColorState();
+
+    const query = getSearchQuery();
+    const { allParsed, groups } = collectGroups(query);
+    const winners = resolveWinners(groups);
+
+    Object.values(winners).forEach(({ unit, display, cards }) => {
       cards.forEach((exact, card) =>
         applyHighlight(card, unit, display, exact),
       );
     });
 
     injectUnitPriceLabels(allParsed);
-
-    lastWinners = winners;
-
-    const cachePayload = Object.fromEntries(
-      Object.entries(winners).map(
-        ([group, { normPrice, price, unit, display }]) => [
-          group,
-          { normPrice, unit, display },
-        ],
-      ),
-    );
-    GM_setValue(STORAGE_KEY_CACHE, JSON.stringify(cachePayload));
-
-    updatePanel();
+    updatePanel(winners);
   }
 
   // ─── Panel UI ─────────────────────────────────────────────────────────────
@@ -367,22 +375,26 @@
       fontSize: "13px",
       minWidth: "200px",
       maxWidth: "280px",
+      // Prevent the panel from swallowing pointer events on Amazon UI beneath it.
+      // Child elements that need interaction (header drag, etc.) re-enable this.
+      pointerEvents: "none",
     });
 
-    // Restore saved position
     const savedPos = GM_getValue(STORAGE_KEY_POS, null);
     if (savedPos) {
       try {
         const { left, top } = JSON.parse(savedPos);
         panel.style.left = left;
         panel.style.top = top;
-      } catch (_) {}
+      } catch (_) {
+        panel.style.right = "16px";
+        panel.style.bottom = "80px";
+      }
     } else {
       panel.style.right = "16px";
       panel.style.bottom = "80px";
     }
 
-    // Header / drag handle
     const header = document.createElement("div");
     header.id = "ulp-header";
     Object.assign(header.style, {
@@ -398,36 +410,45 @@
       alignItems: "center",
       gap: "6px",
       userSelect: "none",
+      pointerEvents: "auto",
     });
-    header.innerHTML = "🏷️ Best Unit Prices";
+    header.textContent = "🏷️ Best Unit Prices";
     panel.appendChild(header);
 
-    // Body
     const body = document.createElement("div");
     body.id = "ulp-body";
-    Object.assign(body.style, { padding: "8px 10px" });
+    body.style.padding = "8px 10px";
+    body.style.pointerEvents = "auto";
     panel.appendChild(body);
 
     document.body.appendChild(panel);
     makeDraggable(panel, header);
   }
 
-  function updatePanel() {
+  function updatePanel(winners) {
     if (!panel) buildPanel();
     const body = panel.querySelector("#ulp-body");
     body.innerHTML = "";
 
-    const entries = Object.entries(lastWinners);
+    const entries = Object.entries(winners);
     if (!entries.length) {
       body.textContent = "No unit prices found.";
       return;
     }
 
-    // Sort entries by compare group label
     entries.sort(([a], [b]) => a.localeCompare(b));
 
-    entries.forEach(([group, { unit, display, price, normPrice, cards }]) => {
-      const [borderColor, bgColor] = colorForUnit(unit);
+    const hasWeight = entries.some(([g]) => g === "weight");
+
+    entries.forEach(([group, { unit, display }]) => {
+      const [borderColor] = assignColorForUnit(unit);
+
+      const groupLabel =
+        group === "weight"
+          ? "Weight (g/oz/lb/kg)"
+          : group === "volume"
+            ? "Volume (ml/l/fl oz)"
+            : group;
 
       const row = document.createElement("div");
       Object.assign(row.style, {
@@ -437,7 +458,6 @@
         marginBottom: "6px",
       });
 
-      // Color swatch
       const swatch = document.createElement("span");
       Object.assign(swatch.style, {
         width: "12px",
@@ -448,17 +468,8 @@
         border: "1px solid rgba(0,0,0,0.15)",
       });
 
-      // Label
       const label = document.createElement("span");
       label.style.flex = "1";
-
-      // Show a human-readable group name
-      const groupLabel =
-        group === "weight"
-          ? "Weight (g/oz/lb/kg)"
-          : group === "volume"
-            ? "Volume (ml/l/fl oz)"
-            : group;
       label.innerHTML = `<strong>${groupLabel}</strong><br><span style="color:#555">${display}</span>`;
 
       row.appendChild(swatch);
@@ -466,9 +477,7 @@
       body.appendChild(row);
     });
 
-    // Cross-unit note if weight group has multiple original units
-    const weightEntries = entries.filter(([g]) => g === "weight");
-    if (weightEntries.length) {
+    if (hasWeight) {
       const note = document.createElement("div");
       note.textContent = "* Weight & volume units compared by conversion";
       Object.assign(note.style, {
@@ -495,30 +504,27 @@
       function onMove(e) {
         const dx = Math.abs(e.clientX - startX);
         const dy = Math.abs(e.clientY - startY);
-        // Only commit to a drag after 4px movement to preserve click behaviour
         if (!dragging && dx < 4 && dy < 4) return;
         if (!dragging) {
           dragging = true;
           handle.style.cursor = "grabbing";
         }
-
-        const newLeft = Math.max(
-          0,
-          Math.min(
-            startLeft + (e.clientX - startX),
-            window.innerWidth - el.offsetWidth,
-          ),
-        );
-        const newTop = Math.max(
-          0,
-          Math.min(
-            startTop + (e.clientY - startY),
-            window.innerHeight - el.offsetHeight,
-          ),
-        );
-
-        el.style.left = newLeft + "px";
-        el.style.top = newTop + "px";
+        el.style.left =
+          Math.max(
+            0,
+            Math.min(
+              startLeft + (e.clientX - startX),
+              window.innerWidth - el.offsetWidth,
+            ),
+          ) + "px";
+        el.style.top =
+          Math.max(
+            0,
+            Math.min(
+              startTop + (e.clientY - startY),
+              window.innerHeight - el.offsetHeight,
+            ),
+          ) + "px";
         el.style.right = "";
         el.style.bottom = "";
       }
@@ -530,10 +536,7 @@
         if (dragging) {
           GM_setValue(
             STORAGE_KEY_POS,
-            JSON.stringify({
-              left: el.style.left,
-              top: el.style.top,
-            }),
+            JSON.stringify({ left: el.style.left, top: el.style.top }),
           );
         }
       }
@@ -546,6 +549,7 @@
   // ─── Observer ─────────────────────────────────────────────────────────────
 
   let debounceTimer = null;
+
   function scheduleRun() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(run, 300);
@@ -558,14 +562,33 @@
     if (relevant) scheduleRun();
   });
 
+  // Exposed for future disable/toggle support.
+  function destroy() {
+    observer.disconnect();
+    clearTimeout(debounceTimer);
+    clearHighlights();
+    panel?.remove();
+    panel = null;
+  }
+
   function attachObserver() {
     observer.observe(document.body, { childList: true, subtree: true });
     run();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", attachObserver);
-  } else {
-    attachObserver();
+  // Only activate on search result pages — not the homepage, product pages, etc.
+  // This prevents the observer and panel from interfering with Amazon's own UI
+  // (e.g. the search bar) on pages where we have nothing to do.
+  function isSearchPage() {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("k") || params.has("field-keywords");
+  }
+
+  if (isSearchPage()) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", attachObserver);
+    } else {
+      attachObserver();
+    }
   }
 })();
