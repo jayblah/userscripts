@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         1.1
+// @version         1.2
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -48,11 +48,6 @@
 
   const NUKE_SELECTORS = [
     "#subreddit-banner-img",
-    "shreddit-sidebar",
-    "#right-sidebar-container",
-    "aside:has(shreddit-sidebar)",
-    "[grid-area='right-sidebar']",
-    ".right-sidebar",
     'faceplate-tracker[noun="games_drawer"]',
     "games-section-badge-controller",
     "#games_section",
@@ -438,6 +433,60 @@
 
     .pp_selection_popup button:hover {
       background: ${DECODER_COLORS.border};
+    }
+
+    #pp_sidebar_wrap {
+      position: fixed;
+      top: 0;
+      right: 0;
+      height: 100%;
+      z-index: 9000;
+      display: flex;
+      align-items: center;
+      pointer-events: none;
+      transition: transform 0.25s ease;
+    }
+
+    #pp_sidebar_wrap.pp_sb_collapsed {
+      transform: translateX(312px);
+    }
+
+    #pp_sidebar_tab {
+      pointer-events: all;
+      flex-shrink: 0;
+      width: 22px;
+      height: 56px;
+      background: #000;
+      border-radius: 6px 0 0 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #eeefef;
+      font-size: 13px;
+      user-select: none;
+      transition: background 0.15s;
+      box-shadow: -2px 0 6px rgba(0,0,0,0.5);
+    }
+
+    #pp_sidebar_tab:hover {
+      background: #1a1a1a;
+    }
+
+    #pp_sidebar_inner {
+      pointer-events: all;
+      width: 312px;
+      height: 100%;
+      overflow-y: auto;
+      background: var(--color-neutral-background, #1a1a1b);
+      box-shadow: -4px 0 16px rgba(0,0,0,0.4);
+    }
+
+    [grid-area="right-sidebar"],
+    #right-sidebar-container,
+    aside:has(shreddit-sidebar),
+    .right-sidebar {
+      display: none !important;
     }
   `;
 
@@ -993,6 +1042,58 @@
       }
     },
 
+    initSidebar: () => {
+      if (document.getElementById("pp_sidebar_wrap")) return;
+
+      const sidebar =
+        document.querySelector(
+          "faceplate-partial[id='subreddit-right-rail__partial']",
+        ) ||
+        document.querySelector("#right-rail-entity-panel-root") ||
+        document.querySelector("shreddit-sidebar") ||
+        document.querySelector("#right-sidebar-container") ||
+        document.querySelector("[grid-area='right-sidebar']");
+
+      if (!sidebar) return;
+
+      const collapsed =
+        localStorage.getItem("pp_sidebar_collapsed") !== "false";
+
+      const wrap = document.createElement("div");
+      wrap.id = "pp_sidebar_wrap";
+      if (collapsed) wrap.classList.add("pp_sb_collapsed");
+
+      const tab = document.createElement("div");
+      tab.id = "pp_sidebar_tab";
+      tab.textContent = collapsed ? "❮" : "❯";
+      tab.title = "Toggle community info";
+
+      const inner = document.createElement("div");
+      inner.id = "pp_sidebar_inner";
+
+      // faceplate-partial renders via shadow DOM slots; move the element itself.
+      // For class="contents" elements, move children instead.
+      if (
+        sidebar.tagName === "FACEPLATE-PARTIAL" ||
+        !sidebar.classList.contains("contents")
+      ) {
+        inner.appendChild(sidebar);
+      } else {
+        while (sidebar.firstChild) inner.appendChild(sidebar.firstChild);
+      }
+
+      // tab first so it sits on the left edge of the flex row
+      wrap.appendChild(tab);
+      wrap.appendChild(inner);
+      document.body.appendChild(wrap);
+
+      tab.addEventListener("click", () => {
+        const isCollapsed = wrap.classList.toggle("pp_sb_collapsed");
+        tab.textContent = isCollapsed ? "❮" : "❯";
+        localStorage.setItem("pp_sidebar_collapsed", String(isCollapsed));
+      });
+    },
+
     processDecoders: () => {
       if (!isAllowedSubreddit()) return;
 
@@ -1024,6 +1125,7 @@
     setTimeout(() => {
       Actions.nuke();
       Actions.nukeAwardButtons();
+      Actions.initSidebar();
       Actions.processComments();
       Actions.injectCollapseButton();
       Actions.processDecoders();
