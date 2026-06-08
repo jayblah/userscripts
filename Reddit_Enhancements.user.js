@@ -77,6 +77,7 @@
   // =========================================================
 
   const NATO_ALPHABET = {
+    // Letters
     alpha: "A",
     alfa: "A",
     bravo: "B",
@@ -106,7 +107,30 @@
     "x-ray": "X",
     yankee: "Y",
     zulu: "Z",
+
+    // Numbers
+    zero: "0",
+    one: "1",
+    two: "2",
+    three: "3",
+    four: "4",
+    five: "5",
+    six: "6",
+    seven: "7",
+    eight: "8",
+    nine: "9",
+
+    // Symbols/Separators
     space: " ",
+    dot: ".",
+    period: ".",
+    underscore: "_",
+    dash: "-",
+    hyphen: "-",
+    ".": ".",
+    _: "_",
+    "-": "-",
+    " ": " ",
   };
 
   const NATO_WORDS = Object.keys(NATO_ALPHABET).sort(
@@ -136,32 +160,47 @@
   }
 
   function natoToText(s) {
-    let normalized = s.toLowerCase();
+    // Clean up input: replace common literal symbols with their word equivalents
+    let normalized = s
+      .toLowerCase()
+      .replace(/\./g, " dot ")
+      .replace(/_/g, " underscore ")
+      .replace(/-/g, " dash ");
+
     let res = "";
     let pos = 0;
     let count = 0;
 
+    // Words sorted by length to ensure "x-ray" is matched before "x"
+    const sortedWords = Object.keys(NATO_ALPHABET).sort(
+      (a, b) => b.length - a.length,
+    );
+
     while (pos < normalized.length) {
-      while (pos < normalized.length && /[^a-z0-9]/.test(normalized[pos])) {
-        pos++;
-      }
-
-      if (pos >= normalized.length) break;
-
       let matched = false;
 
-      for (const w of NATO_WORDS) {
-        if (normalized.substr(pos, w.length) === w) {
-          const nextChar = normalized[pos + w.length];
+      // Skip whitespace
+      if (/\s/.test(normalized[pos])) {
+        pos++;
+        continue;
+      }
 
-          if (!nextChar || /[^a-z0-9]/.test(nextChar)) {
-            res += NATO_ALPHABET[w];
-            pos += w.length;
-            count++;
-            matched = true;
-            break;
-          }
+      // Try to match a word from our NATO list
+      for (const w of sortedWords) {
+        if (normalized.startsWith(w, pos)) {
+          res += NATO_ALPHABET[w];
+          pos += w.length;
+          count++;
+          matched = true;
+          break;
         }
+      }
+
+      if (!matched && /[0-9\.\_\-\s]/.test(normalized[pos])) {
+        res += normalized[pos];
+        pos++;
+        count++;
+        matched = true;
       }
 
       if (!matched) pos++;
