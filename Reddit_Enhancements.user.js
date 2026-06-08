@@ -726,6 +726,17 @@
     return { popup, btn };
   }
 
+  const ALLOWED_SUBREDDITS = [
+    "/r/bigtitsinbikinis/",
+    "/r/ygwbt/",
+    "/r/2busty2hide/",
+  ];
+
+  function isAllowedSubreddit() {
+    const path = window.location.pathname.toLowerCase();
+    return ALLOWED_SUBREDDITS.some((sub) => path.startsWith(sub.toLowerCase()));
+  }
+
   // =========================================================
   // ACTIONS
   // =========================================================
@@ -988,6 +999,9 @@
     },
 
     processDecoders: () => {
+      // Only proceed if we are in an allowed subreddit
+      if (!isAllowedSubreddit()) return;
+
       COMMENT_SELECTORS.forEach((selector) => {
         document.querySelectorAll(`${selector} p`).forEach(scanParagraph);
       });
