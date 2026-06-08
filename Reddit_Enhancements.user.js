@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         1.0
+// @version         1.1
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -133,9 +133,12 @@
     " ": " ",
   };
 
-  const NATO_WORDS = Object.keys(NATO_ALPHABET).sort(
+  // Hoisted once — sorted longest-first so "x-ray" beats "x", etc.
+  const NATO_SORTED = Object.keys(NATO_ALPHABET).sort(
     (a, b) => b.length - a.length,
   );
+
+  const NATO_WORDS = NATO_SORTED;
 
   const natoPattern = new RegExp(
     `\\b(?:${NATO_WORDS.join("|")})(?:[\\s,.-]+(?:${NATO_WORDS.join("|")}))*\\b`,
@@ -160,7 +163,6 @@
   }
 
   function natoToText(s) {
-    // Clean up input: replace common literal symbols with their word equivalents
     let normalized = s
       .toLowerCase()
       .replace(/\./g, " dot ")
@@ -171,22 +173,15 @@
     let pos = 0;
     let count = 0;
 
-    // Words sorted by length to ensure "x-ray" is matched before "x"
-    const sortedWords = Object.keys(NATO_ALPHABET).sort(
-      (a, b) => b.length - a.length,
-    );
-
     while (pos < normalized.length) {
       let matched = false;
 
-      // Skip whitespace
       if (/\s/.test(normalized[pos])) {
         pos++;
         continue;
       }
 
-      // Try to match a word from our NATO list
-      for (const w of sortedWords) {
+      for (const w of NATO_SORTED) {
         if (normalized.startsWith(w, pos)) {
           res += NATO_ALPHABET[w];
           pos += w.length;
@@ -999,11 +994,18 @@
     },
 
     processDecoders: () => {
-      // Only proceed if we are in an allowed subreddit
       if (!isAllowedSubreddit()) return;
 
       COMMENT_SELECTORS.forEach((selector) => {
-        document.querySelectorAll(`${selector} p`).forEach(scanParagraph);
+        document
+          .querySelectorAll(`${selector}:not([pp-decoder-scanned]) p`)
+          .forEach(scanParagraph);
+      });
+
+      COMMENT_SELECTORS.forEach((selector) => {
+        document
+          .querySelectorAll(`${selector}:not([pp-decoder-scanned])`)
+          .forEach((el) => el.setAttribute("pp-decoder-scanned", "true"));
       });
     },
   };
