@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         1.2
+// @version         1.6
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -32,7 +32,6 @@
     border: "#343536",
     text: "#d7dadc",
     accent: "#ff4500",
-    accentHover: "#ff5414",
     success: "#05a133",
     darkInput: "#050505",
   };
@@ -133,29 +132,32 @@
     (a, b) => b.length - a.length,
   );
 
-  const NATO_WORDS = NATO_SORTED;
-
   const natoPattern = new RegExp(
-    `\\b(?:${NATO_WORDS.join("|")})(?:[\\s,.-]+(?:${NATO_WORDS.join("|")}))*\\b`,
+    `\\b(?:${NATO_SORTED.join("|")})(?:[\\s,.-]+(?:${NATO_SORTED.join("|")}))*\\b`,
     "gi",
   );
 
   const binaryPattern = /\b(?:[01]{8}[\s]?){2,}\b/g;
 
-  function buildSocialSearchURL(q) {
-    const query =
-      `${q} ` +
-      `(site:instagram.com OR ` +
-      `site:tiktok.com OR ` +
-      `site:onlyfans.com OR ` +
-      `site:fansly.com OR ` +
-      `site:simpcity.cr OR ` +
-      `site:fapello.com OR ` +
-      `site:boobpedia.com OR ` +
-      `site:babepedia.com)`;
+  const SOCIAL_SITES = [
+    "instagram.com",
+    "tiktok.com",
+    "onlyfans.com",
+    "fansly.com",
+    "simpcity.cr",
+    "fapello.com",
+    "boobpedia.com",
+    "babepedia.com",
+  ];
 
-    return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+  const SOCIAL_SITE_CLAUSE = SOCIAL_SITES.map((s) => `site:${s}`).join(" OR ");
+
+  function buildSocialSearchURL(q) {
+    return `https://www.google.com/search?q=${encodeURIComponent(`${q} (${SOCIAL_SITE_CLAUSE})`)}`;
   }
+
+  const RE_WHITESPACE = /\s/;
+  const RE_NATO_PASSTHROUGH = /[0-9._\-\s]/;
 
   function natoToText(s) {
     let normalized = s
@@ -171,7 +173,7 @@
     while (pos < normalized.length) {
       let matched = false;
 
-      if (/\s/.test(normalized[pos])) {
+      if (RE_WHITESPACE.test(normalized[pos])) {
         pos++;
         continue;
       }
@@ -186,7 +188,7 @@
         }
       }
 
-      if (!matched && /[0-9\.\_\-\s]/.test(normalized[pos])) {
+      if (!matched && RE_NATO_PASSTHROUGH.test(normalized[pos])) {
         res += normalized[pos];
         pos++;
         count++;
@@ -207,7 +209,7 @@
     let res = "";
 
     for (let i = 0; i < clean.length; i += 8) {
-      const charCode = parseInt(clean.substr(i, 8), 2);
+      const charCode = parseInt(clean.slice(i, i + 8), 2);
 
       if (
         (charCode >= 32 && charCode <= 126) ||
@@ -612,7 +614,34 @@
             e.preventDefault();
             e.stopImmediatePropagation();
 
-            window.location.assign(`/search/?q=${encodeURIComponent(query)}`);
+            // Check for an active subreddit chip in the search bar first.
+            // The chip carries the subreddit name in its aria-label:
+            // "Remove r/SubName filter and expand search to all of Reddit"
+            let subredditName = null;
+
+            const chip = document.querySelector(
+              "rpl-input-chip[id='search-input-remove-filter'][selected]",
+            );
+
+            if (chip) {
+              const label = chip.getAttribute("aria-label") || "";
+              const match = label.match(/Remove r\/([^\s]+) filter/);
+              if (match) subredditName = match[1];
+            }
+
+            // Fall back to URL path if no chip is active
+            if (!subredditName) {
+              const parts = window.location.pathname.split("/");
+              if (parts[1] === "r" && parts[2]) subredditName = parts[2];
+            }
+
+            const finalQuery = subredditName
+              ? `${query} subreddit:${subredditName}`
+              : query;
+
+            window.location.assign(
+              `/search/?q=${encodeURIComponent(finalQuery)}`,
+            );
           }
         }
       }
@@ -786,6 +815,17 @@
   // =========================================================
 
   let allCollapsed = false;
+  let collapseButtonInjected = false;
+
+  // Reset injection flag on SPA navigation so a fresh button is injected per thread
+  window.addEventListener("popstate", () => {
+    collapseButtonInjected = false;
+  });
+  const _origPushState = history.pushState.bind(history);
+  history.pushState = (...args) => {
+    collapseButtonInjected = false;
+    _origPushState(...args);
+  };
 
   const Actions = {
     deepQuery: (root, selector) => {
@@ -819,14 +859,15 @@
     injectCollapseButton: () => {
       if (!window.location.href.includes("/comments/")) return;
 
+      // Fast-exit: flag lives in JS so it works across shadow DOM boundaries
+      if (collapseButtonInjected) return;
+
       const commentsBtn = Actions.deepQuery(
         document,
         'button[name="comments-action-button"]',
       );
 
-      if (!commentsBtn || commentsBtn.hasAttribute("pp-has-sibling-btn")) {
-        return;
-      }
+      if (!commentsBtn) return;
 
       const shadowHost = commentsBtn.getRootNode();
 
@@ -894,14 +935,16 @@
       commentsBtn.insertAdjacentElement("afterend", btn);
 
       commentsBtn.setAttribute("pp-has-sibling-btn", "true");
+      collapseButtonInjected = true;
     },
 
     nukeAwardButtons: () => {
       Actions.deepQueryAll(
         document,
-        "award-button, shreddit-slot[slot='award-button']",
+        "award-button:not([pp-award-hidden]), shreddit-slot[slot='award-button']:not([pp-award-hidden])",
       ).forEach((el) => {
         el.style.display = "none";
+        el.setAttribute("pp-award-hidden", "true");
       });
     },
 
@@ -909,7 +952,7 @@
       const items = document.querySelectorAll(NUKE_SELECTOR_STRING);
 
       for (let i = 0; i < items.length; i++) {
-        items[i].remove();
+        if (items[i].isConnected) items[i].remove();
       }
 
       const nav = document.querySelector("left-nav-top-section");
@@ -939,10 +982,6 @@
 
       for (let i = 0; i < images.length; i++) {
         const imgEl = images[i];
-
-        if (imgEl.classList.contains("pp_imageViewable")) {
-          continue;
-        }
 
         imgEl.classList.add("pp_imageViewable");
 
@@ -1015,7 +1054,7 @@
         const shadow = comment.shadowRoot;
 
         if (shadow && !shadow.querySelector(".pp-line-style")) {
-          const depth = parseInt(comment.getAttribute("depth") || 0);
+          const depth = parseInt(comment.getAttribute("depth") || "0", 10);
 
           const color = THREAD_COLORS[depth % THREAD_COLORS.length];
 
@@ -1043,7 +1082,12 @@
     },
 
     initSidebar: () => {
-      if (document.getElementById("pp_sidebar_wrap")) return;
+      // Fast-exit: only subreddit pages have a right rail
+      const isSubredditPage = /^\/r\/[^/]/.test(window.location.pathname);
+      if (!isSubredditPage) {
+        document.getElementById("pp_sidebar_wrap")?.remove();
+        return;
+      }
 
       const sidebar =
         document.querySelector(
@@ -1055,6 +1099,14 @@
         document.querySelector("[grid-area='right-sidebar']");
 
       if (!sidebar) return;
+
+      // If the sidebar element is already inside our panel, nothing to do
+      const existingWrap = document.getElementById("pp_sidebar_wrap");
+      if (existingWrap) {
+        if (existingWrap.contains(sidebar)) return;
+        // New page — tear down old panel and rebuild with fresh sidebar element
+        existingWrap.remove();
+      }
 
       const collapsed =
         localStorage.getItem("pp_sidebar_collapsed") !== "false";
@@ -1071,8 +1123,6 @@
       const inner = document.createElement("div");
       inner.id = "pp_sidebar_inner";
 
-      // faceplate-partial renders via shadow DOM slots; move the element itself.
-      // For class="contents" elements, move children instead.
       if (
         sidebar.tagName === "FACEPLATE-PARTIAL" ||
         !sidebar.classList.contains("contents")
@@ -1082,7 +1132,6 @@
         while (sidebar.firstChild) inner.appendChild(sidebar.firstChild);
       }
 
-      // tab first so it sits on the left edge of the flex row
       wrap.appendChild(tab);
       wrap.appendChild(inner);
       document.body.appendChild(wrap);
@@ -1099,14 +1148,11 @@
 
       COMMENT_SELECTORS.forEach((selector) => {
         document
-          .querySelectorAll(`${selector}:not([pp-decoder-scanned]) p`)
-          .forEach(scanParagraph);
-      });
-
-      COMMENT_SELECTORS.forEach((selector) => {
-        document
           .querySelectorAll(`${selector}:not([pp-decoder-scanned])`)
-          .forEach((el) => el.setAttribute("pp-decoder-scanned", "true"));
+          .forEach((container) => {
+            container.setAttribute("pp-decoder-scanned", "true");
+            container.querySelectorAll("p").forEach(scanParagraph);
+          });
       });
     },
   };
@@ -1154,14 +1200,14 @@
   let selectionPopup = null;
 
   document.addEventListener("mouseup", (e) => {
+    // Compute before setTimeout so we don't hold a closure over the live event
+    const inComment = COMMENT_SELECTORS.some((s) => e.target.closest?.(s));
+
     setTimeout(() => {
       const selection = window.getSelection();
       const selText = selection.toString().trim();
 
-      if (
-        selText.length > 0 &&
-        COMMENT_SELECTORS.some((s) => e.target.closest?.(s))
-      ) {
+      if (selText.length > 0 && inComment) {
         if (!selectionPopup) {
           selectionPopup = createSelectionPopup();
         }
