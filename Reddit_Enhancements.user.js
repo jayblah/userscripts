@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.1
+// @version         2.2
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -15,7 +15,7 @@
   "use strict";
 
   // =========================================================
-  // CONFIG
+  // CONFIGURATION & CONSTANTS
   // =========================================================
 
   const THREAD_COLORS = [
@@ -95,8 +95,17 @@
     "babepedia.com",
   ];
 
+  const FILTER_TARGETS = ["r4r", "r4r30plus", "bdsmpersonals", "dirtyr4r"];
+  const FILTER_LOCATIONS = [
+    "KANSAS CITY",
+    "KCMO",
+    "MISSOURI",
+    "MIDWEST",
+    "KANSAS",
+  ];
+
   // =========================================================
-  // NATO / BINARY DECODER
+  // CORE TRANSLATION DICTIONARIES
   // =========================================================
 
   const NATO_ALPHABET = {
@@ -158,16 +167,34 @@
   const SOCIAL_SITE_CLAUSE = SOCIAL_SITES.map((s) => `site:${s}`).join(" OR ");
 
   // =========================================================
-  // HELPERS
+  // STATE MANAGEMENT
+  // =========================================================
+
+  let currentGalleryImages = [];
+  let currentGalleryIndex = 0;
+  let lastWheelTime = 0;
+  let collapseState = 0; // 0 = expanded, 1 = all collapsed, 2 = first-level only
+  let selectionPopup = null;
+  let currentSelText = "";
+  let lastScrollY = 0;
+  let updateScheduled = false;
+
+  let _dragging = false,
+    _dragOffsetX = 0,
+    _dragOffsetY = 0,
+    _dragMoved = false;
+
+  let _onAllowedSubreddit = ALLOWED_SUBREDDITS.some((sub) =>
+    window.location.pathname.toLowerCase().startsWith(sub),
+  );
+
+  // =========================================================
+  // HELPER UTILITIES
   // =========================================================
 
   function buildSocialSearchURL(q) {
     return `https://www.google.com/search?q=${encodeURIComponent(`${q} (${SOCIAL_SITE_CLAUSE})`)}`;
   }
-
-  let _onAllowedSubreddit = ALLOWED_SUBREDDITS.some((sub) =>
-    window.location.pathname.toLowerCase().startsWith(sub),
-  );
 
   function isAllowedSubreddit() {
     return _onAllowedSubreddit;
@@ -195,7 +222,6 @@
     }
     return count >= 2 ? res : null;
   }
-  // NOTE: matchedCompound removed — was set but never read
 
   function binaryToText(b) {
     const clean = b.replace(/\s/g, "");
@@ -220,8 +246,16 @@
     return results;
   }
 
+  function getHeaderOffset() {
+    const header = document.querySelector("header.v2");
+    return header ? header.offsetHeight : 56;
+  }
+
+  const getTopLevelComments = () =>
+    Array.from(document.querySelectorAll("shreddit-comment[depth='0']"));
+
   // =========================================================
-  // GLOBAL CSS
+  // GLOBAL STYLESHEET
   // =========================================================
 
   const globalStyle = document.createElement("style");
@@ -251,7 +285,7 @@
 
     #pp_lightbox img#pp_lightbox_img {
       max-width: 90%;
-      max-height: calc(100vh - 60px - 86px); /* 60px top padding + 86px filmstrip area */
+      max-height: calc(100vh - 60px - 86px);
       flex: 1 1 0;
       min-height: 0;
       align-self: center;
@@ -325,7 +359,7 @@
     #pp_sidebar_wrap { position: fixed; top: 0; right: 0; height: 100%; z-index: 9000; display: flex; align-items: center; pointer-events: none; transition: transform 0.25s ease; }
     #pp_sidebar_wrap.pp_sb_collapsed { transform: translateX(312px); }
     #pp_sidebar_tab { pointer-events: all; flex-shrink: 0; width: 22px; height: 56px; background: #000; border-radius: 6px 0 0 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #eeefef; font-size: 13px; user-select: none; transition: background 0.15s; box-shadow: -2px 0 6px rgba(0,0,0,0.5); }
-    #pp_sidebar_tab:hover { background: #1a1a1a; }
+    #pp_sidebar_tab:hover { background: #1a1a1b; }
     #pp_sidebar_inner { pointer-events: all; width: 312px; height: 100%; overflow-y: auto; background: var(--color-neutral-background, #1a1a1b); box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
 
     [grid-area="right-sidebar"], #right-sidebar-container, aside:has(shreddit-sidebar), .right-sidebar { display: none !important; }
@@ -353,47 +387,41 @@
   document.documentElement.appendChild(globalStyle);
 
   // =========================================================
-  // LIGHTBOX STATE
+  // AUDIO-VISUAL GALLERY & LIGHTBOX
   // =========================================================
-
-  let currentGalleryImages = [];
-  let currentGalleryIndex = 0;
-  let lastWheelTime = 0;
 
   const lightbox = document.createElement("div");
   lightbox.id = "pp_lightbox";
 
   const attachLightbox = () => {
-    if (!document.body?.contains(lightbox)) {
-      document.body?.appendChild(lightbox);
+    if (document.body?.contains(lightbox)) return;
+    document.body?.appendChild(lightbox);
 
-      lightbox.innerHTML = `
-        <div id="pp_lightbox_close" style="position:absolute; top:20px; right:20px; color:white; font-size:32px; cursor:pointer; z-index:1000001; line-height:1;" title="Close Gallery [Esc]">&times;</div>
-        <div id="pp_nav_prev" class="pp_nav_btn" title="Previous Image [A]">&#10094;</div>
-        <img id="pp_lightbox_img" src="" alt="Enlarged View">
-        <div id="pp_nav_next" class="pp_nav_btn" title="Next Image [D]">&#10095;</div>
-        <div id="pp_gallery_counter">1 / 1</div>
-        <div id="pp_filmstrip"></div>
-      `;
+    lightbox.innerHTML = `
+      <div id="pp_lightbox_close" style="position:absolute; top:20px; right:20px; color:white; font-size:32px; cursor:pointer; z-index:1000001; line-height:1;" title="Close Gallery [Esc]">&times;</div>
+      <div id="pp_nav_prev" class="pp_nav_btn" title="Previous Image [A]">&#10094;</div>
+      <img id="pp_lightbox_img" src="" alt="Enlarged View">
+      <div id="pp_nav_next" class="pp_nav_btn" title="Next Image [D]">&#10095;</div>
+      <div id="pp_gallery_counter">1 / 1</div>
+      <div id="pp_filmstrip"></div>
+    `;
 
-      lightbox.querySelector("#pp_lightbox_close").onclick = (e) => {
-        e.stopPropagation();
+    lightbox.querySelector("#pp_lightbox_close").onclick = (e) => {
+      e.stopPropagation();
+      lightbox.style.display = "none";
+    };
+    lightbox.querySelector("#pp_nav_prev").onclick = (e) => {
+      e.stopPropagation();
+      navigateGallery(-1);
+    };
+    lightbox.querySelector("#pp_nav_next").onclick = (e) => {
+      e.stopPropagation();
+      navigateGallery(1);
+    };
+    lightbox.onclick = (e) => {
+      if (e.target === lightbox || e.target.id === "pp_lightbox_img")
         lightbox.style.display = "none";
-      };
-      lightbox.querySelector("#pp_nav_prev").onclick = (e) => {
-        e.stopPropagation();
-        navigateGallery(-1);
-      };
-      lightbox.querySelector("#pp_nav_next").onclick = (e) => {
-        e.stopPropagation();
-        navigateGallery(1);
-      };
-      lightbox.onclick = (e) => {
-        if (e.target === lightbox || e.target.id === "pp_lightbox_img") {
-          lightbox.style.display = "none";
-        }
-      };
-    }
+    };
   };
 
   const updateLightboxImage = () => {
@@ -420,7 +448,6 @@
         counterEl.textContent = `${currentGalleryIndex + 1} / ${currentGalleryImages.length}`;
     }
 
-    // Rebuild filmstrip only when the image set changes
     if (filmstrip) {
       if (filmstrip.children.length !== currentGalleryImages.length) {
         filmstrip.innerHTML = "";
@@ -437,7 +464,6 @@
         });
       }
 
-      // Sync active highlight and scroll into view
       Array.from(filmstrip.children).forEach((thumb, i) => {
         thumb.classList.toggle("pp_film_active", i === currentGalleryIndex);
       });
@@ -460,125 +486,223 @@
     updateLightboxImage();
   };
 
+  async function fetchGalleryImages(permalink) {
+    try {
+      const res = await fetch(`https://www.reddit.com${permalink}.json`, {
+        headers: { Accept: "application/json" },
+      });
+      const json = await res.json();
+      const post = json?.[0]?.data?.children?.[0]?.data;
+      if (!post) return null;
+
+      const order = post.gallery_data?.items?.map((i) => i.media_id);
+      const meta = post.media_metadata;
+      if (!order || !meta) return null;
+
+      return order
+        .map((id) => {
+          const entry = meta[id];
+          const src = entry?.s?.u || entry?.p?.slice(-1)?.[0]?.u || null;
+          return src ? src.replaceAll("&amp;", "&") : null;
+        })
+        .filter(Boolean);
+    } catch (e) {
+      console.warn("[RE] Gallery fetch failed:", e);
+      return null;
+    }
+  }
+
   // =========================================================
-  // GLOBAL HOTKEY TRAPS
+  // SUBREDDIT FILTERS & HIGHLIGHTERS
   // =========================================================
 
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if (
-        e.target.tagName === "INPUT" ||
-        e.target.tagName === "TEXTAREA" ||
-        e.target.isContentEditable
-      )
-        return;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  function filterStrictF4M() {
+    const currentPath = window.location.pathname.toLowerCase();
+    const isOnTargetSub =
+      FILTER_TARGETS.some((sub) => currentPath.includes(`/r/${sub}`)) ||
+      currentPath.includes("/m/dating/");
 
-      const key = e.key.toLowerCase();
+    if (!isOnTargetSub) return;
 
-      if (lightbox && lightbox.style.display === "flex") {
-        if (
-          [
-            "s",
-            "w",
-            "a",
-            "d",
-            "x",
-            "escape",
-            "arrowright",
-            "arrowleft",
-          ].includes(key)
-        ) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          if (key === "arrowright" || key === "d") navigateGallery(1);
-          else if (key === "arrowleft" || key === "a") navigateGallery(-1);
-          else if (key === "escape" || key === "w")
-            lightbox.style.display = "none";
+    document
+      .querySelectorAll("shreddit-post:not([pp-f4m-filtered])")
+      .forEach((post) => {
+        post.setAttribute("pp-f4m-filtered", "true");
+
+        const titleEl =
+          post.querySelector('[slot="title"]') ||
+          post.querySelector('a[id^="post-title"]');
+        const titleText =
+          post.getAttribute("post-title") || titleEl?.textContent || "";
+        const upperTitle = titleText.toUpperCase();
+
+        if (!/\bF4M\b/.test(upperTitle)) {
+          post.remove();
+          return;
         }
-        return;
-      }
 
-      if (collapseBtn.style.display === "none") return;
+        if (titleEl) {
+          const regexStr = `\\b(${FILTER_LOCATIONS.map((loc) => loc.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")).join("|")})\\b`;
+          const locationRegex = new RegExp(regexStr, "gi");
 
-      if (["s", "w", "a", "d", "x"].includes(key)) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        if (key === "s") toggleCollapseAll();
-        else if (key === "w") jumpToTop();
-        else if (key === "a") jumpToPrevParent();
-        else if (key === "d") jumpToNextParent();
-        else if (key === "x") jumpToBottom();
-      }
-    },
-    true,
-  );
-
-  window.addEventListener(
-    "wheel",
-    (e) => {
-      if (lightbox.style.display !== "flex") return;
-      e.preventDefault();
-      e.stopPropagation();
-      const now = Date.now();
-      if (now - lastWheelTime < 150) return;
-      if (e.deltaY > 0) {
-        navigateGallery(1);
-        lastWheelTime = now;
-      } else if (e.deltaY < 0) {
-        navigateGallery(-1);
-        lastWheelTime = now;
-      }
-    },
-    { passive: false, capture: true },
-  );
+          if (locationRegex.test(titleText)) {
+            titleEl.innerHTML = titleText.replace(locationRegex, (match) => {
+              return `<mark style="background-color: rgba(76, 175, 80, 0.35); color: #4CAF50; border-radius: 3px; padding: 0 3px; font-weight: bold;">${match}</mark>`;
+            });
+          }
+        }
+      });
+  }
 
   // =========================================================
-  // SHADOW DOM SEARCH OVERRIDE
+  // COMMENT NAVIGATION & STRUCTURE PIPELINES
   // =========================================================
 
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if (e.key !== "Enter") return;
-      const input = e
-        .composedPath()
-        .find(
-          (el) =>
-            el.tagName === "INPUT" && (el.name === "q" || el.type === "search"),
-        );
-      if (!input) return;
-      const query = input.value?.trim();
-      if (!query) return;
+  const collapseBtn = document.createElement("div");
+  collapseBtn.id = "pp_float_collapse";
+  collapseBtn.innerHTML = `
+    <div class="pp_collapse_main_btn" id="pp_collapse_text" role="button" title="Toggle comment trees [S]">COL</div>
+    <div class="pp_collapse_divider"></div>
+    <button class="pp_collapse_sub_btn" id="pp_jump_top" title="Scroll to top [W]">⤒</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_prev" title="Previous comment [A]">▲</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_next" title="Next comment [D]">▼</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">⤓</button>
+  `;
 
-      e.preventDefault();
-      e.stopImmediatePropagation();
-
-      let subredditName = null;
-      const chip = document.querySelector(
-        "rpl-input-chip[id='search-input-remove-filter'][selected]",
-      );
-      if (chip) {
-        const match = (chip.getAttribute("aria-label") || "").match(
-          /Remove r\/([^\s]+) filter/,
-        );
-        if (match) subredditName = match[1];
-      }
-      if (!subredditName) {
-        const parts = window.location.pathname.split("/");
-        if (parts[1] === "r" && parts[2]) subredditName = parts[2];
-      }
-      const finalQuery = subredditName
-        ? `${query} subreddit:${subredditName}`
-        : query;
-      window.location.assign(`/search/?q=${encodeURIComponent(finalQuery)}`);
-    },
-    { capture: true },
+  const _savedPos = JSON.parse(
+    localStorage.getItem("pp_collapse_pos") || "null",
   );
+  collapseBtn.style.top = _savedPos ? _savedPos.top + "px" : "auto";
+  collapseBtn.style.right = _savedPos ? _savedPos.right + "px" : "auto";
+  collapseBtn.style.bottom = _savedPos ? "auto" : "24px";
+  collapseBtn.style.left = _savedPos ? "auto" : "24px";
+  document.documentElement.appendChild(collapseBtn);
+
+  function toggleCollapseAll() {
+    const allComments = Array.from(
+      document.querySelectorAll("shreddit-comment[depth]"),
+    );
+    if (!allComments.length) return;
+
+    collapseState = (collapseState + 1) % 3;
+    const topThreads = Array.from(
+      document.querySelectorAll("shreddit-comment[depth='0']"),
+    );
+    const offset = getHeaderOffset();
+    let anchor = topThreads.find(
+      (el) => el.getBoundingClientRect().top > offset - 10,
+    );
+    if (!anchor && topThreads.length > 0)
+      anchor = topThreads[topThreads.length - 1];
+
+    allComments.forEach((c) => {
+      const depth = parseInt(c.getAttribute("depth") || "0", 10);
+      if (
+        (collapseState === 1 && depth > 0) ||
+        (collapseState === 2 && depth > 1)
+      ) {
+        c.setAttribute("collapsed", "");
+      } else {
+        c.removeAttribute("collapsed");
+      }
+    });
+
+    const labels = ["COL", "1LV", "EXP"];
+    const mainBtnLabel = collapseBtn.querySelector("#pp_collapse_text");
+    if (mainBtnLabel) mainBtnLabel.textContent = labels[collapseState];
+    collapseBtn.classList.toggle("pp_collapsed", collapseState !== 0);
+
+    if (anchor) {
+      setTimeout(() => {
+        const targetY =
+          window.scrollY + anchor.getBoundingClientRect().top - offset;
+        window.scrollTo({ top: targetY, behavior: "smooth" });
+      }, 30);
+    }
+  }
+
+  function jumpToTop() {
+    const post = document.querySelector("shreddit-post");
+    if (post) {
+      window.scrollTo({
+        top:
+          window.scrollY + post.getBoundingClientRect().top - getHeaderOffset(),
+        behavior: "smooth",
+      });
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  function jumpToPrevParent() {
+    const targets = getTopLevelComments();
+    const prev = targets
+      .reverse()
+      .find((el) => el.getBoundingClientRect().top < -5);
+    if (prev) {
+      window.scrollTo({
+        top:
+          window.scrollY + prev.getBoundingClientRect().top - getHeaderOffset(),
+        behavior: "smooth",
+      });
+    } else {
+      jumpToTop();
+    }
+  }
+
+  function jumpToNextParent() {
+    const targets = getTopLevelComments();
+    if (!targets.length) return;
+    const offset = getHeaderOffset();
+    const currentScrollY = window.scrollY;
+    const next = targets.find(
+      (el) => el.getBoundingClientRect().top > offset + 5,
+    );
+
+    if (!next) {
+      window.scrollTo({
+        top: window.scrollY + targets[0].getBoundingClientRect().top - offset,
+        behavior: "smooth",
+      });
+      return;
+    }
+
+    const targetY = currentScrollY + next.getBoundingClientRect().top - offset;
+    if (
+      Math.abs(targetY - currentScrollY) < 3 ||
+      Math.abs(targetY - lastScrollY) < 3
+    ) {
+      window.scrollTo({
+        top: window.scrollY + targets[0].getBoundingClientRect().top - offset,
+        behavior: "smooth",
+      });
+    } else {
+      lastScrollY = targetY;
+      window.scrollTo({ top: targetY, behavior: "smooth" });
+    }
+  }
+
+  function jumpToBottom() {
+    const container =
+      document.querySelector("#comment-tree-container") ||
+      document.querySelector("shreddit-comment-tree");
+    if (container)
+      container.scrollIntoView({ behavior: "smooth", block: "end" });
+    else
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  }
+
+  function syncCollapseButtonVisibility() {
+    _onAllowedSubreddit = ALLOWED_SUBREDDITS.some((sub) =>
+      window.location.pathname.toLowerCase().startsWith(sub),
+    );
+    collapseBtn.style.display = window.location.href.includes("/comments/")
+      ? "flex"
+      : "none";
+  }
 
   // =========================================================
-  // DECODER UI
+  // ENCRYPTED DATA & NATO CODEX STRIPS
   // =========================================================
 
   function createTranslationComponent(type, translatedText) {
@@ -623,11 +747,11 @@
 
   function processTextNode(node) {
     const text = node.textContent;
-
     const binMatches = text.match(binaryPattern);
+
     if (binMatches) {
-      for (let i = 0; i < binMatches.length; i++) {
-        const decoded = binaryToText(binMatches[i]);
+      binMatches.forEach((match) => {
+        const decoded = binaryToText(match);
         if (decoded?.trim().length > 0) {
           const target =
             node.parentNode.tagName === "P" ? node.parentNode : node;
@@ -636,7 +760,7 @@
             target.nextSibling,
           );
         }
-      }
+      });
     }
 
     if (/[a-zA-Z]/.test(text)) {
@@ -654,11 +778,12 @@
   function scanParagraph(p) {
     if (p.hasAttribute("data-decoded")) return;
     p.setAttribute("data-decoded", "true");
+
     const nodes = [];
     const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
     let n;
     while ((n = walker.nextNode())) nodes.push(n);
-    for (let i = 0; i < nodes.length; i++) processTextNode(nodes[i]);
+    nodes.forEach(processTextNode);
   }
 
   function createSelectionPopup() {
@@ -672,303 +797,26 @@
   }
 
   // =========================================================
-  // FLOATING COLLAPSE TOOLBAR
-  // =========================================================
-
-  // 0 = expanded, 1 = all collapsed, 2 = first-level only
-  let collapseState = 0;
-  const collapseBtn = document.createElement("div");
-  collapseBtn.id = "pp_float_collapse";
-
-  collapseBtn.innerHTML = `
-    <div class="pp_collapse_main_btn" id="pp_collapse_text" role="button" title="Toggle comment trees [S]">COL</div>
-    <div class="pp_collapse_divider"></div>
-    <button class="pp_collapse_sub_btn" id="pp_jump_top" title="Scroll to top [W]">⤒</button>
-    <button class="pp_collapse_sub_btn" id="pp_jump_prev" title="Previous comment [A]">▲</button>
-    <button class="pp_collapse_sub_btn" id="pp_jump_next" title="Next comment [D]">▼</button>
-    <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">⤓</button>
-  `;
-
-  const _savedPos = JSON.parse(
-    localStorage.getItem("pp_collapse_pos") || "null",
-  );
-  collapseBtn.style.top = _savedPos ? _savedPos.top + "px" : "auto";
-  collapseBtn.style.right = _savedPos ? _savedPos.right + "px" : "auto";
-  collapseBtn.style.bottom = _savedPos ? "auto" : "24px";
-  collapseBtn.style.left = _savedPos ? "auto" : "24px";
-  document.documentElement.appendChild(collapseBtn);
-
-  let _dragging = false,
-    _dragOffsetX = 0,
-    _dragOffsetY = 0,
-    _dragMoved = false;
-
-  collapseBtn.addEventListener("mousedown", (e) => {
-    if (e.target.tagName === "BUTTON" || e.target.id === "pp_collapse_text")
-      return;
-    e.preventDefault();
-    _dragging = true;
-    _dragMoved = false;
-    const rect = collapseBtn.getBoundingClientRect();
-    _dragOffsetX = e.clientX - rect.left;
-    _dragOffsetY = e.clientY - rect.top;
-  });
-
-  document.addEventListener("mousemove", (e) => {
-    if (!_dragging) return;
-    _dragMoved = true;
-    const right =
-      window.innerWidth - (e.clientX - _dragOffsetX) - collapseBtn.offsetWidth;
-    const top = e.clientY - _dragOffsetY;
-    collapseBtn.style.left = collapseBtn.style.bottom = "auto";
-    collapseBtn.style.right = Math.max(0, right) + "px";
-    collapseBtn.style.top = Math.max(0, top) + "px";
-  });
-
-  document.addEventListener("mouseup", () => {
-    if (!_dragging) return;
-    _dragging = false;
-    if (_dragMoved) {
-      localStorage.setItem(
-        "pp_collapse_pos",
-        JSON.stringify({
-          top: parseInt(collapseBtn.style.top),
-          right: parseInt(collapseBtn.style.right),
-        }),
-      );
-    }
-    _dragMoved = false;
-  });
-
-  function getHeaderOffset() {
-    const header = document.querySelector("header.v2");
-    return header ? header.offsetHeight : 56;
-  }
-
-  function toggleCollapseAll() {
-    const allComments = Array.from(
-      document.querySelectorAll("shreddit-comment[depth]"),
-    );
-    if (!allComments.length) return;
-
-    // Advance state: EXP(0) → COL(1) → 1LV(2) → EXP(0)
-    collapseState = (collapseState + 1) % 3;
-
-    const topThreads = Array.from(
-      document.querySelectorAll("shreddit-comment[depth='0']"),
-    );
-    const offset = getHeaderOffset();
-    let anchor = topThreads.find(
-      (el) => el.getBoundingClientRect().top > offset - 10,
-    );
-    if (!anchor && topThreads.length > 0)
-      anchor = topThreads[topThreads.length - 1];
-
-    if (collapseState === 1) {
-      // COL: collapse everything except depth-0
-      allComments.forEach((c) => {
-        const depth = parseInt(c.getAttribute("depth") || "0", 10);
-        if (depth > 0) c.setAttribute("collapsed", "");
-        else c.removeAttribute("collapsed");
-      });
-    } else if (collapseState === 2) {
-      // 1LV: collapse everything deeper than depth-1
-      allComments.forEach((c) => {
-        const depth = parseInt(c.getAttribute("depth") || "0", 10);
-        if (depth > 1) c.setAttribute("collapsed", "");
-        else c.removeAttribute("collapsed");
-      });
-    } else {
-      // EXP: remove all collapsed attributes
-      allComments.forEach((c) => c.removeAttribute("collapsed"));
-    }
-
-    const labels = ["COL", "1LV", "EXP"];
-    const mainBtnLabel = collapseBtn.querySelector("#pp_collapse_text");
-    if (mainBtnLabel) mainBtnLabel.textContent = labels[collapseState];
-    collapseBtn.classList.toggle("pp_collapsed", collapseState !== 0);
-
-    if (anchor) {
-      setTimeout(() => {
-        const targetY =
-          window.scrollY + anchor.getBoundingClientRect().top - offset;
-        window.scrollTo({ top: targetY, behavior: "smooth" });
-      }, 30);
-    }
-  }
-
-  const getTopLevelComments = () =>
-    Array.from(document.querySelectorAll("shreddit-comment[depth='0']"));
-
-  function jumpToTop() {
-    const post = document.querySelector("shreddit-post");
-    if (post) {
-      window.scrollTo({
-        top:
-          window.scrollY + post.getBoundingClientRect().top - getHeaderOffset(),
-        behavior: "smooth",
-      });
-    } else {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  }
-
-  function jumpToPrevParent() {
-    const targets = getTopLevelComments();
-    const prev = targets
-      .reverse()
-      .find((el) => el.getBoundingClientRect().top < -5);
-    if (prev) {
-      window.scrollTo({
-        top:
-          window.scrollY + prev.getBoundingClientRect().top - getHeaderOffset(),
-        behavior: "smooth",
-      });
-    } else {
-      jumpToTop();
-    }
-  }
-
-  let lastScrollY = 0;
-  function jumpToNextParent() {
-    const targets = getTopLevelComments();
-    if (!targets.length) return;
-    const offset = getHeaderOffset();
-    const currentScrollY = window.scrollY;
-    const next = targets.find(
-      (el) => el.getBoundingClientRect().top > offset + 5,
-    );
-
-    if (!next) {
-      window.scrollTo({
-        top: window.scrollY + targets[0].getBoundingClientRect().top - offset,
-        behavior: "smooth",
-      });
-      return;
-    }
-
-    const targetY = currentScrollY + next.getBoundingClientRect().top - offset;
-    if (
-      Math.abs(targetY - currentScrollY) < 3 ||
-      Math.abs(targetY - lastScrollY) < 3
-    ) {
-      window.scrollTo({
-        top: window.scrollY + targets[0].getBoundingClientRect().top - offset,
-        behavior: "smooth",
-      });
-    } else {
-      lastScrollY = targetY;
-      window.scrollTo({ top: targetY, behavior: "smooth" });
-    }
-  }
-
-  function jumpToBottom() {
-    const container =
-      document.querySelector("#comment-tree-container") ||
-      document.querySelector("shreddit-comment-tree");
-    if (container)
-      container.scrollIntoView({ behavior: "smooth", block: "end" });
-    else
-      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-  }
-
-  collapseBtn
-    .querySelector("#pp_collapse_text")
-    .addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!_dragMoved) toggleCollapseAll();
-    });
-  collapseBtn.querySelector("#pp_jump_top").addEventListener("click", (e) => {
-    e.stopPropagation();
-    jumpToTop();
-  });
-  collapseBtn.querySelector("#pp_jump_prev").addEventListener("click", (e) => {
-    e.stopPropagation();
-    jumpToPrevParent();
-  });
-  collapseBtn.querySelector("#pp_jump_next").addEventListener("click", (e) => {
-    e.stopPropagation();
-    jumpToNextParent();
-  });
-  collapseBtn
-    .querySelector("#pp_jump_bottom")
-    .addEventListener("click", (e) => {
-      e.stopPropagation();
-      jumpToBottom();
-    });
-
-  function syncCollapseButtonVisibility() {
-    _onAllowedSubreddit = ALLOWED_SUBREDDITS.some((sub) =>
-      window.location.pathname.toLowerCase().startsWith(sub),
-    );
-    const onThread = window.location.href.includes("/comments/");
-    collapseBtn.style.display = onThread ? "flex" : "none";
-  }
-
-  const _patchHistory =
-    (original) =>
-    (...args) => {
-      original(...args);
-      syncCollapseButtonVisibility();
-    };
-  history.pushState = _patchHistory(history.pushState.bind(history));
-  history.replaceState = _patchHistory(history.replaceState.bind(history));
-  window.addEventListener("popstate", syncCollapseButtonVisibility);
-
-  // =========================================================
-  // GALLERY FETCH HELPER
-  // =========================================================
-
-  async function fetchGalleryImages(permalink) {
-    try {
-      const res = await fetch(`https://www.reddit.com${permalink}.json`, {
-        headers: { Accept: "application/json" },
-      });
-      const json = await res.json();
-      const post = json?.[0]?.data?.children?.[0]?.data;
-      if (!post) return null;
-
-      const order = post.gallery_data?.items?.map((i) => i.media_id);
-      const meta = post.media_metadata;
-      if (!order || !meta) return null;
-
-      return order
-        .map((id) => {
-          const entry = meta[id];
-          const src = entry?.s?.u || entry?.p?.slice(-1)?.[0]?.u || null;
-          return src ? src.replaceAll("&amp;", "&") : null;
-        })
-        .filter(Boolean);
-    } catch (e) {
-      console.warn("[RE] Gallery fetch failed:", e);
-      return null;
-    }
-  }
-
-  // =========================================================
-  // CORE ACTIONS PIPELINE
+  // ACTIONS PIPELINE ENGINE
   // =========================================================
 
   const Actions = {
     syncCollapseButton: syncCollapseButtonVisibility,
 
     nukeAwardButtons: () => {
-      const awards = deepQueryAll(
+      deepQueryAll(
         document,
         "award-button:not([pp-award-hidden]), shreddit-slot[slot='award-button']:not([pp-award-hidden])",
-      );
-      for (let i = 0; i < awards.length; i++) {
-        awards[i].style.display = "none";
-        awards[i].setAttribute("pp-award-hidden", "true");
-      }
+      ).forEach((award) => {
+        award.style.display = "none";
+        award.setAttribute("pp-award-hidden", "true");
+      });
     },
 
     nuke: () => {
-      const items = deepQueryAll(document, NUKE_SELECTOR_STRING);
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].isConnected) items[i].remove();
-      }
+      deepQueryAll(document, NUKE_SELECTOR_STRING).forEach((item) => {
+        if (item.isConnected) item.remove();
+      });
     },
 
     handleImages: (post) => {
@@ -979,12 +827,9 @@
 
       if (isGallery && permalink) {
         post.setAttribute("pp-images-handled", "true");
-
         fetchGalleryImages(permalink).then((urls) => {
           if (!urls?.length) return;
-
-          const images = post.querySelectorAll("faceplate-img, img");
-          images.forEach((imgEl) => {
+          post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
             imgEl.classList.add("pp_imageViewable");
             imgEl.addEventListener(
               "click",
@@ -994,11 +839,9 @@
                   imgEl.querySelector("img")?.getAttribute("src") ||
                   ""
                 ).replaceAll("&amp;", "&");
-
                 e.preventDefault();
                 e.stopPropagation();
                 attachLightbox();
-
                 currentGalleryImages = urls;
                 const idx = urls.findIndex((u) => {
                   const id = u.match(
@@ -1007,7 +850,6 @@
                   return id && clickedSrc.includes(id);
                 });
                 currentGalleryIndex = idx !== -1 ? idx : 0;
-
                 updateLightboxImage();
                 lightbox.style.display = "flex";
               },
@@ -1018,14 +860,12 @@
         return;
       }
 
-      // Non-gallery posts: DOM-based logic
       const images = post.querySelectorAll(
         "faceplate-img:not([pp-img-handled]), img:not(.pp_imageViewable)",
       );
       if (!images.length) return;
 
-      for (let i = 0; i < images.length; i++) {
-        const imgEl = images[i];
+      images.forEach((imgEl) => {
         imgEl.classList.add("pp_imageViewable");
         if (imgEl.tagName !== "IMG")
           imgEl.setAttribute("pp-img-handled", "true");
@@ -1065,51 +905,45 @@
               currentGalleryImages = [clickedSrc];
               currentGalleryIndex = 0;
             }
-
             updateLightboxImage();
             lightbox.style.display = "flex";
           },
           true,
         );
-      }
+      });
       post.setAttribute("pp-images-handled", "true");
     },
 
     processComments: () => {
-      const comments = document.querySelectorAll(
-        "shreddit-comment:not([pp-checked])",
-      );
-      if (!comments.length) return;
+      document
+        .querySelectorAll("shreddit-comment:not([pp-checked])")
+        .forEach((comment) => {
+          if (
+            comment.getAttribute("author") === "AutoModerator" &&
+            !comment.hasAttribute("collapsed")
+          ) {
+            comment.setAttribute("collapsed", "");
+          }
 
-      for (let i = 0; i < comments.length; i++) {
-        const comment = comments[i];
-        if (
-          comment.getAttribute("author") === "AutoModerator" &&
-          !comment.hasAttribute("collapsed")
-        ) {
-          comment.setAttribute("collapsed", "");
-        }
-
-        const shadow = comment.shadowRoot;
-        if (shadow && !comment.hasAttribute("pp-shadow-styled")) {
-          const depth = parseInt(comment.getAttribute("depth") || "0", 10);
-          const color = THREAD_COLORS[depth % THREAD_COLORS.length];
-          const style = document.createElement("style");
-          style.className = "pp-line-style";
-          style.textContent = `
+          const shadow = comment.shadowRoot;
+          if (shadow && !comment.hasAttribute("pp-shadow-styled")) {
+            const depth = parseInt(comment.getAttribute("depth") || "0", 10);
+            const color = THREAD_COLORS[depth % THREAD_COLORS.length];
+            const style = document.createElement("style");
+            style.className = "pp-line-style";
+            style.textContent = `
             div[data-testid="main-thread-line"] { background-color: ${color} !important; width: 2px !important; opacity: 1 !important; }
             div[data-testid="branch-line"] { border-left: 2px solid ${color} !important; border-bottom: 2px solid ${color} !important; opacity: 1 !important; }
           `;
-          shadow.appendChild(style);
-          comment.setAttribute("pp-shadow-styled", "true");
-          comment.setAttribute("pp-checked", "true");
-        }
-      }
+            shadow.appendChild(style);
+            comment.setAttribute("pp-shadow-styled", "true");
+            comment.setAttribute("pp-checked", "true");
+          }
+        });
     },
 
     initSidebar: () => {
-      const isSubredditPage = /^\/r\/[^/]/.test(window.location.pathname);
-      if (!isSubredditPage) {
+      if (!/^\/r\/[^/]/.test(window.location.pathname)) {
         document.getElementById("pp_sidebar_wrap")?.remove();
         return;
       }
@@ -1172,36 +1006,195 @@
   };
 
   // =========================================================
-  // OBSERVER ENGINE
+  // INTERFACE INTERACTION LISTENERS & INTERCEPTORS
   // =========================================================
 
-  let updateScheduled = false;
-  const observer = new MutationObserver(() => {
-    if (updateScheduled) return;
-    updateScheduled = true;
-    setTimeout(() => {
-      Actions.nuke();
-      Actions.nukeAwardButtons();
-      Actions.initSidebar();
-      Actions.processComments();
-      Actions.syncCollapseButton();
-      Actions.processDecoders();
-      const posts = document.querySelectorAll(
-        "shreddit-post:not([pp-images-handled])",
+  // Floating Toolbar Drag Logic
+  collapseBtn.addEventListener("mousedown", (e) => {
+    if (e.target.tagName === "BUTTON" || e.target.id === "pp_collapse_text")
+      return;
+    e.preventDefault();
+    _dragging = true;
+    _dragMoved = false;
+    const rect = collapseBtn.getBoundingClientRect();
+    _dragOffsetX = e.clientX - rect.left;
+    _dragOffsetY = e.clientY - rect.top;
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (!_dragging) return;
+    _dragMoved = true;
+    const right =
+      window.innerWidth - (e.clientX - _dragOffsetX) - collapseBtn.offsetWidth;
+    const top = e.clientY - _dragOffsetY;
+    collapseBtn.style.left = collapseBtn.style.bottom = "auto";
+    collapseBtn.style.right = Math.max(0, right) + "px";
+    collapseBtn.style.top = Math.max(0, top) + "px";
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!_dragging) return;
+    _dragging = false;
+    if (_dragMoved) {
+      localStorage.setItem(
+        "pp_collapse_pos",
+        JSON.stringify({
+          top: parseInt(collapseBtn.style.top),
+          right: parseInt(collapseBtn.style.right),
+        }),
       );
-      for (let i = 0; i < posts.length; i++) Actions.handleImages(posts[i]);
-      updateScheduled = false;
-    }, 0);
+    }
+    _dragMoved = false;
   });
 
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
+  // Structural Click Binding
+  collapseBtn
+    .querySelector("#pp_collapse_text")
+    .addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!_dragMoved) toggleCollapseAll();
+    });
+  collapseBtn.querySelector("#pp_jump_top").addEventListener("click", (e) => {
+    e.stopPropagation();
+    jumpToTop();
   });
+  collapseBtn.querySelector("#pp_jump_prev").addEventListener("click", (e) => {
+    e.stopPropagation();
+    jumpToPrevParent();
+  });
+  collapseBtn.querySelector("#pp_jump_next").addEventListener("click", (e) => {
+    e.stopPropagation();
+    jumpToNextParent();
+  });
+  collapseBtn
+    .querySelector("#pp_jump_bottom")
+    .addEventListener("click", (e) => {
+      e.stopPropagation();
+      jumpToBottom();
+    });
 
-  // Text Selection Popups
-  let selectionPopup = null;
-  let currentSelText = "";
+  // Native History Patching
+  const _patchHistory =
+    (original) =>
+    (...args) => {
+      original(...args);
+      syncCollapseButtonVisibility();
+    };
+  history.pushState = _patchHistory(history.pushState.bind(history));
+  history.replaceState = _patchHistory(history.replaceState.bind(history));
+  window.addEventListener("popstate", syncCollapseButtonVisibility);
+
+  // Keyboard Navigation Engine
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (
+        e.target.tagName === "INPUT" ||
+        e.target.tagName === "TEXTAREA" ||
+        e.target.isContentEditable
+      )
+        return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const key = e.key.toLowerCase();
+
+      if (lightbox?.style.display === "flex") {
+        if (
+          [
+            "s",
+            "w",
+            "a",
+            "d",
+            "x",
+            "escape",
+            "arrowright",
+            "arrowleft",
+          ].includes(key)
+        ) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          if (key === "arrowright" || key === "d") navigateGallery(1);
+          else if (key === "arrowleft" || key === "a") navigateGallery(-1);
+          else if (key === "escape" || key === "w")
+            lightbox.style.display = "none";
+        }
+        return;
+      }
+
+      if (collapseBtn.style.display === "none") return;
+      if (["s", "w", "a", "d", "x"].includes(key)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (key === "s") toggleCollapseAll();
+        else if (key === "w") jumpToTop();
+        else if (key === "a") jumpToPrevParent();
+        else if (key === "d") jumpToNextParent();
+        else if (key === "x") jumpToBottom();
+      }
+    },
+    true,
+  );
+
+  // Gallery Mouse Wheel Event Listener
+  window.addEventListener(
+    "wheel",
+    (e) => {
+      if (lightbox.style.display !== "flex") return;
+      e.preventDefault();
+      e.stopPropagation();
+      const now = Date.now();
+      if (now - lastWheelTime < 150) return;
+      if (e.deltaY > 0) {
+        navigateGallery(1);
+        lastWheelTime = now;
+      } else if (e.deltaY < 0) {
+        navigateGallery(-1);
+        lastWheelTime = now;
+      }
+    },
+    { passive: false, capture: true },
+  );
+
+  // Custom Search Scope Subreddit Overlay
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Enter") return;
+      const input = e
+        .composedPath()
+        .find(
+          (el) =>
+            el.tagName === "INPUT" && (el.name === "q" || el.type === "search"),
+        );
+      if (!input) return;
+      const query = input.value?.trim();
+      if (!query) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      let subredditName = null;
+      const chip = document.querySelector(
+        "rpl-input-chip[id='search-input-remove-filter'][selected]",
+      );
+
+      if (chip) {
+        const match = (chip.getAttribute("aria-label") || "").match(
+          /Remove r\/([^\s]+) filter/,
+        );
+        if (match) subredditName = match[1];
+      }
+      if (!subredditName) {
+        const parts = window.location.pathname.split("/");
+        if (parts[1] === "r" && parts[2]) subredditName = parts[2];
+      }
+      window.location.assign(
+        `/search/?q=${encodeURIComponent(subredditName ? `${query} subreddit:${subredditName}` : query)}`,
+      );
+    },
+    { capture: true },
+  );
+
+  // Floating Context Selection Menu Lookup Helper
   document.addEventListener("mouseup", (e) => {
     const inComment = COMMENT_SELECTORS.some((s) => e.target.closest?.(s));
     setTimeout(() => {
@@ -1229,20 +1222,50 @@
   });
 
   // =========================================================
-  // INITIALIZATION
+  // CORE RUNTIME DRIVER (OBSERVER ENGINE)
   // =========================================================
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => {
-      attachLightbox();
-      syncCollapseButtonVisibility();
+  const observer = new MutationObserver(() => {
+    if (updateScheduled) return;
+    updateScheduled = true;
+    setTimeout(() => {
+      Actions.nuke();
+      Actions.nukeAwardButtons();
+      Actions.initSidebar();
+      Actions.processComments();
+      Actions.syncCollapseButton();
       Actions.processDecoders();
-    });
-  } else {
+      filterStrictF4M();
+
+      document
+        .querySelectorAll("shreddit-post:not([pp-images-handled])")
+        .forEach((post) => {
+          Actions.handleImages(post);
+        });
+      updateScheduled = false;
+    }, 0);
+  });
+
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  // =========================================================
+  // BOOTSTRAP INITIALIZATION ENGINE
+  // =========================================================
+
+  const bootstrap = () => {
     attachLightbox();
     syncCollapseButtonVisibility();
     Actions.processDecoders();
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootstrap);
+  } else {
+    bootstrap();
   }
 
-  console.log("Reddit Enhancements v2.1 loaded");
+  console.log("Reddit Enhancements v2.2 loaded");
 })();
