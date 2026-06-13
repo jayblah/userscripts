@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.0
+// @version         2.1
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -177,7 +177,6 @@
     const tokens = s.toLowerCase().split(/[\s,+/]+/);
     let res = "";
     let count = 0;
-
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i].trim();
       if (!token) continue;
@@ -185,12 +184,10 @@
         res += NATO_ALPHABET[token];
         count++;
       } else {
-        let matchedCompound = false;
         for (const w of NATO_SORTED) {
           if (w.includes("-") && token === w) {
             res += NATO_ALPHABET[w];
             count++;
-            matchedCompound = true;
             break;
           }
         }
@@ -198,6 +195,7 @@
     }
     return count >= 2 ? res : null;
   }
+  // NOTE: matchedCompound removed — was set but never read
 
   function binaryToText(b) {
     const clean = b.replace(/\s/g, "");
@@ -247,16 +245,47 @@
       align-items: center;
       cursor: zoom-out;
       user-select: none;
-      padding: 60px 0 24px 0; /* Tightened and stabilized */
       box-sizing: border-box;
+      padding-top: 60px;
     }
 
     #pp_lightbox img#pp_lightbox_img {
       max-width: 90%;
-      max-height: 70vh; /* Use viewport height to prevent overflow */
-      margin: auto 0;   /* Centers in the remaining space */
+      max-height: calc(100vh - 60px - 86px); /* 60px top padding + 86px filmstrip area */
+      flex: 1 1 0;
+      min-height: 0;
+      align-self: center;
       pointer-events: none;
       object-fit: contain;
+    }
+
+    #pp_filmstrip {
+      flex-shrink: 0;
+      display: flex;
+      gap: 6px;
+      padding: 10px 12px;
+      overflow-x: auto;
+      max-width: 90vw;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.2) transparent;
+    }
+    #pp_filmstrip:empty { display: none; }
+
+    .pp_film_thumb {
+      width: 54px;
+      height: 54px;
+      object-fit: cover;
+      border-radius: 4px;
+      cursor: pointer;
+      opacity: 0.45;
+      border: 2px solid transparent;
+      flex-shrink: 0;
+      transition: opacity 0.15s, border-color 0.15s;
+    }
+    .pp_film_thumb:hover { opacity: 0.75; }
+    .pp_film_thumb.pp_film_active {
+      opacity: 1;
+      border-color: #ff4500;
     }
 
     .pp_nav_btn {
@@ -324,7 +353,7 @@
   document.documentElement.appendChild(globalStyle);
 
   // =========================================================
-  // LIGHTBOX STORAGE VARIABLES
+  // LIGHTBOX STATE
   // =========================================================
 
   let currentGalleryImages = [];
@@ -344,6 +373,7 @@
         <img id="pp_lightbox_img" src="" alt="Enlarged View">
         <div id="pp_nav_next" class="pp_nav_btn" title="Next Image [D]">&#10095;</div>
         <div id="pp_gallery_counter">1 / 1</div>
+        <div id="pp_filmstrip"></div>
       `;
 
       lightbox.querySelector("#pp_lightbox_close").onclick = (e) => {
@@ -373,6 +403,7 @@
     const counterEl = lightbox.querySelector("#pp_gallery_counter");
     const prevEl = lightbox.querySelector("#pp_nav_prev");
     const nextEl = lightbox.querySelector("#pp_nav_next");
+    const filmstrip = lightbox.querySelector("#pp_filmstrip");
 
     const cleanSrc = currentGalleryImages[currentGalleryIndex].replaceAll(
       "&amp;",
@@ -388,6 +419,37 @@
       if (multi)
         counterEl.textContent = `${currentGalleryIndex + 1} / ${currentGalleryImages.length}`;
     }
+
+    // Rebuild filmstrip only when the image set changes
+    if (filmstrip) {
+      if (filmstrip.children.length !== currentGalleryImages.length) {
+        filmstrip.innerHTML = "";
+        currentGalleryImages.forEach((src, i) => {
+          const thumb = document.createElement("img");
+          thumb.className = "pp_film_thumb";
+          thumb.src = src.replaceAll("&amp;", "&");
+          thumb.addEventListener("click", (e) => {
+            e.stopPropagation();
+            currentGalleryIndex = i;
+            updateLightboxImage();
+          });
+          filmstrip.appendChild(thumb);
+        });
+      }
+
+      // Sync active highlight and scroll into view
+      Array.from(filmstrip.children).forEach((thumb, i) => {
+        thumb.classList.toggle("pp_film_active", i === currentGalleryIndex);
+      });
+      const activeThumb = filmstrip.children[currentGalleryIndex];
+      if (activeThumb) {
+        activeThumb.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+          inline: "center",
+        });
+      }
+    }
   };
 
   const navigateGallery = (direction) => {
@@ -399,13 +461,12 @@
   };
 
   // =========================================================
-  // GLOBAL HOTKEY TRAPS (INTEGRATED CAPTURING OVERRIDES)
+  // GLOBAL HOTKEY TRAPS
   // =========================================================
 
   window.addEventListener(
     "keydown",
     (e) => {
-      // 1. Always bypass hotkeys if typing in inputs or fields across the site
       if (
         e.target.tagName === "INPUT" ||
         e.target.tagName === "TEXTAREA" ||
@@ -416,7 +477,6 @@
 
       const key = e.key.toLowerCase();
 
-      // STATE A: Lightbox view captures priorities globally
       if (lightbox && lightbox.style.display === "flex") {
         if (
           [
@@ -432,22 +492,19 @@
         ) {
           e.preventDefault();
           e.stopImmediatePropagation();
-
           if (key === "arrowright" || key === "d") navigateGallery(1);
           else if (key === "arrowleft" || key === "a") navigateGallery(-1);
           else if (key === "escape" || key === "w")
             lightbox.style.display = "none";
         }
-        return; // Halt logic tree here when gallery is active
+        return;
       }
 
-      // STATE B: Standard Thread Navigation (Only run if the toolbar button is active on a thread)
       if (collapseBtn.style.display === "none") return;
 
       if (["s", "w", "a", "d", "x"].includes(key)) {
         e.preventDefault();
         e.stopImmediatePropagation();
-
         if (key === "s") toggleCollapseAll();
         else if (key === "w") jumpToTop();
         else if (key === "a") jumpToPrevParent();
@@ -478,7 +535,7 @@
   );
 
   // =========================================================
-  // SHADOW DOM CAPTURING HELPERS
+  // SHADOW DOM SEARCH OVERRIDE
   // =========================================================
 
   window.addEventListener(
@@ -521,7 +578,7 @@
   );
 
   // =========================================================
-  // DECODER UI GENERATORS
+  // DECODER UI
   // =========================================================
 
   function createTranslationComponent(type, translatedText) {
@@ -618,7 +675,8 @@
   // FLOATING COLLAPSE TOOLBAR
   // =========================================================
 
-  let allCollapsed = false;
+  // 0 = expanded, 1 = all collapsed, 2 = first-level only
+  let collapseState = 0;
   const collapseBtn = document.createElement("div");
   collapseBtn.id = "pp_float_collapse";
 
@@ -679,6 +737,7 @@
         }),
       );
     }
+    _dragMoved = false;
   });
 
   function getHeaderOffset() {
@@ -687,11 +746,13 @@
   }
 
   function toggleCollapseAll() {
-    const children = document.querySelectorAll(
-      "shreddit-comment[depth]:not([depth='0'])",
+    const allComments = Array.from(
+      document.querySelectorAll("shreddit-comment[depth]"),
     );
-    if (!children.length) return;
-    allCollapsed = !allCollapsed;
+    if (!allComments.length) return;
+
+    // Advance state: EXP(0) → COL(1) → 1LV(2) → EXP(0)
+    collapseState = (collapseState + 1) % 3;
 
     const topThreads = Array.from(
       document.querySelectorAll("shreddit-comment[depth='0']"),
@@ -703,14 +764,29 @@
     if (!anchor && topThreads.length > 0)
       anchor = topThreads[topThreads.length - 1];
 
-    for (let i = 0; i < children.length; i++) {
-      if (allCollapsed) children[i].setAttribute("collapsed", "");
-      else children[i].removeAttribute("collapsed");
+    if (collapseState === 1) {
+      // COL: collapse everything except depth-0
+      allComments.forEach((c) => {
+        const depth = parseInt(c.getAttribute("depth") || "0", 10);
+        if (depth > 0) c.setAttribute("collapsed", "");
+        else c.removeAttribute("collapsed");
+      });
+    } else if (collapseState === 2) {
+      // 1LV: collapse everything deeper than depth-1
+      allComments.forEach((c) => {
+        const depth = parseInt(c.getAttribute("depth") || "0", 10);
+        if (depth > 1) c.setAttribute("collapsed", "");
+        else c.removeAttribute("collapsed");
+      });
+    } else {
+      // EXP: remove all collapsed attributes
+      allComments.forEach((c) => c.removeAttribute("collapsed"));
     }
 
+    const labels = ["COL", "1LV", "EXP"];
     const mainBtnLabel = collapseBtn.querySelector("#pp_collapse_text");
-    if (mainBtnLabel) mainBtnLabel.textContent = allCollapsed ? "EXP" : "COL";
-    collapseBtn.classList.toggle("pp_collapsed", allCollapsed);
+    if (mainBtnLabel) mainBtnLabel.textContent = labels[collapseState];
+    collapseBtn.classList.toggle("pp_collapsed", collapseState !== 0);
 
     if (anchor) {
       setTimeout(() => {
@@ -841,6 +917,36 @@
   window.addEventListener("popstate", syncCollapseButtonVisibility);
 
   // =========================================================
+  // GALLERY FETCH HELPER
+  // =========================================================
+
+  async function fetchGalleryImages(permalink) {
+    try {
+      const res = await fetch(`https://www.reddit.com${permalink}.json`, {
+        headers: { Accept: "application/json" },
+      });
+      const json = await res.json();
+      const post = json?.[0]?.data?.children?.[0]?.data;
+      if (!post) return null;
+
+      const order = post.gallery_data?.items?.map((i) => i.media_id);
+      const meta = post.media_metadata;
+      if (!order || !meta) return null;
+
+      return order
+        .map((id) => {
+          const entry = meta[id];
+          const src = entry?.s?.u || entry?.p?.slice(-1)?.[0]?.u || null;
+          return src ? src.replaceAll("&amp;", "&") : null;
+        })
+        .filter(Boolean);
+    } catch (e) {
+      console.warn("[RE] Gallery fetch failed:", e);
+      return null;
+    }
+  }
+
+  // =========================================================
   // CORE ACTIONS PIPELINE
   // =========================================================
 
@@ -867,6 +973,52 @@
 
     handleImages: (post) => {
       if (post.hasAttribute("pp-images-handled")) return;
+
+      const isGallery = post.hasAttribute("gallery");
+      const permalink = post.getAttribute("permalink");
+
+      if (isGallery && permalink) {
+        post.setAttribute("pp-images-handled", "true");
+
+        fetchGalleryImages(permalink).then((urls) => {
+          if (!urls?.length) return;
+
+          const images = post.querySelectorAll("faceplate-img, img");
+          images.forEach((imgEl) => {
+            imgEl.classList.add("pp_imageViewable");
+            imgEl.addEventListener(
+              "click",
+              (e) => {
+                const clickedSrc = (
+                  imgEl.getAttribute("src") ||
+                  imgEl.querySelector("img")?.getAttribute("src") ||
+                  ""
+                ).replaceAll("&amp;", "&");
+
+                e.preventDefault();
+                e.stopPropagation();
+                attachLightbox();
+
+                currentGalleryImages = urls;
+                const idx = urls.findIndex((u) => {
+                  const id = u.match(
+                    /\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/,
+                  )?.[1];
+                  return id && clickedSrc.includes(id);
+                });
+                currentGalleryIndex = idx !== -1 ? idx : 0;
+
+                updateLightboxImage();
+                lightbox.style.display = "flex";
+              },
+              true,
+            );
+          });
+        });
+        return;
+      }
+
+      // Non-gallery posts: DOM-based logic
       const images = post.querySelectorAll(
         "faceplate-img:not([pp-img-handled]), img:not(.pp_imageViewable)",
       );
@@ -1077,7 +1229,7 @@
   });
 
   // =========================================================
-  // INITIALIZATION HANDLERS
+  // INITIALIZATION
   // =========================================================
 
   if (document.readyState === "loading") {
@@ -1092,5 +1244,5 @@
     Actions.processDecoders();
   }
 
-  console.log("Reddit Enhancements Clean Loaded v2.0");
+  console.log("Reddit Enhancements v2.1 loaded");
 })();
