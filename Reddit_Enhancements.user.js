@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         1.6
+// @version         2.0
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -51,6 +51,10 @@
     "games-section-badge-controller",
     "#games_section",
     'faceplate-tracker[noun="resources_menu"]',
+    'faceplate-tracker[noun="news_home"]',
+    'faceplate-tracker[noun="explore_home"]',
+    'a[href*="/news/"]',
+    'a[href*="/explore/"]',
     "shreddit-related-communities",
     'details:has(summary[aria-controls="RESOURCES"])',
     "community-highlight-carousel",
@@ -66,12 +70,36 @@
 
   const NUKE_SELECTOR_STRING = NUKE_SELECTORS.join(", ");
 
+  const SIDEBAR_SELECTORS = [
+    "faceplate-partial[id='subreddit-right-rail__partial']",
+    "#right-rail-entity-panel-root",
+    "shreddit-sidebar",
+    "#right-sidebar-container",
+    "[grid-area='right-sidebar']",
+  ];
+
+  const ALLOWED_SUBREDDITS = [
+    "/r/bigtitsinbikinis/",
+    "/r/ygwbt/",
+    "/r/2busty2hide/",
+  ];
+
+  const SOCIAL_SITES = [
+    "instagram.com",
+    "tiktok.com",
+    "onlyfans.com",
+    "fansly.com",
+    "simpcity.cr",
+    "fapello.com",
+    "boobpedia.com",
+    "babepedia.com",
+  ];
+
   // =========================================================
   // NATO / BINARY DECODER
   // =========================================================
 
   const NATO_ALPHABET = {
-    // Letters
     alpha: "A",
     alfa: "A",
     bravo: "B",
@@ -101,8 +129,6 @@
     "x-ray": "X",
     yankee: "Y",
     zulu: "Z",
-
-    // Numbers
     zero: "0",
     one: "1",
     two: "2",
@@ -113,8 +139,6 @@
     seven: "7",
     eight: "8",
     nine: "9",
-
-    // Symbols/Separators
     space: " ",
     dot: ".",
     period: ".",
@@ -127,101 +151,75 @@
     " ": " ",
   };
 
-  // Hoisted once — sorted longest-first so "x-ray" beats "x", etc.
   const NATO_SORTED = Object.keys(NATO_ALPHABET).sort(
     (a, b) => b.length - a.length,
   );
-
-  const natoPattern = new RegExp(
-    `\\b(?:${NATO_SORTED.join("|")})(?:[\\s,.-]+(?:${NATO_SORTED.join("|")}))*\\b`,
-    "gi",
-  );
-
-  const binaryPattern = /\b(?:[01]{8}[\s]?){2,}\b/g;
-
-  const SOCIAL_SITES = [
-    "instagram.com",
-    "tiktok.com",
-    "onlyfans.com",
-    "fansly.com",
-    "simpcity.cr",
-    "fapello.com",
-    "boobpedia.com",
-    "babepedia.com",
-  ];
-
+  const binaryPattern = /\b(?:[01]{8} ?){2,}\b/g;
   const SOCIAL_SITE_CLAUSE = SOCIAL_SITES.map((s) => `site:${s}`).join(" OR ");
+
+  // =========================================================
+  // HELPERS
+  // =========================================================
 
   function buildSocialSearchURL(q) {
     return `https://www.google.com/search?q=${encodeURIComponent(`${q} (${SOCIAL_SITE_CLAUSE})`)}`;
   }
 
-  const RE_WHITESPACE = /\s/;
-  const RE_NATO_PASSTHROUGH = /[0-9._\-\s]/;
+  let _onAllowedSubreddit = ALLOWED_SUBREDDITS.some((sub) =>
+    window.location.pathname.toLowerCase().startsWith(sub),
+  );
+
+  function isAllowedSubreddit() {
+    return _onAllowedSubreddit;
+  }
 
   function natoToText(s) {
-    let normalized = s
-      .toLowerCase()
-      .replace(/\./g, " dot ")
-      .replace(/_/g, " underscore ")
-      .replace(/-/g, " dash ");
-
+    const tokens = s.toLowerCase().split(/[\s,+/]+/);
     let res = "";
-    let pos = 0;
     let count = 0;
 
-    while (pos < normalized.length) {
-      let matched = false;
-
-      if (RE_WHITESPACE.test(normalized[pos])) {
-        pos++;
-        continue;
-      }
-
-      for (const w of NATO_SORTED) {
-        if (normalized.startsWith(w, pos)) {
-          res += NATO_ALPHABET[w];
-          pos += w.length;
-          count++;
-          matched = true;
-          break;
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i].trim();
+      if (!token) continue;
+      if (NATO_ALPHABET[token] !== undefined) {
+        res += NATO_ALPHABET[token];
+        count++;
+      } else {
+        let matchedCompound = false;
+        for (const w of NATO_SORTED) {
+          if (w.includes("-") && token === w) {
+            res += NATO_ALPHABET[w];
+            count++;
+            matchedCompound = true;
+            break;
+          }
         }
       }
-
-      if (!matched && RE_NATO_PASSTHROUGH.test(normalized[pos])) {
-        res += normalized[pos];
-        pos++;
-        count++;
-        matched = true;
-      }
-
-      if (!matched) pos++;
     }
-
     return count >= 2 ? res : null;
   }
 
   function binaryToText(b) {
     const clean = b.replace(/\s/g, "");
-
     if (clean.length % 8 !== 0) return null;
-
     let res = "";
-
     for (let i = 0; i < clean.length; i += 8) {
-      const charCode = parseInt(clean.slice(i, i + 8), 2);
-
-      if (
-        (charCode >= 32 && charCode <= 126) ||
-        [9, 10, 13].includes(charCode)
-      ) {
-        res += String.fromCharCode(charCode);
-      } else {
-        return null;
-      }
+      const c = parseInt(clean.slice(i, i + 8), 2);
+      if (c < 32 && c !== 9 && c !== 10 && c !== 13) return null;
+      if (c > 126) return null;
+      res += String.fromCharCode(c);
     }
-
     return res;
+  }
+
+  function deepQueryAll(root, selector, results = []) {
+    const direct = root.querySelectorAll(selector);
+    for (let i = 0; i < direct.length; i++) results.push(direct[i]);
+    const all = root.querySelectorAll("*");
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].shadowRoot) deepQueryAll(all[i].shadowRoot, selector, results);
+    }
+    return results;
   }
 
   // =========================================================
@@ -229,273 +227,104 @@
   // =========================================================
 
   const globalStyle = document.createElement("style");
-
   globalStyle.textContent = `
-    ${NUKE_SELECTOR_STRING} {
-      display: none !important;
-    }
-
-    award-button,
-    shreddit-slot[slot="award-button"] {
-      display: none !important;
-    }
-
+    ${NUKE_SELECTOR_STRING} { display: none !important; }
+    award-button, shreddit-slot[slot="award-button"] { display: none !important; }
     #user-drawer-content hr.bg-neutral-border-weak,
     #left-sidebar-container hr.border-neutral-border-weak,
-    flex-left-nav-container hr.border-neutral-border-weak {
-      display: none !important;
-    }
+    flex-left-nav-container hr.border-neutral-border-weak { display: none !important; }
+    a[href*="reddit.com/news"], a[href*="/news/"] { display: none !important; }
+    a[href*="reddit.com/explore"], a[href*="/explore/"] { display: none !important; }
 
-    .pp_imageViewable {
-      cursor: zoom-in !important;
-    }
+    .pp_imageViewable { cursor: zoom-in !important; }
 
     #pp_lightbox {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.9);
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.95);
       z-index: 999999;
       display: none;
-      justify-content: center;
+      flex-direction: column;
       align-items: center;
       cursor: zoom-out;
       user-select: none;
+      padding: 60px 0 24px 0; /* Tightened and stabilized */
+      box-sizing: border-box;
     }
 
-    #pp_lightbox img {
-      max-width: 95%;
-      max-height: 95%;
-      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    #pp_lightbox img#pp_lightbox_img {
+      max-width: 90%;
+      max-height: 70vh; /* Use viewport height to prevent overflow */
+      margin: auto 0;   /* Centers in the remaining space */
       pointer-events: none;
+      object-fit: contain;
     }
 
     .pp_nav_btn {
-      position: absolute;
-      top: 50%;
-      transform: translateY(-50%);
-      background: rgba(255,255,255,0.1);
-      color: white;
-      border: none;
-      font-size: 28px;
-      cursor: pointer;
-      border-radius: 4px;
-      transition: background 0.2s;
-      z-index: 1000000;
-      box-sizing: border-box;
-      height: 60px;
-      width: 60px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      padding: 0;
-      line-height: 1;
+      position: absolute; top: 50%; transform: translateY(-50%);
+      background: rgba(255,255,255,0.1); color: white; border: none;
+      font-size: 28px; cursor: pointer; border-radius: 4px;
+      transition: background 0.2s; z-index: 1000000;
+      box-sizing: border-box; height: 60px; width: 60px;
+      display: flex; justify-content: center; align-items: center;
+      padding: 0; line-height: 1;
     }
-
-    .pp_nav_btn:hover {
-      background: rgba(255,255,255,0.25);
-    }
-
+    .pp_nav_btn:hover { background: rgba(255,255,255,0.25); }
     #pp_nav_prev { left: 20px; }
     #pp_nav_next { right: 20px; }
 
     #pp_gallery_counter {
-      position: absolute;
-      bottom: 20px;
-      color: rgba(255,255,255,0.7);
-      font-family: sans-serif;
-      font-size: 14px;
-      background: rgba(0,0,0,0.5);
-      padding: 4px 12px;
-      border-radius: 12px;
-      display: none;
-    }
-
-    .pp_post_noWrap {
-      max-height: none !important;
-      display: block !important;
-    }
-
-    .pp_post_unwrapContainer {
-      width: 100%;
-      display: flex;
-      justify-content: center;
-      padding: 12px 0;
-      cursor: pointer;
-      background: linear-gradient(transparent, rgba(0,0,0,0.05));
-      border-bottom: 1px solid var(--color-neutral-border-weak);
-    }
-
-    .pp_post_unwrapButton {
-      font-weight: bold;
-      color: var(--color-interactive-default);
-    }
-
-    .pp_collapse_btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 0 12px;
-      font-size: 14px;
-      font-weight: 600;
-      font-family: inherit;
-      color: #eeefef !important;
-      background: #2a3236 !important;
-      border: 1px solid #2a3236 !important;
-      border-radius: 99px;
-      cursor: pointer;
-      height: var(--size-button-sm-h, 32px);
-      transition: background 0.15s, border-color 0.15s;
-      user-select: none;
-      white-space: nowrap;
-    }
-
-    .pp_collapse_btn:hover {
-      background: #3a454a !important;
-      border-color: #3a454a !important;
-    }
-
-    .pp_collapse_btn.pp_collapsed {
-      opacity: 0.85;
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+      color: rgba(255,255,255,0.8); font-family: sans-serif; font-size: 14px;
+      background: rgba(0,0,0,0.6); padding: 6px 16px; border-radius: 20px;
+      display: none; z-index: 1000001;
     }
 
     .pp_decoder_box {
-      margin: 8px 0;
-      padding: 6px;
-      background: ${DECODER_COLORS.bg};
-      border: 1px solid ${DECODER_COLORS.border};
-      border-radius: 6px;
-      font-family: sans-serif;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: ${DECODER_COLORS.text};
+      margin: 8px 0; padding: 6px;
+      background: ${DECODER_COLORS.bg}; border: 1px solid ${DECODER_COLORS.border};
+      border-radius: 6px; font-family: sans-serif;
+      display: flex; align-items: center; gap: 10px; color: ${DECODER_COLORS.text};
     }
+    .pp_decoder_label { font-size: 10px; font-weight: 900; color: ${DECODER_COLORS.accent}; text-transform: uppercase; letter-spacing: 1px; }
+    .pp_decoder_result { background: ${DECODER_COLORS.darkInput}; padding: 5px 10px; border-radius: 4px; font-family: monospace; font-size: 13px; flex-grow: 1; border: 1px solid #222; color: #eee; overflow-x: auto; white-space: nowrap; }
+    .pp_decoder_btn { display: inline-flex; align-items: center; justify-content: center; border: none; padding: 0 12px; height: 26px; border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 700; transition: filter 0.1s; line-height: 1; }
 
-    .pp_decoder_label {
-      font-size: 10px;
-      font-weight: 900;
-      color: ${DECODER_COLORS.accent};
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
+    .pp_selection_popup { position: absolute; background: ${DECODER_COLORS.bg}; border: 1px solid ${DECODER_COLORS.border}; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 10000; display: none; overflow: hidden; }
+    .pp_selection_popup button { background: transparent; color: ${DECODER_COLORS.text}; border: none; padding: 6px 14px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 32px; }
+    .pp_selection_popup button:hover { background: ${DECODER_COLORS.border}; }
 
-    .pp_decoder_result {
-      background: ${DECODER_COLORS.darkInput};
-      padding: 5px 10px;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 13px;
-      flex-grow: 1;
-      border: 1px solid #222;
-      color: #eee;
-      overflow-x: auto;
-      white-space: nowrap;
-    }
+    #pp_sidebar_wrap { position: fixed; top: 0; right: 0; height: 100%; z-index: 9000; display: flex; align-items: center; pointer-events: none; transition: transform 0.25s ease; }
+    #pp_sidebar_wrap.pp_sb_collapsed { transform: translateX(312px); }
+    #pp_sidebar_tab { pointer-events: all; flex-shrink: 0; width: 22px; height: 56px; background: #000; border-radius: 6px 0 0 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #eeefef; font-size: 13px; user-select: none; transition: background 0.15s; box-shadow: -2px 0 6px rgba(0,0,0,0.5); }
+    #pp_sidebar_tab:hover { background: #1a1a1a; }
+    #pp_sidebar_inner { pointer-events: all; width: 312px; height: 100%; overflow-y: auto; background: var(--color-neutral-background, #1a1a1b); box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
 
-    .pp_decoder_btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: none;
-      padding: 0 12px;
-      height: 26px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 10px;
-      font-weight: 700;
-      transition: filter 0.1s;
-      line-height: 1;
-    }
+    [grid-area="right-sidebar"], #right-sidebar-container, aside:has(shreddit-sidebar), .right-sidebar { display: none !important; }
 
-    .pp_selection_popup {
-      position: absolute;
-      background: ${DECODER_COLORS.bg};
-      border: 1px solid ${DECODER_COLORS.border};
-      border-radius: 4px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-      z-index: 10000;
-      display: none;
-      overflow: hidden;
+    div#pp_float_collapse {
+      position: fixed; z-index: 99999; display: none; cursor: grab;
+      flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(21, 24, 26, 0.9) !important; backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.08) !important; border-radius: 8px !important;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); width: 34px; padding: 4px 0; box-sizing: border-box;
     }
-
-    .pp_selection_popup button {
-      background: transparent;
-      color: ${DECODER_COLORS.text};
-      border: none;
-      padding: 6px 14px;
-      cursor: pointer;
-      font-size: 11px;
-      font-weight: 600;
-      font-family: sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 32px;
+    div#pp_float_collapse:active { cursor: grabbing; }
+    div#pp_float_collapse .pp_collapse_main_btn, div#pp_float_collapse .pp_collapse_sub_btn {
+      display: inline-flex !important; align-items: center !important; justify-content: center !important;
+      width: 26px !important; background: transparent !important; color: #b3b3b3 !important; border: none !important;
+      font-size: 11px !important; font-weight: 600 !important; cursor: pointer !important; border-radius: 4px !important;
+      transition: background 0.2s, color 0.2s !important; user-select: none !important; padding: 0 !important; margin: 0 !important; box-sizing: border-box !important;
     }
-
-    .pp_selection_popup button:hover {
-      background: ${DECODER_COLORS.border};
-    }
-
-    #pp_sidebar_wrap {
-      position: fixed;
-      top: 0;
-      right: 0;
-      height: 100%;
-      z-index: 9000;
-      display: flex;
-      align-items: center;
-      pointer-events: none;
-      transition: transform 0.25s ease;
-    }
-
-    #pp_sidebar_wrap.pp_sb_collapsed {
-      transform: translateX(312px);
-    }
-
-    #pp_sidebar_tab {
-      pointer-events: all;
-      flex-shrink: 0;
-      width: 22px;
-      height: 56px;
-      background: #000;
-      border-radius: 6px 0 0 6px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #eeefef;
-      font-size: 13px;
-      user-select: none;
-      transition: background 0.15s;
-      box-shadow: -2px 0 6px rgba(0,0,0,0.5);
-    }
-
-    #pp_sidebar_tab:hover {
-      background: #1a1a1a;
-    }
-
-    #pp_sidebar_inner {
-      pointer-events: all;
-      width: 312px;
-      height: 100%;
-      overflow-y: auto;
-      background: var(--color-neutral-background, #1a1a1b);
-      box-shadow: -4px 0 16px rgba(0,0,0,0.4);
-    }
-
-    [grid-area="right-sidebar"],
-    #right-sidebar-container,
-    aside:has(shreddit-sidebar),
-    .right-sidebar {
-      display: none !important;
-    }
+    div#pp_float_collapse .pp_collapse_main_btn { height: 28px !important; color: #ffffff !important; font-size: 9px !important; font-weight: 700 !important; }
+    div#pp_float_collapse .pp_collapse_sub_btn { height: 26px !important; }
+    div#pp_float_collapse .pp_collapse_main_btn:hover, div#pp_float_collapse .pp_collapse_sub_btn:hover { background: rgba(255, 255, 255, 0.08) !important; color: #3db7c7 !important; }
+    div#pp_float_collapse .pp_collapse_divider { width: 16px; height: 1px; background: rgba(255, 255, 255, 0.15) !important; margin: 4px 0 !important; }
+    div#pp_float_collapse.pp_collapsed .pp_collapse_main_btn { color: #3db7c7 !important; }
   `;
-
   document.documentElement.appendChild(globalStyle);
 
   // =========================================================
-  // LIGHTBOX
+  // LIGHTBOX STORAGE VARIABLES
   // =========================================================
 
   let currentGalleryImages = [];
@@ -505,182 +334,195 @@
   const lightbox = document.createElement("div");
   lightbox.id = "pp_lightbox";
 
-  const lightboxImg = document.createElement("img");
+  const attachLightbox = () => {
+    if (!document.body?.contains(lightbox)) {
+      document.body?.appendChild(lightbox);
 
-  const prevBtn = document.createElement("button");
-  prevBtn.id = "pp_nav_prev";
-  prevBtn.className = "pp_nav_btn";
-  prevBtn.innerHTML = "&#10094;";
+      lightbox.innerHTML = `
+        <div id="pp_lightbox_close" style="position:absolute; top:20px; right:20px; color:white; font-size:32px; cursor:pointer; z-index:1000001; line-height:1;" title="Close Gallery [Esc]">&times;</div>
+        <div id="pp_nav_prev" class="pp_nav_btn" title="Previous Image [A]">&#10094;</div>
+        <img id="pp_lightbox_img" src="" alt="Enlarged View">
+        <div id="pp_nav_next" class="pp_nav_btn" title="Next Image [D]">&#10095;</div>
+        <div id="pp_gallery_counter">1 / 1</div>
+      `;
 
-  const nextBtn = document.createElement("button");
-  nextBtn.id = "pp_nav_next";
-  nextBtn.className = "pp_nav_btn";
-  nextBtn.innerHTML = "&#10095;";
-
-  const counter = document.createElement("div");
-  counter.id = "pp_gallery_counter";
-
-  lightbox.append(lightboxImg, prevBtn, nextBtn, counter);
+      lightbox.querySelector("#pp_lightbox_close").onclick = (e) => {
+        e.stopPropagation();
+        lightbox.style.display = "none";
+      };
+      lightbox.querySelector("#pp_nav_prev").onclick = (e) => {
+        e.stopPropagation();
+        navigateGallery(-1);
+      };
+      lightbox.querySelector("#pp_nav_next").onclick = (e) => {
+        e.stopPropagation();
+        navigateGallery(1);
+      };
+      lightbox.onclick = (e) => {
+        if (e.target === lightbox || e.target.id === "pp_lightbox_img") {
+          lightbox.style.display = "none";
+        }
+      };
+    }
+  };
 
   const updateLightboxImage = () => {
     if (!currentGalleryImages.length) return;
 
-    const src = currentGalleryImages[currentGalleryIndex];
+    const imgEl = lightbox.querySelector("#pp_lightbox_img");
+    const counterEl = lightbox.querySelector("#pp_gallery_counter");
+    const prevEl = lightbox.querySelector("#pp_nav_prev");
+    const nextEl = lightbox.querySelector("#pp_nav_next");
 
-    lightboxImg.src = src.replaceAll("&amp;", "&");
+    const cleanSrc = currentGalleryImages[currentGalleryIndex].replaceAll(
+      "&amp;",
+      "&",
+    );
+    if (imgEl) imgEl.src = cleanSrc;
 
-    if (currentGalleryImages.length > 1) {
-      prevBtn.style.display = "flex";
-      nextBtn.style.display = "flex";
-      counter.style.display = "block";
-      counter.textContent = `${currentGalleryIndex + 1} / ${currentGalleryImages.length}`;
-    } else {
-      prevBtn.style.display = "none";
-      nextBtn.style.display = "none";
-      counter.style.display = "none";
+    const multi = currentGalleryImages.length > 1;
+    if (prevEl) prevEl.style.display = multi ? "flex" : "none";
+    if (nextEl) nextEl.style.display = multi ? "flex" : "none";
+    if (counterEl) {
+      counterEl.style.display = multi ? "block" : "none";
+      if (multi)
+        counterEl.textContent = `${currentGalleryIndex + 1} / ${currentGalleryImages.length}`;
     }
   };
 
   const navigateGallery = (direction) => {
     if (!currentGalleryImages.length) return;
-
     currentGalleryIndex =
       (currentGalleryIndex + direction + currentGalleryImages.length) %
       currentGalleryImages.length;
-
     updateLightboxImage();
   };
 
-  lightbox.onclick = (e) => {
-    if (e.target === lightbox) {
-      lightbox.style.display = "none";
-    }
-  };
-
-  prevBtn.onclick = (e) => {
-    e.stopPropagation();
-    navigateGallery(-1);
-  };
-
-  nextBtn.onclick = (e) => {
-    e.stopPropagation();
-    navigateGallery(1);
-  };
-
   // =========================================================
-  // EVENTS
+  // GLOBAL HOTKEY TRAPS (INTEGRATED CAPTURING OVERRIDES)
   // =========================================================
 
   window.addEventListener(
     "keydown",
     (e) => {
-      if (lightbox.style.display === "flex") {
-        const code = e.code;
+      // 1. Always bypass hotkeys if typing in inputs or fields across the site
+      if (
+        e.target.tagName === "INPUT" ||
+        e.target.tagName === "TEXTAREA" ||
+        e.target.isContentEditable
+      )
+        return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
 
-        if (code === "ArrowRight" || code === "KeyD") {
+      const key = e.key.toLowerCase();
+
+      // STATE A: Lightbox view captures priorities globally
+      if (lightbox && lightbox.style.display === "flex") {
+        if (
+          [
+            "s",
+            "w",
+            "a",
+            "d",
+            "x",
+            "escape",
+            "arrowright",
+            "arrowleft",
+          ].includes(key)
+        ) {
           e.preventDefault();
-          e.stopPropagation();
-          navigateGallery(1);
-        } else if (code === "ArrowLeft" || code === "KeyA") {
-          e.preventDefault();
-          e.stopPropagation();
-          navigateGallery(-1);
-        } else if (code === "Escape" || code === "KeyW") {
-          e.preventDefault();
-          e.stopPropagation();
-          lightbox.style.display = "none";
+          e.stopImmediatePropagation();
+
+          if (key === "arrowright" || key === "d") navigateGallery(1);
+          else if (key === "arrowleft" || key === "a") navigateGallery(-1);
+          else if (key === "escape" || key === "w")
+            lightbox.style.display = "none";
         }
+        return; // Halt logic tree here when gallery is active
+      }
+
+      // STATE B: Standard Thread Navigation (Only run if the toolbar button is active on a thread)
+      if (collapseBtn.style.display === "none") return;
+
+      if (["s", "w", "a", "d", "x"].includes(key)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        if (key === "s") toggleCollapseAll();
+        else if (key === "w") jumpToTop();
+        else if (key === "a") jumpToPrevParent();
+        else if (key === "d") jumpToNextParent();
+        else if (key === "x") jumpToBottom();
       }
     },
     true,
   );
 
-  // Shadow DOM search routing rescue
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if (e.key === "Enter") {
-        const path = e.composedPath();
-
-        const input = path.find(
-          (el) =>
-            el.tagName === "INPUT" && (el.name === "q" || el.type === "search"),
-        );
-
-        if (input) {
-          const query = input.value ? input.value.trim() : "";
-
-          if (query) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-
-            // Check for an active subreddit chip in the search bar first.
-            // The chip carries the subreddit name in its aria-label:
-            // "Remove r/SubName filter and expand search to all of Reddit"
-            let subredditName = null;
-
-            const chip = document.querySelector(
-              "rpl-input-chip[id='search-input-remove-filter'][selected]",
-            );
-
-            if (chip) {
-              const label = chip.getAttribute("aria-label") || "";
-              const match = label.match(/Remove r\/([^\s]+) filter/);
-              if (match) subredditName = match[1];
-            }
-
-            // Fall back to URL path if no chip is active
-            if (!subredditName) {
-              const parts = window.location.pathname.split("/");
-              if (parts[1] === "r" && parts[2]) subredditName = parts[2];
-            }
-
-            const finalQuery = subredditName
-              ? `${query} subreddit:${subredditName}`
-              : query;
-
-            window.location.assign(
-              `/search/?q=${encodeURIComponent(finalQuery)}`,
-            );
-          }
-        }
-      }
-    },
-    { capture: true },
-  );
-
   window.addEventListener(
     "wheel",
     (e) => {
-      if (lightbox.style.display === "flex") {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const now = Date.now();
-
-        if (now - lastWheelTime < 150) return;
-
-        if (e.deltaY > 0) {
-          navigateGallery(1);
-          lastWheelTime = now;
-        } else if (e.deltaY < 0) {
-          navigateGallery(-1);
-          lastWheelTime = now;
-        }
+      if (lightbox.style.display !== "flex") return;
+      e.preventDefault();
+      e.stopPropagation();
+      const now = Date.now();
+      if (now - lastWheelTime < 150) return;
+      if (e.deltaY > 0) {
+        navigateGallery(1);
+        lastWheelTime = now;
+      } else if (e.deltaY < 0) {
+        navigateGallery(-1);
+        lastWheelTime = now;
       }
     },
     { passive: false, capture: true },
   );
 
   // =========================================================
-  // HELPERS
+  // SHADOW DOM CAPTURING HELPERS
   // =========================================================
 
-  const attachLightbox = () => {
-    if (!document.getElementById("pp_lightbox")) {
-      document.body?.append(lightbox);
-    }
-  };
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Enter") return;
+      const input = e
+        .composedPath()
+        .find(
+          (el) =>
+            el.tagName === "INPUT" && (el.name === "q" || el.type === "search"),
+        );
+      if (!input) return;
+      const query = input.value?.trim();
+      if (!query) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+
+      let subredditName = null;
+      const chip = document.querySelector(
+        "rpl-input-chip[id='search-input-remove-filter'][selected]",
+      );
+      if (chip) {
+        const match = (chip.getAttribute("aria-label") || "").match(
+          /Remove r\/([^\s]+) filter/,
+        );
+        if (match) subredditName = match[1];
+      }
+      if (!subredditName) {
+        const parts = window.location.pathname.split("/");
+        if (parts[1] === "r" && parts[2]) subredditName = parts[2];
+      }
+      const finalQuery = subredditName
+        ? `${query} subreddit:${subredditName}`
+        : query;
+      window.location.assign(`/search/?q=${encodeURIComponent(finalQuery)}`);
+    },
+    { capture: true },
+  );
+
+  // =========================================================
+  // DECODER UI GENERATORS
+  // =========================================================
 
   function createTranslationComponent(type, translatedText) {
     const container = document.createElement("div");
@@ -696,16 +538,13 @@
 
     const copyBtn = document.createElement("button");
     copyBtn.className = "pp_decoder_btn";
-
     copyBtn.style.background = DECODER_COLORS.border;
     copyBtn.style.color = DECODER_COLORS.text;
     copyBtn.textContent = "COPY";
-
     copyBtn.onclick = () => {
       navigator.clipboard.writeText(translatedText).then(() => {
         copyBtn.textContent = "DONE";
         copyBtn.style.background = DECODER_COLORS.success;
-
         setTimeout(() => {
           copyBtn.textContent = "COPY";
           copyBtn.style.background = DECODER_COLORS.border;
@@ -715,49 +554,41 @@
 
     const searchBtn = document.createElement("button");
     searchBtn.className = "pp_decoder_btn";
-
     searchBtn.style.background = DECODER_COLORS.accent;
     searchBtn.style.color = "white";
     searchBtn.textContent = "SEARCH";
-
-    searchBtn.onclick = () => {
+    searchBtn.onclick = () =>
       window.open(buildSocialSearchURL(translatedText), "_blank");
-    };
 
     container.append(label, resultBox, copyBtn, searchBtn);
-
     return container;
   }
 
   function processTextNode(node) {
     const text = node.textContent;
 
-    // Binary
     const binMatches = text.match(binaryPattern);
-
     if (binMatches) {
-      binMatches.forEach((m) => {
-        const decoded = binaryToText(m);
-
-        if (decoded && decoded.trim().length > 0) {
-          node.parentNode.insertBefore(
+      for (let i = 0; i < binMatches.length; i++) {
+        const decoded = binaryToText(binMatches[i]);
+        if (decoded?.trim().length > 0) {
+          const target =
+            node.parentNode.tagName === "P" ? node.parentNode : node;
+          target.parentNode.insertBefore(
             createTranslationComponent("binary", decoded),
-            node.nextSibling,
+            target.nextSibling,
           );
         }
-      });
+      }
     }
 
-    // NATO
-    const natoMatches = text.match(natoPattern);
-
-    if (natoMatches) {
-      const decoded = natoToText(natoMatches.join(" "));
-
+    if (/[a-zA-Z]/.test(text)) {
+      const decoded = natoToText(text);
       if (decoded) {
-        node.parentNode.insertBefore(
+        const target = node.parentNode.tagName === "P" ? node.parentNode : node;
+        target.parentNode.insertBefore(
           createTranslationComponent("nato", decoded),
-          node.nextSibling,
+          target.nextSibling,
         );
       }
     }
@@ -765,261 +596,319 @@
 
   function scanParagraph(p) {
     if (p.hasAttribute("data-decoded")) return;
-
     p.setAttribute("data-decoded", "true");
-
     const nodes = [];
-
-    const walker = document.createTreeWalker(
-      p,
-      NodeFilter.SHOW_TEXT,
-      null,
-      false,
-    );
-
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
     let n;
-
-    while ((n = walker.nextNode())) {
-      nodes.push(n);
-    }
-
-    nodes.forEach(processTextNode);
+    while ((n = walker.nextNode())) nodes.push(n);
+    for (let i = 0; i < nodes.length; i++) processTextNode(nodes[i]);
   }
 
   function createSelectionPopup() {
     const popup = document.createElement("div");
     popup.className = "pp_selection_popup";
-
     const btn = document.createElement("button");
     btn.innerHTML = "🔍 Search";
-
     popup.appendChild(btn);
     document.body.appendChild(popup);
-
     return { popup, btn };
   }
 
-  const ALLOWED_SUBREDDITS = [
-    "/r/bigtitsinbikinis/",
-    "/r/ygwbt/",
-    "/r/2busty2hide/",
-  ];
-
-  function isAllowedSubreddit() {
-    const path = window.location.pathname.toLowerCase();
-    return ALLOWED_SUBREDDITS.some((sub) => path.startsWith(sub.toLowerCase()));
-  }
-
   // =========================================================
-  // ACTIONS
+  // FLOATING COLLAPSE TOOLBAR
   // =========================================================
 
   let allCollapsed = false;
-  let collapseButtonInjected = false;
+  const collapseBtn = document.createElement("div");
+  collapseBtn.id = "pp_float_collapse";
 
-  // Reset injection flag on SPA navigation so a fresh button is injected per thread
-  window.addEventListener("popstate", () => {
-    collapseButtonInjected = false;
+  collapseBtn.innerHTML = `
+    <div class="pp_collapse_main_btn" id="pp_collapse_text" role="button" title="Toggle comment trees [S]">COL</div>
+    <div class="pp_collapse_divider"></div>
+    <button class="pp_collapse_sub_btn" id="pp_jump_top" title="Scroll to top [W]">⤒</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_prev" title="Previous comment [A]">▲</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_next" title="Next comment [D]">▼</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">⤓</button>
+  `;
+
+  const _savedPos = JSON.parse(
+    localStorage.getItem("pp_collapse_pos") || "null",
+  );
+  collapseBtn.style.top = _savedPos ? _savedPos.top + "px" : "auto";
+  collapseBtn.style.right = _savedPos ? _savedPos.right + "px" : "auto";
+  collapseBtn.style.bottom = _savedPos ? "auto" : "24px";
+  collapseBtn.style.left = _savedPos ? "auto" : "24px";
+  document.documentElement.appendChild(collapseBtn);
+
+  let _dragging = false,
+    _dragOffsetX = 0,
+    _dragOffsetY = 0,
+    _dragMoved = false;
+
+  collapseBtn.addEventListener("mousedown", (e) => {
+    if (e.target.tagName === "BUTTON" || e.target.id === "pp_collapse_text")
+      return;
+    e.preventDefault();
+    _dragging = true;
+    _dragMoved = false;
+    const rect = collapseBtn.getBoundingClientRect();
+    _dragOffsetX = e.clientX - rect.left;
+    _dragOffsetY = e.clientY - rect.top;
   });
-  const _origPushState = history.pushState.bind(history);
-  history.pushState = (...args) => {
-    collapseButtonInjected = false;
-    _origPushState(...args);
-  };
+
+  document.addEventListener("mousemove", (e) => {
+    if (!_dragging) return;
+    _dragMoved = true;
+    const right =
+      window.innerWidth - (e.clientX - _dragOffsetX) - collapseBtn.offsetWidth;
+    const top = e.clientY - _dragOffsetY;
+    collapseBtn.style.left = collapseBtn.style.bottom = "auto";
+    collapseBtn.style.right = Math.max(0, right) + "px";
+    collapseBtn.style.top = Math.max(0, top) + "px";
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!_dragging) return;
+    _dragging = false;
+    if (_dragMoved) {
+      localStorage.setItem(
+        "pp_collapse_pos",
+        JSON.stringify({
+          top: parseInt(collapseBtn.style.top),
+          right: parseInt(collapseBtn.style.right),
+        }),
+      );
+    }
+  });
+
+  function getHeaderOffset() {
+    const header = document.querySelector("header.v2");
+    return header ? header.offsetHeight : 56;
+  }
+
+  function toggleCollapseAll() {
+    const children = document.querySelectorAll(
+      "shreddit-comment[depth]:not([depth='0'])",
+    );
+    if (!children.length) return;
+    allCollapsed = !allCollapsed;
+
+    const topThreads = Array.from(
+      document.querySelectorAll("shreddit-comment[depth='0']"),
+    );
+    const offset = getHeaderOffset();
+    let anchor = topThreads.find(
+      (el) => el.getBoundingClientRect().top > offset - 10,
+    );
+    if (!anchor && topThreads.length > 0)
+      anchor = topThreads[topThreads.length - 1];
+
+    for (let i = 0; i < children.length; i++) {
+      if (allCollapsed) children[i].setAttribute("collapsed", "");
+      else children[i].removeAttribute("collapsed");
+    }
+
+    const mainBtnLabel = collapseBtn.querySelector("#pp_collapse_text");
+    if (mainBtnLabel) mainBtnLabel.textContent = allCollapsed ? "EXP" : "COL";
+    collapseBtn.classList.toggle("pp_collapsed", allCollapsed);
+
+    if (anchor) {
+      setTimeout(() => {
+        const targetY =
+          window.scrollY + anchor.getBoundingClientRect().top - offset;
+        window.scrollTo({ top: targetY, behavior: "smooth" });
+      }, 30);
+    }
+  }
+
+  const getTopLevelComments = () =>
+    Array.from(document.querySelectorAll("shreddit-comment[depth='0']"));
+
+  function jumpToTop() {
+    const post = document.querySelector("shreddit-post");
+    if (post) {
+      window.scrollTo({
+        top:
+          window.scrollY + post.getBoundingClientRect().top - getHeaderOffset(),
+        behavior: "smooth",
+      });
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  function jumpToPrevParent() {
+    const targets = getTopLevelComments();
+    const prev = targets
+      .reverse()
+      .find((el) => el.getBoundingClientRect().top < -5);
+    if (prev) {
+      window.scrollTo({
+        top:
+          window.scrollY + prev.getBoundingClientRect().top - getHeaderOffset(),
+        behavior: "smooth",
+      });
+    } else {
+      jumpToTop();
+    }
+  }
+
+  let lastScrollY = 0;
+  function jumpToNextParent() {
+    const targets = getTopLevelComments();
+    if (!targets.length) return;
+    const offset = getHeaderOffset();
+    const currentScrollY = window.scrollY;
+    const next = targets.find(
+      (el) => el.getBoundingClientRect().top > offset + 5,
+    );
+
+    if (!next) {
+      window.scrollTo({
+        top: window.scrollY + targets[0].getBoundingClientRect().top - offset,
+        behavior: "smooth",
+      });
+      return;
+    }
+
+    const targetY = currentScrollY + next.getBoundingClientRect().top - offset;
+    if (
+      Math.abs(targetY - currentScrollY) < 3 ||
+      Math.abs(targetY - lastScrollY) < 3
+    ) {
+      window.scrollTo({
+        top: window.scrollY + targets[0].getBoundingClientRect().top - offset,
+        behavior: "smooth",
+      });
+    } else {
+      lastScrollY = targetY;
+      window.scrollTo({ top: targetY, behavior: "smooth" });
+    }
+  }
+
+  function jumpToBottom() {
+    const container =
+      document.querySelector("#comment-tree-container") ||
+      document.querySelector("shreddit-comment-tree");
+    if (container)
+      container.scrollIntoView({ behavior: "smooth", block: "end" });
+    else
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  }
+
+  collapseBtn
+    .querySelector("#pp_collapse_text")
+    .addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!_dragMoved) toggleCollapseAll();
+    });
+  collapseBtn.querySelector("#pp_jump_top").addEventListener("click", (e) => {
+    e.stopPropagation();
+    jumpToTop();
+  });
+  collapseBtn.querySelector("#pp_jump_prev").addEventListener("click", (e) => {
+    e.stopPropagation();
+    jumpToPrevParent();
+  });
+  collapseBtn.querySelector("#pp_jump_next").addEventListener("click", (e) => {
+    e.stopPropagation();
+    jumpToNextParent();
+  });
+  collapseBtn
+    .querySelector("#pp_jump_bottom")
+    .addEventListener("click", (e) => {
+      e.stopPropagation();
+      jumpToBottom();
+    });
+
+  function syncCollapseButtonVisibility() {
+    _onAllowedSubreddit = ALLOWED_SUBREDDITS.some((sub) =>
+      window.location.pathname.toLowerCase().startsWith(sub),
+    );
+    const onThread = window.location.href.includes("/comments/");
+    collapseBtn.style.display = onThread ? "flex" : "none";
+  }
+
+  const _patchHistory =
+    (original) =>
+    (...args) => {
+      original(...args);
+      syncCollapseButtonVisibility();
+    };
+  history.pushState = _patchHistory(history.pushState.bind(history));
+  history.replaceState = _patchHistory(history.replaceState.bind(history));
+  window.addEventListener("popstate", syncCollapseButtonVisibility);
+
+  // =========================================================
+  // CORE ACTIONS PIPELINE
+  // =========================================================
 
   const Actions = {
-    deepQuery: (root, selector) => {
-      const found = root.querySelector(selector);
-
-      if (found) return found;
-
-      for (const el of root.querySelectorAll("*")) {
-        if (el.shadowRoot) {
-          const result = Actions.deepQuery(el.shadowRoot, selector);
-
-          if (result) return result;
-        }
-      }
-
-      return null;
-    },
-
-    deepQueryAll: (root, selector, results = []) => {
-      root.querySelectorAll(selector).forEach((el) => results.push(el));
-
-      root.querySelectorAll("*").forEach((el) => {
-        if (el.shadowRoot) {
-          Actions.deepQueryAll(el.shadowRoot, selector, results);
-        }
-      });
-
-      return results;
-    },
-
-    injectCollapseButton: () => {
-      if (!window.location.href.includes("/comments/")) return;
-
-      // Fast-exit: flag lives in JS so it works across shadow DOM boundaries
-      if (collapseButtonInjected) return;
-
-      const commentsBtn = Actions.deepQuery(
-        document,
-        'button[name="comments-action-button"]',
-      );
-
-      if (!commentsBtn) return;
-
-      const shadowHost = commentsBtn.getRootNode();
-
-      if (shadowHost && shadowHost !== document) {
-        const styleEl = document.createElement("style");
-
-        styleEl.textContent = `
-          .pp_collapse_btn {
-            display: inline-flex;
-            align-items: center;
-            padding: 0 12px;
-            font-size: 14px;
-            font-weight: 600;
-            font-family: inherit;
-            color: #eeefef !important;
-            background: #2a3236 !important;
-            border: 1px solid #2a3236 !important;
-            border-radius: 99px;
-            cursor: pointer;
-            height: var(--size-button-sm-h, 32px);
-            transition: background 0.15s, border-color 0.15s;
-            user-select: none;
-            white-space: nowrap;
-          }
-
-          .pp_collapse_btn:hover {
-            background: #3a454a !important;
-            border-color: #3a454a !important;
-          }
-        `;
-
-        shadowHost.appendChild(styleEl);
-      }
-
-      const btn = document.createElement("button");
-
-      btn.className = "pp_collapse_btn";
-      btn.textContent = "− Collapse";
-      btn.title = "Collapse or expand all reply threads";
-
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-
-        const children = document.querySelectorAll(
-          "shreddit-comment[depth]:not([depth='0'])",
-        );
-
-        if (!children.length) return;
-
-        allCollapsed = !allCollapsed;
-
-        for (let i = 0; i < children.length; i++) {
-          if (allCollapsed) {
-            children[i].setAttribute("collapsed", "");
-          } else {
-            children[i].removeAttribute("collapsed");
-          }
-        }
-
-        btn.textContent = allCollapsed ? "+ Expand" : "− Collapse";
-
-        btn.classList.toggle("pp_collapsed", allCollapsed);
-      });
-
-      commentsBtn.insertAdjacentElement("afterend", btn);
-
-      commentsBtn.setAttribute("pp-has-sibling-btn", "true");
-      collapseButtonInjected = true;
-    },
+    syncCollapseButton: syncCollapseButtonVisibility,
 
     nukeAwardButtons: () => {
-      Actions.deepQueryAll(
+      const awards = deepQueryAll(
         document,
         "award-button:not([pp-award-hidden]), shreddit-slot[slot='award-button']:not([pp-award-hidden])",
-      ).forEach((el) => {
-        el.style.display = "none";
-        el.setAttribute("pp-award-hidden", "true");
-      });
+      );
+      for (let i = 0; i < awards.length; i++) {
+        awards[i].style.display = "none";
+        awards[i].setAttribute("pp-award-hidden", "true");
+      }
     },
 
     nuke: () => {
-      const items = document.querySelectorAll(NUKE_SELECTOR_STRING);
-
+      const items = deepQueryAll(document, NUKE_SELECTOR_STRING);
       for (let i = 0; i < items.length; i++) {
         if (items[i].isConnected) items[i].remove();
-      }
-
-      const nav = document.querySelector("left-nav-top-section");
-
-      if (nav && !nav.hasAttribute("pp-sanitized")) {
-        nav.removeAttribute("news");
-        nav.removeAttribute("explore");
-
-        nav.shadowRoot
-          ?.querySelectorAll('a[href="/news/"], a[href="/explore/"]')
-          .forEach((link) => {
-            (link.closest("li") || link).remove();
-          });
-
-        nav.setAttribute("pp-sanitized", "true");
       }
     },
 
     handleImages: (post) => {
       if (post.hasAttribute("pp-images-handled")) return;
-
       const images = post.querySelectorAll(
-        "faceplate-img, img:not(.pp_imageViewable)",
+        "faceplate-img:not([pp-img-handled]), img:not(.pp_imageViewable)",
       );
-
       if (!images.length) return;
 
       for (let i = 0; i < images.length; i++) {
         const imgEl = images[i];
-
         imgEl.classList.add("pp_imageViewable");
+        if (imgEl.tagName !== "IMG")
+          imgEl.setAttribute("pp-img-handled", "true");
 
         imgEl.addEventListener(
           "click",
           (e) => {
-            let clickedSrc =
+            const clickedSrc =
               imgEl.getAttribute("src") ||
               imgEl.querySelector("img")?.getAttribute("src");
-
             if (!clickedSrc) return;
 
             e.preventDefault();
             e.stopPropagation();
-
             attachLightbox();
 
             const galleryContainer =
               imgEl.closest("gallery-carousel") || imgEl.closest("ul");
-
             if (galleryContainer) {
               const allImgs = Array.from(
                 galleryContainer.querySelectorAll("faceplate-img, img"),
               );
-
-              currentGalleryImages = allImgs
-                .map(
-                  (el) =>
-                    el.getAttribute("src") ||
-                    el.querySelector("img")?.getAttribute("src"),
-                )
-                .filter((src, idx, self) => src && self.indexOf(src) === idx);
-
+              currentGalleryImages = [
+                ...new Set(
+                  allImgs
+                    .map(
+                      (el) =>
+                        el.getAttribute("src") ||
+                        el.querySelector("img")?.getAttribute("src"),
+                    )
+                    .filter(Boolean),
+                ),
+              ];
               currentGalleryIndex = currentGalleryImages.indexOf(clickedSrc);
-
-              if (currentGalleryIndex === -1) {
-                currentGalleryIndex = 0;
-              }
+              if (currentGalleryIndex === -1) currentGalleryIndex = 0;
             } else {
               currentGalleryImages = [clickedSrc];
               currentGalleryIndex = 0;
@@ -1031,7 +920,6 @@
           true,
         );
       }
-
       post.setAttribute("pp-images-handled", "true");
     },
 
@@ -1039,78 +927,55 @@
       const comments = document.querySelectorAll(
         "shreddit-comment:not([pp-checked])",
       );
-
       if (!comments.length) return;
 
       for (let i = 0; i < comments.length; i++) {
         const comment = comments[i];
-
-        comment.setAttribute("pp-checked", "true");
-
-        if (comment.getAttribute("author") === "AutoModerator") {
+        if (
+          comment.getAttribute("author") === "AutoModerator" &&
+          !comment.hasAttribute("collapsed")
+        ) {
           comment.setAttribute("collapsed", "");
         }
 
         const shadow = comment.shadowRoot;
-
-        if (shadow && !shadow.querySelector(".pp-line-style")) {
+        if (shadow && !comment.hasAttribute("pp-shadow-styled")) {
           const depth = parseInt(comment.getAttribute("depth") || "0", 10);
-
           const color = THREAD_COLORS[depth % THREAD_COLORS.length];
-
           const style = document.createElement("style");
-
           style.className = "pp-line-style";
-
           style.textContent = `
-            div[data-testid="main-thread-line"] {
-              background-color: ${color} !important;
-              width: 2px !important;
-              opacity: 1 !important;
-            }
-
-            div[data-testid="branch-line"] {
-              border-left: 2px solid ${color} !important;
-              border-bottom: 2px solid ${color} !important;
-              opacity: 1 !important;
-            }
+            div[data-testid="main-thread-line"] { background-color: ${color} !important; width: 2px !important; opacity: 1 !important; }
+            div[data-testid="branch-line"] { border-left: 2px solid ${color} !important; border-bottom: 2px solid ${color} !important; opacity: 1 !important; }
           `;
-
           shadow.appendChild(style);
+          comment.setAttribute("pp-shadow-styled", "true");
+          comment.setAttribute("pp-checked", "true");
         }
       }
     },
 
     initSidebar: () => {
-      // Fast-exit: only subreddit pages have a right rail
       const isSubredditPage = /^\/r\/[^/]/.test(window.location.pathname);
       if (!isSubredditPage) {
         document.getElementById("pp_sidebar_wrap")?.remove();
         return;
       }
 
-      const sidebar =
-        document.querySelector(
-          "faceplate-partial[id='subreddit-right-rail__partial']",
-        ) ||
-        document.querySelector("#right-rail-entity-panel-root") ||
-        document.querySelector("shreddit-sidebar") ||
-        document.querySelector("#right-sidebar-container") ||
-        document.querySelector("[grid-area='right-sidebar']");
-
+      const sidebar = SIDEBAR_SELECTORS.reduce(
+        (found, sel) => found || document.querySelector(sel),
+        null,
+      );
       if (!sidebar) return;
 
-      // If the sidebar element is already inside our panel, nothing to do
       const existingWrap = document.getElementById("pp_sidebar_wrap");
       if (existingWrap) {
         if (existingWrap.contains(sidebar)) return;
-        // New page — tear down old panel and rebuild with fresh sidebar element
         existingWrap.remove();
       }
 
       const collapsed =
         localStorage.getItem("pp_sidebar_collapsed") !== "false";
-
       const wrap = document.createElement("div");
       wrap.id = "pp_sidebar_wrap";
       if (collapsed) wrap.classList.add("pp_sb_collapsed");
@@ -1118,7 +983,6 @@
       const tab = document.createElement("div");
       tab.id = "pp_sidebar_tab";
       tab.textContent = collapsed ? "❮" : "❯";
-      tab.title = "Toggle community info";
 
       const inner = document.createElement("div");
       inner.id = "pp_sidebar_inner";
@@ -1132,8 +996,7 @@
         while (sidebar.firstChild) inner.appendChild(sidebar.firstChild);
       }
 
-      wrap.appendChild(tab);
-      wrap.appendChild(inner);
+      wrap.append(tab, inner);
       document.body.appendChild(wrap);
 
       tab.addEventListener("click", () => {
@@ -1145,7 +1008,6 @@
 
     processDecoders: () => {
       if (!isAllowedSubreddit()) return;
-
       COMMENT_SELECTORS.forEach((selector) => {
         document
           .querySelectorAll(`${selector}:not([pp-decoder-scanned])`)
@@ -1158,32 +1020,24 @@
   };
 
   // =========================================================
-  // OBSERVER
+  // OBSERVER ENGINE
   // =========================================================
 
   let updateScheduled = false;
-
   const observer = new MutationObserver(() => {
     if (updateScheduled) return;
-
     updateScheduled = true;
-
     setTimeout(() => {
       Actions.nuke();
       Actions.nukeAwardButtons();
       Actions.initSidebar();
       Actions.processComments();
-      Actions.injectCollapseButton();
+      Actions.syncCollapseButton();
       Actions.processDecoders();
-
       const posts = document.querySelectorAll(
         "shreddit-post:not([pp-images-handled])",
       );
-
-      for (let i = 0; i < posts.length; i++) {
-        Actions.handleImages(posts[i]);
-      }
-
+      for (let i = 0; i < posts.length; i++) Actions.handleImages(posts[i]);
       updateScheduled = false;
     }, 0);
   });
@@ -1193,16 +1047,11 @@
     subtree: true,
   });
 
-  // =========================================================
-  // TEXT SELECTION SEARCH POPUP
-  // =========================================================
-
+  // Text Selection Popups
   let selectionPopup = null;
-
+  let currentSelText = "";
   document.addEventListener("mouseup", (e) => {
-    // Compute before setTimeout so we don't hold a closure over the live event
     const inComment = COMMENT_SELECTORS.some((s) => e.target.closest?.(s));
-
     setTimeout(() => {
       const selection = window.getSelection();
       const selText = selection.toString().trim();
@@ -1210,20 +1059,16 @@
       if (selText.length > 0 && inComment) {
         if (!selectionPopup) {
           selectionPopup = createSelectionPopup();
+          selectionPopup.btn.addEventListener("click", () => {
+            if (currentSelText)
+              window.open(buildSocialSearchURL(currentSelText), "_blank");
+            selectionPopup.popup.style.display = "none";
+          });
         }
-
-        const range = selection.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-
-        selectionPopup.btn.onclick = () => {
-          window.open(buildSocialSearchURL(selText), "_blank");
-          selectionPopup.popup.style.display = "none";
-        };
-
+        currentSelText = selText;
+        const rect = selection.getRangeAt(0).getBoundingClientRect();
         selectionPopup.popup.style.left = `${rect.left + window.scrollX + rect.width / 2 - 40}px`;
-
         selectionPopup.popup.style.top = `${rect.top + window.scrollY - 40}px`;
-
         selectionPopup.popup.style.display = "block";
       } else if (selectionPopup) {
         selectionPopup.popup.style.display = "none";
@@ -1232,18 +1077,20 @@
   });
 
   // =========================================================
-  // INIT
+  // INITIALIZATION HANDLERS
   // =========================================================
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       attachLightbox();
+      syncCollapseButtonVisibility();
       Actions.processDecoders();
     });
   } else {
     attachLightbox();
+    syncCollapseButtonVisibility();
     Actions.processDecoders();
   }
 
-  console.log("Reddit Enhancements Loaded");
+  console.log("Reddit Enhancements Clean Loaded v2.0");
 })();
