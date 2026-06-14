@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.3
+// @version         2.4.1
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -263,6 +263,41 @@
     );
   }
 
+  // Returns the subreddit name a post belongs to, regardless of page context.
+  function getPostSubreddit(post) {
+    return (
+      post.getAttribute("subreddit-name") ||
+      post.getAttribute("subreddit") ||
+      null
+    );
+  }
+
+  // =========================================================
+  // PAGE CONTEXT DETECTION
+  // =========================================================
+
+  // Returns one of:
+  //   { type: "subreddit", sub: "subredditname" }
+  //   { type: "aggregate" }   — home feed, /r/all, /r/popular, etc.
+  //   { type: "multireddit" } — /user/.../m/...
+  function getPageContext() {
+    const path = window.location.pathname.toLowerCase();
+    const parts = path.split("/").filter(Boolean);
+
+    // /user/<name>/m/<multireddit>
+    if (parts[0] === "user" && parts[2] === "m") {
+      return { type: "multireddit" };
+    }
+
+    // /r/<name>[/...]
+    if (parts[0] === "r" && parts[1]) {
+      return { type: "subreddit", sub: parts[1] };
+    }
+
+    // Home feed: "/" or empty path
+    return { type: "aggregate" };
+  }
+
   // =========================================================
   // STORAGE HELPERS
   // =========================================================
@@ -333,6 +368,30 @@
     all[scope].splice(index, 1);
     if (all[scope].length === 0) delete all[scope];
     saveKeywordHighlights(all);
+  }
+
+  // Rename a scope key in both filter and highlight storage.
+  function renameScopeInStorage(oldScope, newScope) {
+    if (!oldScope || !newScope || oldScope === newScope) return;
+
+    const filters = getKeywordFilters();
+    if (filters[oldScope] !== undefined) {
+      if (!filters[newScope]) filters[newScope] = [];
+      filters[newScope] = [...(filters[newScope] || []), ...filters[oldScope]];
+      delete filters[oldScope];
+      saveKeywordFilters(filters);
+    }
+
+    const highlights = getKeywordHighlights();
+    if (highlights[oldScope] !== undefined) {
+      if (!highlights[newScope]) highlights[newScope] = [];
+      highlights[newScope] = [
+        ...(highlights[newScope] || []),
+        ...highlights[oldScope],
+      ];
+      delete highlights[oldScope];
+      saveKeywordHighlights(highlights);
+    }
   }
 
   // =========================================================
@@ -472,10 +531,11 @@
       gap: 12px;
       align-items: center;
     }
+    /* Show Filtered toggle — text-only "ON", orange when active, grey when not */
     .pp_panel_show_btn {
       font-size: 11px;
-      font-weight: 600;
-      color: rgba(255, 255, 255, 0.4);
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.35);
       background: transparent !important;
       border: none !important;
       height: 24px;
@@ -487,9 +547,13 @@
       line-height: 1;
       box-sizing: border-box;
       transition: color 0.15s ease;
+      letter-spacing: 0.04em;
     }
-    .pp_panel_show_btn:hover {
-      color: #fff;
+    .pp_panel_show_btn.pp_show_active {
+      color: #ff4500;
+    }
+    .pp_panel_show_btn:hover:not(.pp_show_active) {
+      color: rgba(255, 255, 255, 0.6);
     }
     .pp_panel_close_btn {
       width: 24px;
@@ -624,6 +688,13 @@
       font-size: 12px;
       font-weight: 600;
       color: rgba(255, 255, 255, 0.5);
+      cursor: text;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pp_scope_name:hover {
+      color: rgba(255, 255, 255, 0.85);
     }
     .pp_scope_count {
       font-size: 10px;
@@ -759,6 +830,23 @@
     }
     .pp_input::placeholder { color: rgba(255, 255, 255, 0.25); font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
     .pp_input:focus { border-color: rgba(255, 255, 255, 0.2); }
+
+    /* Inline scope-name editor in the "All" tab */
+    .pp_scope_name_input {
+      flex: 1;
+      min-width: 0;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 4px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      padding: 0 8px;
+      height: 32px;
+      outline: none;
+      box-sizing: border-box;
+    }
 
     #pp_sidebar_wrap { position: fixed; top: 0; right: 0; height: 100%; z-index: 9000; display: flex; align-items: center; pointer-events: none; transition: transform 0.25s ease; }
     #pp_sidebar_wrap.pp_sb_collapsed { transform: translateX(312px); }
@@ -956,19 +1044,16 @@
   let _badgeFetchPromise = null;
 
   function injectAccountBadge() {
-    // Badge already exists
     if (document.getElementById("pp_account_badge")) return;
 
     const btn = document.getElementById("expand-user-drawer-button");
     if (!btn) return;
 
-    // Username already known → immediately inject
     if (_cachedUsername) {
       insertBadge(_cachedUsername);
       return;
     }
 
-    // Prevent duplicate fetches
     if (_badgeFetchPromise) return;
 
     _badgeFetchPromise = fetch("/api/me.json", {
@@ -977,7 +1062,6 @@
       .then((r) => r.json())
       .then((d) => {
         const name = d?.data?.name;
-
         if (name && name !== "undefined") {
           _cachedUsername = name;
           insertBadge(name);
@@ -1046,9 +1130,8 @@
   // =========================================================
 
   function getCurrentSubreddit() {
-    const parts = window.location.pathname.toLowerCase().split("/");
-    if (parts[1] === "r" && parts[2]) return parts[2];
-    return null;
+    const ctx = getPageContext();
+    return ctx.type === "subreddit" ? ctx.sub : null;
   }
 
   function keywordMatchesTitle(keyword, title) {
@@ -1070,30 +1153,66 @@
     return new RegExp(escaped).test(title.toLowerCase());
   }
 
+  // Returns the set of scope keys that apply when browsing a specific subreddit.
+  // "global" always applies; then any scope whose comma-separated list includes `sub`.
+  function getScopesForSub(sub, allScopeKeys) {
+    const scopes = ["global"];
+    if (!sub) return scopes;
+    allScopeKeys.forEach((scope) => {
+      if (scope === "global") return;
+      const subs = scope.split(",").map((s) => s.trim().toLowerCase());
+      if (subs.includes(sub.toLowerCase()) && !scopes.includes(scope)) {
+        scopes.push(scope);
+      }
+    });
+    // Also include the bare sub name if it exists as its own scope
+    if (!scopes.includes(sub.toLowerCase())) scopes.push(sub.toLowerCase());
+    return scopes;
+  }
+
   function getScopesForCurrentSub() {
     const sub = getCurrentSubreddit();
-    const scopes = ["global"];
     const allScopes = new Set([
       ...Object.keys(getKeywordFilters()),
       ...Object.keys(getKeywordHighlights()),
     ]);
-    allScopes.forEach((scope) => {
-      if (scope === "global") return;
-      if (!sub) return;
-      const subs = scope.split(",").map((s) => s.trim().toLowerCase());
-      if (subs.includes(sub) && !scopes.includes(scope)) scopes.push(scope);
-    });
-    if (sub && !scopes.includes(sub)) scopes.push(sub);
-    return scopes;
+    return getScopesForSub(sub, allScopes);
+  }
+
+  // For aggregate/multireddit pages: collect filters/highlights for a specific post's
+  // source subreddit, checking all stored scopes.
+  function getFiltersForPost(post) {
+    const postSub = getPostSubreddit(post);
+    const allFilters = getKeywordFilters();
+    const allScopeKeys = Object.keys(allFilters);
+    const scopes = getScopesForSub(postSub, allScopeKeys);
+    return scopes.flatMap((s) => allFilters[s] || []);
+  }
+
+  function getHighlightsForPost(post) {
+    const postSub = getPostSubreddit(post);
+    const allHighlights = getKeywordHighlights();
+    const allScopeKeys = Object.keys(allHighlights);
+    const scopes = getScopesForSub(postSub, allScopeKeys);
+    return scopes.flatMap((s) => allHighlights[s] || []);
   }
 
   function applyKeywordFilters() {
-    const activeFilters = getScopesForCurrentSub().flatMap(
-      (s) => getKeywordFilters()[s] || [],
-    );
+    const ctx = getPageContext();
+    const isAggregate = ctx.type === "aggregate" || ctx.type === "multireddit";
+
+    // For a normal subreddit page, compute filters once for the whole page.
+    let pageFilters = null;
+    if (!isAggregate) {
+      pageFilters = getScopesForCurrentSub().flatMap(
+        (s) => getKeywordFilters()[s] || [],
+      );
+    }
 
     document.querySelectorAll("shreddit-post").forEach((post) => {
       const title = getPostTitle(post);
+      const activeFilters = isAggregate ? getFiltersForPost(post) : pageFilters;
+
       const matched =
         activeFilters.length > 0 &&
         activeFilters.some((kw) => keywordMatchesTitle(kw, title));
@@ -1111,12 +1230,22 @@
   }
 
   function applyKeywordHighlights() {
-    const activeHighlights = getScopesForCurrentSub().flatMap(
-      (s) => getKeywordHighlights()[s] || [],
-    );
+    const ctx = getPageContext();
+    const isAggregate = ctx.type === "aggregate" || ctx.type === "multireddit";
+
+    let pageHighlights = null;
+    if (!isAggregate) {
+      pageHighlights = getScopesForCurrentSub().flatMap(
+        (s) => getKeywordHighlights()[s] || [],
+      );
+    }
 
     document.querySelectorAll("shreddit-post").forEach((post) => {
       const title = getPostTitle(post);
+      const activeHighlights = isAggregate
+        ? getHighlightsForPost(post)
+        : pageHighlights;
+
       const match = activeHighlights.find((h) =>
         h.keywords.some((kw) => keywordMatchesTitle(kw, title)),
       );
@@ -1141,8 +1270,10 @@
         post.style.display = _showFiltered ? "" : "none";
         post.style.opacity = _showFiltered ? "0.35" : "";
       });
-    const btn = document.getElementById("pp_filter_show_toggle");
-    if (btn) btn.textContent = _showFiltered ? "ON" : "OFF";
+    // Update all show-toggle buttons across open panels
+    document.querySelectorAll(".pp_panel_show_btn").forEach((btn) => {
+      btn.classList.toggle("pp_show_active", !_showFiltered);
+    });
   }
 
   // =========================================================
@@ -1182,7 +1313,7 @@
       <div class="pp_panel_head">
         <span class="pp_panel_title">${title}</span>
         <div class="pp_panel_head_actions">
-          ${isFilter ? `<button id="${id}_show_toggle" class="pp_panel_show_btn">OFF</button>` : ""}
+          ${isFilter ? `<button id="${id}_show_toggle" class="pp_panel_show_btn" title="Show filtered posts at reduced opacity">ON</button>` : ""}
           <button id="${id}_close" class="pp_panel_close_btn">✕</button>
         </div>
       </div>
@@ -1213,19 +1344,20 @@
 
     document.body.appendChild(panel);
 
+    // Sync the show-toggle button to current _showFiltered state on build.
+    // Orange (pp_show_active) = filtering ON, posts hidden (_showFiltered false).
+    // Grey = relaxed, filtered posts visible (_showFiltered true).
+    if (isFilter) {
+      const showToggle = panel.querySelector(`#${id}_show_toggle`);
+      showToggle.classList.toggle("pp_show_active", !_showFiltered);
+      showToggle.addEventListener("click", () => {
+        toggleShowFiltered();
+      });
+    }
+
     panel.querySelector(`#${id}_close`).addEventListener("click", () => {
       panel.style.display = "none";
     });
-
-    if (isFilter) {
-      panel
-        .querySelector(`#${id}_show_toggle`)
-        .addEventListener("click", () => {
-          toggleShowFiltered();
-          const btn = panel.querySelector(`#${id}_show_toggle`);
-          btn.textContent = _showFiltered ? "ON" : "OFF";
-        });
-    }
 
     // Tab state
     let activeScope = defaultScope;
@@ -1238,7 +1370,6 @@
         btn.classList.toggle("pp_tab_active", t === tab);
         btn.style.color = t === tab ? accent : "";
       });
-      // Override active underline color via currentColor
       const activeTab = panel.querySelector(".pp_tab_active");
       if (activeTab) activeTab.style.color = accent;
 
@@ -1264,7 +1395,6 @@
       setTab("global");
     });
 
-    // Sub tab: single click = select, double click = edit scope
     const subTab = panel.querySelector(`#${id}_tab_sub`);
     let subClickTimer = null;
     subTab.addEventListener("click", () => {
@@ -1307,7 +1437,6 @@
       setTab("all");
     });
 
-    // Add entry
     const input = panel.querySelector(`#${id}_input`);
     const colorPicker = isFilter ? null : panel.querySelector(`#${id}_color`);
 
@@ -1488,6 +1617,99 @@
     });
   }
 
+  // Builds an inline scope-name editor that replaces the pp_scope_header.
+  // On save, renames the scope in storage and re-renders the whole list.
+  function makeScopeNameEditor(
+    oldScope,
+    headerEl,
+    bodyEl,
+    mode,
+    panelId,
+    onDone,
+  ) {
+    const isFilter = mode === "filter";
+    const accent = isFilter ? "#ff4500" : "#1E88DB";
+
+    const editorRow = document.createElement("div");
+    editorRow.style.cssText = `
+      display: flex; align-items: center; gap: 6px;
+      height: 32px; box-sizing: border-box;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      padding: 0 2px;
+    `;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    // Pre-fill with human-readable form: "r/sub1, r/sub2" or "global"
+    input.value =
+      oldScope === "global"
+        ? "global"
+        : oldScope
+            .split(",")
+            .map((s) => `r/${s.trim()}`)
+            .join(", ");
+    input.className = "pp_scope_name_input";
+    input.placeholder = "r/sub1, r/sub2";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Save";
+    saveBtn.className = "pp_edit_save";
+    saveBtn.style.cssText = `color: ${accent}; height: 32px; font-size: 11px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;`;
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "✕";
+    cancelBtn.className = "pp_edit_cancel";
+    cancelBtn.style.cssText =
+      "height: 32px; font-size: 11px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;";
+
+    editorRow.append(input, saveBtn, cancelBtn);
+
+    const save = () => {
+      const raw = input.value.trim();
+      if (!raw) return;
+      const newScope =
+        raw === "global"
+          ? "global"
+          : raw
+              .split(",")
+              .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
+              .filter(Boolean)
+              .join(",");
+      if (!newScope) return;
+      renameScopeInStorage(oldScope, newScope);
+      applyKeywordFilters();
+      applyKeywordHighlights();
+      onDone();
+    };
+
+    saveBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      save();
+    });
+    cancelBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onDone();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.stopPropagation();
+        save();
+      }
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onDone();
+      }
+    });
+
+    // Replace the header row with the editor; keep the body below it.
+    headerEl.replaceWith(editorRow);
+
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  }
+
   function renderAllScopes(mode, panelId) {
     const list = document.getElementById(`${panelId}_list`);
     if (!list) return;
@@ -1517,6 +1739,7 @@
 
       const scopeLabel = document.createElement("span");
       scopeLabel.className = "pp_scope_name";
+      scopeLabel.title = "Click to edit scope name";
       scopeLabel.textContent =
         scope === "global" ? "🌐 Global" : `r/${scope.replace(/,/g, ", r/")}`;
 
@@ -1534,6 +1757,10 @@
         const currentAll = isFilter
           ? getKeywordFilters()
           : getKeywordHighlights();
+
+        // After a rename, `scope` may no longer exist — find the new scope key.
+        // We look for entries that match what was previously under `scope`.
+        // Since renderAllScopes will be called fresh by onDone, this is a no-op guard.
         const currentEntries = currentAll[scope] || [];
 
         currentEntries.forEach((entry, i) => {
@@ -1588,7 +1815,16 @@
         countBadge.textContent = (currentAll2[scope] || []).length;
       };
 
+      // Click chevron/body area to expand; click scopeLabel to edit scope name.
       let open = false;
+
+      scopeLabel.addEventListener("click", (e) => {
+        e.stopPropagation();
+        makeScopeNameEditor(scope, header, body, mode, panelId, () =>
+          renderAllScopes(mode, panelId),
+        );
+      });
+
       header.addEventListener("click", () => {
         open = !open;
         body.style.display = open ? "block" : "none";
@@ -2341,5 +2577,5 @@
     bootstrap();
   }
 
-  console.log("Reddit Enhancements v2.3 loaded");
+  console.log("Reddit Enhancements v2.4 loaded");
 })();
