@@ -12,7 +12,7 @@
 // ==/UserScript==
 
 (function () {
-  "use strict";
+  ("use strict");
 
   // =========================================================
   // CONFIGURATION & CONSTANTS
@@ -253,6 +253,61 @@
 
   const getTopLevelComments = () =>
     Array.from(document.querySelectorAll("shreddit-comment[depth='0']"));
+
+  // =========================================================
+  // ACCOUNT DISPLAY BADGE
+  // =========================================================
+
+  let _accountBadgeFetched = false;
+
+  function injectAccountBadge() {
+    if (document.getElementById("pp_account_badge")) return;
+    if (_accountBadgeFetched) return;
+    if (!document.getElementById("expand-user-drawer-button")) return;
+
+    _accountBadgeFetched = true;
+    fetch("/api/me.json", { credentials: "include" })
+      .then((r) => r.json())
+      .then((d) => {
+        const name = d?.data?.name;
+        if (name && name !== "undefined") insertBadge(name);
+      })
+      .catch(() => {});
+  }
+
+  function insertBadge(username) {
+    if (document.getElementById("pp_account_badge")) return;
+
+    const btn = document.getElementById("expand-user-drawer-button");
+    if (!btn) return;
+
+    const avatarWrapper = btn.closest("div.flex.items-center.justify-center");
+    if (avatarWrapper)
+      avatarWrapper.style.cssText +=
+        "width:auto !important; flex-shrink:0 !important;";
+
+    btn.classList.remove("max-w-[40px]");
+    btn.style.cssText +=
+      "max-width:none !important; width:auto !important; padding:0 10px !important;";
+
+    const avatar = btn.querySelector("div.max-h-xl");
+    if (avatar) avatar.style.display = "none";
+
+    const label = document.createElement("span");
+    label.id = "pp_account_badge";
+    label.textContent = username;
+    label.style.cssText = `
+    color: #ffffff;
+    font-family: sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    white-space: nowrap;
+    letter-spacing: 0.2px;
+  `;
+
+    const inner = btn.querySelector("span.flex.items-center");
+    if (inner) inner.appendChild(label);
+  }
 
   // =========================================================
   // GLOBAL STYLESHEET
@@ -803,6 +858,8 @@
   const Actions = {
     syncCollapseButton: syncCollapseButtonVisibility,
 
+    injectAccountBadge: injectAccountBadge,
+
     nukeAwardButtons: () => {
       deepQueryAll(
         document,
@@ -1231,6 +1288,7 @@
     setTimeout(() => {
       Actions.nuke();
       Actions.nukeAwardButtons();
+      Actions.injectAccountBadge();
       Actions.initSidebar();
       Actions.processComments();
       Actions.syncCollapseButton();
@@ -1259,6 +1317,7 @@
     attachLightbox();
     syncCollapseButtonVisibility();
     Actions.processDecoders();
+    Actions.injectAccountBadge();
   };
 
   if (document.readyState === "loading") {
