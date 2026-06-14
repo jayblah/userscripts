@@ -12,7 +12,7 @@
 // ==/UserScript==
 
 (function () {
-  ("use strict");
+  "use strict";
 
   // =========================================================
   // CONFIGURATION & CONSTANTS
@@ -95,16 +95,8 @@
     "babepedia.com",
   ];
 
-  // const FILTER_TARGETS = ["r4r", "r4r30plus", "bdsmpersonals", "dirtyr4r"];
-  // const FILTER_LOCATIONS = [
-  //   "KANSAS CITY",
-  //   "KCMO",
-  //   "MISSOURI",
-  //   "MIDWEST",
-  //   "KANSAS",
-  // ];
-
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
+  const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -169,7 +161,7 @@
   const SOCIAL_SITE_CLAUSE = SOCIAL_SITES.map((s) => `site:${s}`).join(" OR ");
 
   // =========================================================
-  // STATE MANAGEMENT
+  // STATE
   // =========================================================
 
   let currentGalleryImages = [];
@@ -194,6 +186,10 @@
   // =========================================================
   // HELPER UTILITIES
   // =========================================================
+
+  function decodeAmpEntities(s) {
+    return s.replaceAll("&amp;", "&");
+  }
 
   function buildSocialSearchURL(q) {
     return `https://www.google.com/search?q=${encodeURIComponent(`${q} (${SOCIAL_SITE_CLAUSE})`)}`;
@@ -254,62 +250,89 @@
     return header ? header.offsetHeight : 56;
   }
 
-  const getTopLevelComments = () =>
-    Array.from(document.querySelectorAll("shreddit-comment[depth='0']"));
-
-  // =========================================================
-  // ACCOUNT DISPLAY BADGE
-  // =========================================================
-
-  let _accountBadgeFetched = false;
-
-  function injectAccountBadge() {
-    if (document.getElementById("pp_account_badge")) return;
-    if (_accountBadgeFetched) return;
-    if (!document.getElementById("expand-user-drawer-button")) return;
-
-    _accountBadgeFetched = true;
-    fetch("/api/me.json", { credentials: "include" })
-      .then((r) => r.json())
-      .then((d) => {
-        const name = d?.data?.name;
-        if (name && name !== "undefined") insertBadge(name);
-      })
-      .catch(() => {});
+  function getTopLevelComments() {
+    return Array.from(document.querySelectorAll("shreddit-comment[depth='0']"));
   }
 
-  function insertBadge(username) {
-    if (document.getElementById("pp_account_badge")) return;
+  function getPostTitle(post) {
+    return (
+      post.getAttribute("post-title") ||
+      post.querySelector('[slot="title"]')?.textContent ||
+      post.querySelector('a[id^="post-title"]')?.textContent ||
+      ""
+    );
+  }
 
-    const btn = document.getElementById("expand-user-drawer-button");
-    if (!btn) return;
+  // =========================================================
+  // STORAGE HELPERS
+  // =========================================================
 
-    const avatarWrapper = btn.closest("div.flex.items-center.justify-center");
-    if (avatarWrapper)
-      avatarWrapper.style.cssText +=
-        "width:auto !important; flex-shrink:0 !important;";
+  function lsGet(key, fallback = {}) {
+    try {
+      return JSON.parse(localStorage.getItem(key) || "null") ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
 
-    btn.classList.remove("max-w-[40px]");
-    btn.style.cssText +=
-      "max-width:none !important; width:auto !important; padding:0 10px !important;";
+  function lsSet(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+  }
 
-    const avatar = btn.querySelector("div.max-h-xl");
-    if (avatar) avatar.style.display = "none";
+  function getKeywordFilters() {
+    return lsGet(FILTER_STORAGE_KEY, {});
+  }
+  function saveKeywordFilters(f) {
+    lsSet(FILTER_STORAGE_KEY, f);
+  }
+  function getKeywordHighlights() {
+    return lsGet(HIGHLIGHT_STORAGE_KEY, {});
+  }
+  function saveKeywordHighlights(h) {
+    lsSet(HIGHLIGHT_STORAGE_KEY, h);
+  }
 
-    const label = document.createElement("span");
-    label.id = "pp_account_badge";
-    label.textContent = username;
-    label.style.cssText = `
-    color: #ffffff;
-    font-family: sans-serif;
-    font-size: 16px;
-    font-weight: 700;
-    white-space: nowrap;
-    letter-spacing: 0.2px;
-  `;
+  function getFiltersForScope(scope) {
+    return getKeywordFilters()[scope] || [];
+  }
 
-    const inner = btn.querySelector("span.flex.items-center");
-    if (inner) inner.appendChild(label);
+  function getHighlightsForScope(scope) {
+    return getKeywordHighlights()[scope] || [];
+  }
+
+  function addFilterForScope(scope, keyword) {
+    const all = getKeywordFilters();
+    if (!all[scope]) all[scope] = [];
+    if (!all[scope].includes(keyword)) all[scope].push(keyword);
+    saveKeywordFilters(all);
+  }
+
+  function removeFilterForScope(scope, index) {
+    const all = getKeywordFilters();
+    if (!all[scope]) return;
+    all[scope].splice(index, 1);
+    if (all[scope].length === 0) delete all[scope];
+    saveKeywordFilters(all);
+  }
+
+  function addHighlightForScope(scope, keywords, color) {
+    const all = getKeywordHighlights();
+    if (!all[scope]) all[scope] = [];
+    const exists = all[scope].some(
+      (h) =>
+        h.color === color &&
+        JSON.stringify(h.keywords) === JSON.stringify(keywords),
+    );
+    if (!exists) all[scope].push({ keywords, color });
+    saveKeywordHighlights(all);
+  }
+
+  function removeHighlightForScope(scope, index) {
+    const all = getKeywordHighlights();
+    if (!all[scope]) return;
+    all[scope].splice(index, 1);
+    if (all[scope].length === 0) delete all[scope];
+    saveKeywordHighlights(all);
   }
 
   // =========================================================
@@ -414,6 +437,329 @@
     .pp_selection_popup button { background: transparent; color: ${DECODER_COLORS.text}; border: none; padding: 6px 14px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 32px; }
     .pp_selection_popup button:hover { background: ${DECODER_COLORS.border}; }
 
+    /* ---- Keyword Panel ---- */
+    .pp_panel {
+      display: none;
+      flex-direction: column;
+      position: fixed;
+      z-index: 99998;
+      width: 320px;
+      top: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #0d0d0e;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.02) inset;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+    }
+    .pp_panel_head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 16px 8px;
+    }
+    .pp_panel_title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.4);
+    }
+    .pp_panel_head_actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .pp_panel_show_btn {
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.4);
+      background: transparent !important;
+      border: none !important;
+      height: 24px;
+      padding: 0;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      box-sizing: border-box;
+      transition: color 0.15s ease;
+    }
+    .pp_panel_show_btn:hover {
+      color: #fff;
+    }
+    .pp_panel_close_btn {
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent !important;
+      border: none !important;
+      color: rgba(255, 255, 255, 0.4);
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 0;
+      transition: color 0.15s ease;
+    }
+    .pp_panel_close_btn:hover {
+      color: #ff4500;
+    }
+    .pp_tab_bar {
+      display: flex;
+      margin: 4px 16px 0;
+      gap: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .pp_tab {
+      background: transparent !important;
+      border: none;
+      padding: 8px 0;
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.35);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      box-sizing: border-box;
+      transition: color 0.15s ease;
+    }
+    .pp_tab::after {
+      display: none !important;
+    }
+    .pp_tab.pp_tab_active {
+      color: #fff !important;
+    }
+    .pp_tab:hover:not(.pp_tab_active) {
+      color: rgba(255, 255, 255, 0.75);
+    }
+    .pp_sub_edit {
+      display: none;
+      padding: 12px 16px 0;
+    }
+    .pp_sub_edit_row { display: flex; gap: 6px; margin-top: 6px; }
+    .pp_kw_list {
+      max-height: 190px;
+      overflow-y: auto;
+      margin: 8px 0 0;
+      padding: 0 16px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.1) transparent;
+    }
+    .pp_kw_empty {
+      padding: 24px 0;
+      text-align: center;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.3);
+    }
+    .pp_kw_row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 32px;
+      box-sizing: border-box;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .pp_kw_row:last-child { border-bottom: none; }
+    .pp_kw_swatch {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .pp_kw_label {
+      flex: 1;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.7);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .pp_kw_label:hover { color: #fff; }
+    .pp_kw_del {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent !important;
+      border: none !important;
+      color: rgba(255, 255, 255, 0.3);
+      font-size: 10px;
+      cursor: pointer;
+      opacity: 0;
+      line-height: 1;
+      transition: color 0.15s ease;
+    }
+    .pp_kw_row:hover .pp_kw_del { opacity: 1; }
+    .pp_kw_del:hover {
+      color: #ff4500;
+    }
+    .pp_scope_header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 32px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      box-sizing: border-box;
+    }
+    .pp_scope_chevron {
+      font-size: 8px;
+      color: rgba(255, 255, 255, 0.3);
+      transition: transform 0.15s ease;
+      flex-shrink: 0;
+    }
+    .pp_scope_name {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.5);
+    }
+    .pp_scope_count {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.4);
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      padding: 1px 6px;
+    }
+    .pp_scope_body { display: none; padding-left: 14px; }
+    .pp_edit_row {
+      display: flex;
+      align-items: center !important;
+      gap: 12px;
+      height: 40px;
+      padding: 4px 0 6px;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    .pp_edit_save {
+      flex-shrink: 0;
+      padding: 0;
+      height: 32px;
+      background: transparent !important;
+      border: none !important;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #3ABAA2;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      line-height: 1 !important;
+      margin: 0 !important;
+      box-sizing: border-box;
+      transition: filter 0.15s ease;
+    }
+    .pp_edit_save:hover {
+      filter: brightness(1.2);
+    }
+    .pp_edit_cancel {
+      flex-shrink: 0;
+      width: auto;
+      height: 32px;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      background: transparent !important;
+      border: none !important;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      line-height: 1 !important;
+      margin: 0 !important;
+      box-sizing: border-box;
+      transition: color 0.15s ease;
+    }
+    .pp_edit_cancel:hover {
+      color: #fff;
+    }
+    .pp_add_row {
+      display: flex;
+      align-items: center !important;
+      justify-content: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      margin-top: 6px;
+      box-sizing: border-box;
+    }
+    .pp_add_btn {
+      flex-shrink: 0;
+      padding: 0;
+      height: 32px;
+      background: transparent !important;
+      border: none !important;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #ff4500;
+      box-sizing: border-box;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      line-height: 1 !important;
+      margin: 0 !important;
+      vertical-align: middle;
+      transition: filter 0.15s ease;
+    }
+    .pp_add_btn:hover {
+      filter: brightness(1.2);
+    }
+    .pp_color_pick {
+      -webkit-appearance: none !important;
+      appearance: none !important;
+      flex-shrink: 0;
+      width: 20px !important;
+      height: 20px !important;
+      min-width: 20px !important;
+      max-width: 20px !important;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 50% !important;
+      cursor: pointer;
+      padding: 0;
+      background: transparent;
+      box-sizing: border-box;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      margin: 0 !important;
+      vertical-align: middle;
+      overflow: hidden;
+    }
+    .pp_color_pick::-webkit-color-swatch-wrapper { padding: 0 !important; margin: 0 !important; }
+    .pp_color_pick::-webkit-color-swatch { border: none !important; border-radius: 50% !important; width: 100% !important; height: 100% !important; box-sizing: border-box; }
+    .pp_input {
+      flex: 1;
+      min-width: 0;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      padding: 0 10px;
+      height: 32px;
+      outline: none;
+      box-sizing: border-box;
+      display: inline-flex !important;
+      align-items: center !important;
+      margin: 0 !important;
+      vertical-align: middle;
+    }
+    .pp_input::placeholder { color: rgba(255, 255, 255, 0.25); font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    .pp_input:focus { border-color: rgba(255, 255, 255, 0.2); }
+
     #pp_sidebar_wrap { position: fixed; top: 0; right: 0; height: 100%; z-index: 9000; display: flex; align-items: center; pointer-events: none; transition: transform 0.25s ease; }
     #pp_sidebar_wrap.pp_sb_collapsed { transform: translateX(312px); }
     #pp_sidebar_tab { pointer-events: all; flex-shrink: 0; width: 22px; height: 56px; background: #000; border-radius: 6px 0 0 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #eeefef; font-size: 13px; user-select: none; transition: background 0.15s; box-shadow: -2px 0 6px rgba(0,0,0,0.5); }
@@ -445,13 +791,34 @@
   document.documentElement.appendChild(globalStyle);
 
   // =========================================================
-  // AUDIO-VISUAL GALLERY & LIGHTBOX
+  // FLOATING COLLAPSE TOOLBAR (DOM built at document-start)
+  // =========================================================
+
+  const collapseBtn = document.createElement("div");
+  collapseBtn.id = "pp_float_collapse";
+  collapseBtn.innerHTML = `
+    <div class="pp_collapse_main_btn" id="pp_collapse_text" role="button" title="Toggle comment trees [S]">COL</div>
+    <button class="pp_collapse_sub_btn" id="pp_jump_top" title="Scroll to top [W]">↑</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_prev" title="Previous comment [A]">▲</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_next" title="Next comment [D]">▼</button>
+    <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">↓</button>
+  `;
+
+  const _savedPos = lsGet("pp_collapse_pos", null);
+  collapseBtn.style.top = _savedPos ? _savedPos.top + "px" : "auto";
+  collapseBtn.style.right = _savedPos ? _savedPos.right + "px" : "auto";
+  collapseBtn.style.bottom = _savedPos ? "auto" : "24px";
+  collapseBtn.style.left = _savedPos ? "auto" : "24px";
+  document.documentElement.appendChild(collapseBtn);
+
+  // =========================================================
+  // LIGHTBOX & GALLERY
   // =========================================================
 
   const lightbox = document.createElement("div");
   lightbox.id = "pp_lightbox";
 
-  const attachLightbox = () => {
+  function attachLightbox() {
     if (document.body?.contains(lightbox)) return;
     document.body?.appendChild(lightbox);
 
@@ -466,7 +833,7 @@
 
     lightbox.querySelector("#pp_lightbox_close").onclick = (e) => {
       e.stopPropagation();
-      lightbox.style.display = "none";
+      closeLightbox();
     };
     lightbox.querySelector("#pp_nav_prev").onclick = (e) => {
       e.stopPropagation();
@@ -478,11 +845,23 @@
     };
     lightbox.onclick = (e) => {
       if (e.target === lightbox || e.target.id === "pp_lightbox_img")
-        lightbox.style.display = "none";
+        closeLightbox();
     };
-  };
+  }
 
-  const updateLightboxImage = () => {
+  function closeLightbox() {
+    lightbox.style.display = "none";
+  }
+
+  function openLightbox(images, startIndex) {
+    attachLightbox();
+    currentGalleryImages = images;
+    currentGalleryIndex = startIndex;
+    updateLightboxImage();
+    lightbox.style.display = "flex";
+  }
+
+  function updateLightboxImage() {
     if (!currentGalleryImages.length) return;
 
     const imgEl = lightbox.querySelector("#pp_lightbox_img");
@@ -491,9 +870,8 @@
     const nextEl = lightbox.querySelector("#pp_nav_next");
     const filmstrip = lightbox.querySelector("#pp_filmstrip");
 
-    const cleanSrc = currentGalleryImages[currentGalleryIndex].replaceAll(
-      "&amp;",
-      "&",
+    const cleanSrc = decodeAmpEntities(
+      currentGalleryImages[currentGalleryIndex],
     );
     if (imgEl) imgEl.src = cleanSrc;
 
@@ -512,7 +890,7 @@
         currentGalleryImages.forEach((src, i) => {
           const thumb = document.createElement("img");
           thumb.className = "pp_film_thumb";
-          thumb.src = src.replaceAll("&amp;", "&");
+          thumb.src = decodeAmpEntities(src);
           thumb.addEventListener("click", (e) => {
             e.stopPropagation();
             currentGalleryIndex = i;
@@ -534,15 +912,15 @@
         });
       }
     }
-  };
+  }
 
-  const navigateGallery = (direction) => {
+  function navigateGallery(direction) {
     if (!currentGalleryImages.length) return;
     currentGalleryIndex =
       (currentGalleryIndex + direction + currentGalleryImages.length) %
       currentGalleryImages.length;
     updateLightboxImage();
-  };
+  }
 
   async function fetchGalleryImages(permalink) {
     try {
@@ -561,7 +939,7 @@
         .map((id) => {
           const entry = meta[id];
           const src = entry?.s?.u || entry?.p?.slice(-1)?.[0]?.u || null;
-          return src ? src.replaceAll("&amp;", "&") : null;
+          return src ? decodeAmpEntities(src) : null;
         })
         .filter(Boolean);
     } catch (e) {
@@ -571,133 +949,69 @@
   }
 
   // =========================================================
-  // SUBREDDIT FILTERS & HIGHLIGHTERS
+  // ACCOUNT DISPLAY BADGE
   // =========================================================
 
-  // function filterStrictF4M() {
-  //   const currentPath = window.location.pathname.toLowerCase();
-  //   const isOnTargetSub =
-  //     FILTER_TARGETS.some((sub) => currentPath.includes(`/r/${sub}`)) ||
-  //     currentPath.includes("/m/dating/");
+  let _accountBadgeFetched = false;
 
-  //   if (!isOnTargetSub) return;
+  function injectAccountBadge() {
+    if (document.getElementById("pp_account_badge")) return;
+    if (_accountBadgeFetched) return;
+    if (!document.getElementById("expand-user-drawer-button")) return;
 
-  //   document
-  //     .querySelectorAll("shreddit-post:not([pp-f4m-filtered])")
-  //     .forEach((post) => {
-  //       post.setAttribute("pp-f4m-filtered", "true");
+    _accountBadgeFetched = true;
+    fetch("/api/me.json", { credentials: "include" })
+      .then((r) => r.json())
+      .then((d) => {
+        const name = d?.data?.name;
+        if (name && name !== "undefined") insertBadge(name);
+      })
+      .catch(() => {});
+  }
 
-  //       const titleEl =
-  //         post.querySelector('[slot="title"]') ||
-  //         post.querySelector('a[id^="post-title"]');
-  //       const titleText =
-  //         post.getAttribute("post-title") || titleEl?.textContent || "";
-  //       const upperTitle = titleText.toUpperCase();
+  function insertBadge(username) {
+    if (document.getElementById("pp_account_badge")) return;
 
-  //       if (!/\bF4M\b/.test(upperTitle)) {
-  //         post.remove();
-  //         return;
-  //       }
+    const btn = document.getElementById("expand-user-drawer-button");
+    if (!btn) return;
 
-  //       if (titleEl) {
-  //         const regexStr = `\\b(${FILTER_LOCATIONS.map((loc) => loc.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")).join("|")})\\b`;
-  //         const locationRegex = new RegExp(regexStr, "gi");
+    const avatarWrapper = btn.closest("div.flex.items-center.justify-center");
+    if (avatarWrapper)
+      avatarWrapper.style.cssText +=
+        "width:auto !important; flex-shrink:0 !important;";
 
-  //         if (locationRegex.test(titleText)) {
-  //           titleEl.innerHTML = titleText.replace(locationRegex, (match) => {
-  //             return `<mark style="background-color: rgba(76, 175, 80, 0.35); color: #4CAF50; border-radius: 3px; padding: 0 3px; font-weight: bold;">${match}</mark>`;
-  //           });
-  //         }
-  //       }
-  //     });
-  // }
+    btn.classList.remove("max-w-[40px]");
+    btn.style.cssText +=
+      "max-width:none !important; width:auto !important; padding:0 10px !important;";
+
+    const avatar = btn.querySelector("div.max-h-xl");
+    if (avatar) avatar.style.display = "none";
+
+    const label = document.createElement("span");
+    label.id = "pp_account_badge";
+    label.textContent = username;
+    label.style.cssText = `
+      color: #ffffff;
+      font-family: sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      white-space: nowrap;
+      letter-spacing: 0.2px;
+    `;
+
+    const inner = btn.querySelector("span.flex.items-center");
+    if (inner) inner.appendChild(label);
+  }
 
   // =========================================================
   // KEYWORD FILTER & HIGHLIGHT ENGINE
   // =========================================================
-
-  const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
 
   function getCurrentSubreddit() {
     const parts = window.location.pathname.toLowerCase().split("/");
     if (parts[1] === "r" && parts[2]) return parts[2];
     return null;
   }
-
-  // --- Storage ---
-
-  function getKeywordFilters() {
-    try {
-      return JSON.parse(localStorage.getItem(FILTER_STORAGE_KEY) || "{}");
-    } catch {
-      return {};
-    }
-  }
-
-  function saveKeywordFilters(f) {
-    localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(f));
-  }
-
-  function getKeywordHighlights() {
-    try {
-      return JSON.parse(localStorage.getItem(HIGHLIGHT_STORAGE_KEY) || "{}");
-    } catch {
-      return {};
-    }
-  }
-
-  function saveKeywordHighlights(h) {
-    localStorage.setItem(HIGHLIGHT_STORAGE_KEY, JSON.stringify(h));
-  }
-
-  function getFiltersForScope(scope) {
-    return getKeywordFilters()[scope] || [];
-  }
-
-  function getHighlightsForScope(scope) {
-    return getKeywordHighlights()[scope] || [];
-  }
-
-  function addFilterForScope(scope, keyword) {
-    const all = getKeywordFilters();
-    if (!all[scope]) all[scope] = [];
-    if (!all[scope].includes(keyword)) all[scope].push(keyword);
-    saveKeywordFilters(all);
-  }
-
-  function removeFilterForScope(scope, index) {
-    const all = getKeywordFilters();
-    if (!all[scope]) return;
-    all[scope].splice(index, 1);
-    if (all[scope].length === 0) delete all[scope];
-    saveKeywordFilters(all);
-  }
-
-  function addHighlightForScope(scope, keywords, color) {
-    // keywords is an array (comma-separated input split by caller)
-    const all = getKeywordHighlights();
-    if (!all[scope]) all[scope] = [];
-    // Store as { keywords: [...], color }
-    const entry = { keywords, color };
-    // Avoid exact duplicate sets
-    const exists = all[scope].some(
-      (h) =>
-        h.color === color &&
-        JSON.stringify(h.keywords) === JSON.stringify(keywords),
-    );
-    if (!exists) all[scope].push(entry);
-    saveKeywordHighlights(all);
-  }
-
-  function removeHighlightForScope(scope, index) {
-    const all = getKeywordHighlights();
-    if (!all[scope]) return;
-    all[scope].splice(index, 1);
-    if (all[scope].length === 0) delete all[scope];
-    saveKeywordHighlights(all);
-  }
-
-  // --- Matching ---
 
   function keywordMatchesTitle(keyword, title) {
     if (/^\/.*\/[gimsuy]*$/.test(keyword)) {
@@ -721,11 +1035,9 @@
   function getScopesForCurrentSub() {
     const sub = getCurrentSubreddit();
     const scopes = ["global"];
-    const allFilters = getKeywordFilters();
-    const allHighlights = getKeywordHighlights();
     const allScopes = new Set([
-      ...Object.keys(allFilters),
-      ...Object.keys(allHighlights),
+      ...Object.keys(getKeywordFilters()),
+      ...Object.keys(getKeywordHighlights()),
     ]);
     allScopes.forEach((scope) => {
       if (scope === "global") return;
@@ -737,20 +1049,13 @@
     return scopes;
   }
 
-  // --- Apply ---
-
   function applyKeywordFilters() {
-    const scopes = getScopesForCurrentSub();
-    const allFilters = getKeywordFilters();
-    const activeFilters = scopes.flatMap((s) => allFilters[s] || []);
+    const activeFilters = getScopesForCurrentSub().flatMap(
+      (s) => getKeywordFilters()[s] || [],
+    );
 
     document.querySelectorAll("shreddit-post").forEach((post) => {
-      const title =
-        post.getAttribute("post-title") ||
-        post.querySelector('[slot="title"]')?.textContent ||
-        post.querySelector('a[id^="post-title"]')?.textContent ||
-        "";
-
+      const title = getPostTitle(post);
       const matched =
         activeFilters.length > 0 &&
         activeFilters.some((kw) => keywordMatchesTitle(kw, title));
@@ -768,17 +1073,12 @@
   }
 
   function applyKeywordHighlights() {
-    const scopes = getScopesForCurrentSub();
-    const allHighlights = getKeywordHighlights();
-    const activeHighlights = scopes.flatMap((s) => allHighlights[s] || []);
+    const activeHighlights = getScopesForCurrentSub().flatMap(
+      (s) => getKeywordHighlights()[s] || [],
+    );
 
     document.querySelectorAll("shreddit-post").forEach((post) => {
-      const title =
-        post.getAttribute("post-title") ||
-        post.querySelector('[slot="title"]')?.textContent ||
-        post.querySelector('a[id^="post-title"]')?.textContent ||
-        "";
-
+      const title = getPostTitle(post);
       const match = activeHighlights.find((h) =>
         h.keywords.some((kw) => keywordMatchesTitle(kw, title)),
       );
@@ -804,10 +1104,27 @@
         post.style.opacity = _showFiltered ? "0.35" : "";
       });
     const btn = document.getElementById("pp_filter_show_toggle");
-    if (btn) btn.textContent = _showFiltered ? "HIDE" : "SHOW";
+    if (btn) btn.textContent = _showFiltered ? "ON" : "OFF";
   }
 
-  // --- Panel ---
+  // =========================================================
+  // KEYWORD PANEL UI
+  // =========================================================
+
+  function makeDeleteButton(onDelete) {
+    const btn = document.createElement("button");
+    btn.textContent = "✕";
+    btn.className = "pp_kw_del";
+    btn.addEventListener("click", onDelete);
+    return btn;
+  }
+
+  function splitKeywords(val) {
+    return val
+      .split(",")
+      .map((k) => k.trim())
+      .filter(Boolean);
+  }
 
   function buildKwPanel(mode) {
     const id = mode === "filter" ? "pp_filter_panel" : "pp_highlight_panel";
@@ -816,57 +1133,48 @@
     const sub = getCurrentSubreddit();
     const defaultScope = sub || "global";
     const isFilter = mode === "filter";
-    const accentColor = isFilter ? "#ff4500" : "#1E88DB";
-    const title = isFilter ? "KEYWORD FILTERS" : "KEYWORD HIGHLIGHTS";
+    const accent = isFilter ? "#ff4500" : "#1E88DB";
+    const title = isFilter ? "Filters" : "Highlights";
 
     const panel = document.createElement("div");
     panel.id = id;
-    panel.style.cssText = `
-    display: none; flex-direction: column; gap: 4px; padding: 6px;
-    background: rgba(21,24,26,0.97); border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 8px; position: fixed; z-index: 99998; width: 240px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5); backdrop-filter: blur(8px);
-    top: 80px; left: 50%; transform: translateX(-50%);
-  `;
+    panel.className = "pp_panel";
 
     panel.innerHTML = `
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:2px;">
-      <span style="color:#fff; font-size:10px; font-weight:700; font-family:sans-serif; letter-spacing:0.5px;">${title}</span>
-      <div style="display:flex; gap:4px; align-items:center;">
-        ${isFilter ? `<button id="${id}_show_toggle" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); color:#b3b3b3; font-size:9px; font-weight:700; font-family:sans-serif; padding:2px 6px; border-radius:3px; cursor:pointer;">SHOW</button>` : ""}
-        <button id="${id}_close" style="background:none; border:none; color:#666; font-size:14px; cursor:pointer; line-height:1; padding:0 2px;">✕</button>
+      <div class="pp_panel_head">
+        <span class="pp_panel_title">${title}</span>
+        <div class="pp_panel_head_actions">
+          ${isFilter ? `<button id="${id}_show_toggle" class="pp_panel_show_btn">OFF</button>` : ""}
+          <button id="${id}_close" class="pp_panel_close_btn">✕</button>
+        </div>
       </div>
-    </div>
 
-    <div style="display:flex; gap:3px; margin-bottom:2px;">
-      <button id="${id}_tab_global" data-tab="global" style="flex:1; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 0; border-radius:3px; cursor:pointer; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#b3b3b3;">GLOBAL</button>
-      <button id="${id}_tab_sub" data-tab="sub" style="flex:1; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 4px; border-radius:3px; cursor:pointer; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#b3b3b3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sub ? `r/${sub}` : "SUB"}</button>
-      <button id="${id}_tab_all" data-tab="all" style="flex:1; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 0; border-radius:3px; cursor:pointer; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#b3b3b3;">ALL</button>
-    </div>
-
-    <div id="${id}_sub_edit" style="display:none; margin-bottom:4px;">
-      <input id="${id}_sub_input" type="text" placeholder="sub1, sub2, sub3" value="${sub || ""}"
-        style="width:100%; box-sizing:border-box; background:#050505; border:1px solid #343536; color:#d7dadc; font-size:10px; font-family:monospace; padding:4px 6px; border-radius:3px; outline:none;" />
-      <div style="display:flex; gap:4px; margin-top:3px;">
-        <button id="${id}_sub_confirm" style="flex:1; background:${accentColor}; border:none; color:#fff; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 0; border-radius:3px; cursor:pointer;">APPLY</button>
-        <button id="${id}_sub_cancel" style="flex:1; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); color:#b3b3b3; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 0; border-radius:3px; cursor:pointer;">CANCEL</button>
+      <div class="pp_tab_bar">
+        <button id="${id}_tab_global" class="pp_tab">Global</button>
+        <button id="${id}_tab_sub" class="pp_tab">${sub ? `r/${sub}` : "Subreddit"}</button>
+        <button id="${id}_tab_all" class="pp_tab">All</button>
       </div>
-    </div>
 
-    <div id="${id}_list" style="max-height:160px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.2) transparent; margin-bottom:2px;"></div>
+      <div id="${id}_sub_edit" class="pp_sub_edit">
+        <input id="${id}_sub_input" type="text" class="pp_input" placeholder="sub1, sub2, sub3" value="${sub || ""}" style="width:100%; height:30px;" />
+        <div class="pp_sub_edit_row">
+          <button id="${id}_sub_confirm" class="pp_add_btn" style="flex:1; background:${accent};">Apply</button>
+          <button id="${id}_sub_cancel" class="pp_edit_cancel" style="flex:1; width:auto; border-radius:6px; font-size:11px; font-weight:600;">Cancel</button>
+        </div>
+      </div>
 
-    <div id="${id}_add_row" style="display:flex; gap:4px; margin-top:2px;">
-      <input id="${id}_input" type="text"
-        placeholder="${isFilter ? "keyword, wild*, /regex/" : "kw1, kw2, kw3"}"
-        style="flex:1; background:#050505; border:1px solid #343536; color:#d7dadc; font-size:10px; font-family:monospace; padding:4px 6px; border-radius:3px; outline:none; min-width:0;" />
-      ${!isFilter ? `<input id="${id}_color" type="color" value="#FFD700" style="width:28px; height:28px; border:none; border-radius:3px; cursor:pointer; padding:0; background:none; flex-shrink:0;" />` : ""}
-      <button id="${id}_add" style="background:${accentColor}; border:none; color:#fff; font-size:10px; font-weight:700; font-family:sans-serif; padding:4px 8px; border-radius:3px; cursor:pointer; flex-shrink:0;">ADD</button>
-    </div>
-  `;
+      <div id="${id}_list" class="pp_kw_list"></div>
+
+      <div id="${id}_add_row" class="pp_add_row">
+        <input id="${id}_input" type="text" class="pp_input"
+          placeholder="${isFilter ? "keyword, wild*, /regex/" : "keyword1, keyword2"}" />
+        ${!isFilter ? `<input id="${id}_color" type="color" value="#FFD700" class="pp_color_pick" />` : ""}
+        <button id="${id}_add" class="pp_add_btn" style="background:${accent};">Add</button>
+      </div>
+    `;
 
     document.body.appendChild(panel);
 
-    // Close
     panel.querySelector(`#${id}_close`).addEventListener("click", () => {
       panel.style.display = "none";
     });
@@ -874,32 +1182,28 @@
     if (isFilter) {
       panel
         .querySelector(`#${id}_show_toggle`)
-        .addEventListener("click", toggleShowFiltered);
+        .addEventListener("click", () => {
+          toggleShowFiltered();
+          const btn = panel.querySelector(`#${id}_show_toggle`);
+          btn.textContent = _showFiltered ? "ON" : "OFF";
+        });
     }
 
     // Tab state
-    let activeTab = "sub"; // 'global' | 'sub' | 'all'
     let activeScope = defaultScope;
 
     function setTab(tab) {
-      activeTab = tab;
       const isAll = tab === "all";
 
-      // Style tabs
-      ["global", "sub", "all"].forEach((t) => {
-        const btn = panel.querySelector(`#${id}_tab_${t}`);
-        if (!btn) return;
-        const isActive = t === tab;
-        btn.style.background = isActive
-          ? `${accentColor}33`
-          : "rgba(255,255,255,0.05)";
-        btn.style.borderColor = isActive
-          ? accentColor
-          : "rgba(255,255,255,0.12)";
-        btn.style.color = isActive ? accentColor : "#b3b3b3";
+      panel.querySelectorAll(".pp_tab").forEach((btn, i) => {
+        const t = ["global", "sub", "all"][i];
+        btn.classList.toggle("pp_tab_active", t === tab);
+        btn.style.color = t === tab ? accent : "";
       });
+      // Override active underline color via currentColor
+      const activeTab = panel.querySelector(".pp_tab_active");
+      if (activeTab) activeTab.style.color = accent;
 
-      // Hide add row in ALL tab
       panel.querySelector(`#${id}_add_row`).style.display = isAll
         ? "none"
         : "flex";
@@ -922,7 +1226,7 @@
       setTab("global");
     });
 
-    // Sub tab: single click = select, double click = edit
+    // Sub tab: single click = select, double click = edit scope
     const subTab = panel.querySelector(`#${id}_tab_sub`);
     let subClickTimer = null;
     subTab.addEventListener("click", () => {
@@ -967,7 +1271,6 @@
 
     // Add entry
     const input = panel.querySelector(`#${id}_input`);
-    const addBtn = panel.querySelector(`#${id}_add`);
     const colorPicker = isFilter ? null : panel.querySelector(`#${id}_color`);
 
     const addEntry = () => {
@@ -977,12 +1280,11 @@
         addFilterForScope(activeScope, val);
         applyKeywordFilters();
       } else {
-        const keywords = val
-          .split(",")
-          .map((k) => k.trim())
-          .filter(Boolean);
-        const color = colorPicker.value;
-        addHighlightForScope(activeScope, keywords, color);
+        addHighlightForScope(
+          activeScope,
+          splitKeywords(val),
+          colorPicker.value,
+        );
         applyKeywordHighlights();
       }
       renderKwList(mode, activeScope, id, false);
@@ -990,7 +1292,7 @@
       input.focus();
     };
 
-    addBtn.addEventListener("click", addEntry);
+    panel.querySelector(`#${id}_add`).addEventListener("click", addEntry);
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.stopPropagation();
@@ -1004,43 +1306,37 @@
   function makeEditableRow(mode, scope, entry, index, panelId, onDone) {
     const isFilter = mode === "filter";
     const keywords = isFilter ? [entry] : entry.keywords;
-    const color = isFilter ? null : entry.color;
-    const accentColor = isFilter ? "#ff4500" : "#1E88DB";
+    const accent = isFilter ? "#ff4500" : "#1E88DB";
 
     const row = document.createElement("div");
-    row.style.cssText =
-      "display:flex; flex-direction:column; gap:3px; margin-bottom:4px; padding:4px; background:rgba(255,255,255,0.04); border-radius:4px; border:1px solid rgba(255,255,255,0.1);";
+    row.className = "pp_edit_row";
 
-    const editRow = document.createElement("div");
-    editRow.style.cssText = "display:flex; gap:4px; align-items:center;";
-
+    let colorPicker = null;
     if (!isFilter) {
-      const colorPicker = document.createElement("input");
+      colorPicker = document.createElement("input");
       colorPicker.type = "color";
-      colorPicker.value = color;
-      colorPicker.id = `${panelId}_edit_color_${index}`;
-      colorPicker.style.cssText =
-        "width:24px; height:24px; border:none; border-radius:3px; cursor:pointer; padding:0; background:none; flex-shrink:0;";
-      editRow.appendChild(colorPicker);
+      colorPicker.value = entry.color;
+      colorPicker.className = "pp_color_pick";
+      colorPicker.style.cssText = "width:24px; height:24px; flex-shrink:0;";
+      row.appendChild(colorPicker);
     }
 
     const input = document.createElement("input");
     input.type = "text";
     input.value = keywords.join(", ");
-    input.style.cssText =
-      "flex:1; background:#050505; border:1px solid #343536; color:#d7dadc; font-size:10px; font-family:monospace; padding:3px 6px; border-radius:3px; outline:none; min-width:0;";
+    input.className = "pp_input";
+    input.style.height = "24px";
 
     const saveBtn = document.createElement("button");
-    saveBtn.textContent = "✓";
-    saveBtn.style.cssText = `background:${accentColor}; border:none; color:#fff; font-size:11px; font-weight:700; cursor:pointer; border-radius:3px; padding:0 6px; height:22px; flex-shrink:0;`;
+    saveBtn.textContent = "Save";
+    saveBtn.className = "pp_edit_save";
+    saveBtn.style.background = accent;
 
     const cancelBtn = document.createElement("button");
     cancelBtn.textContent = "✕";
-    cancelBtn.style.cssText =
-      "background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); color:#b3b3b3; font-size:11px; cursor:pointer; border-radius:3px; padding:0 6px; height:22px; flex-shrink:0;";
+    cancelBtn.className = "pp_edit_cancel";
 
-    editRow.append(input, saveBtn, cancelBtn);
-    row.appendChild(editRow);
+    row.append(input, saveBtn, cancelBtn);
 
     const save = () => {
       const val = input.value.trim();
@@ -1054,15 +1350,10 @@
       } else {
         const all = getKeywordHighlights();
         if (!all[scope]) return;
-        const newKeywords = val
-          .split(",")
-          .map((k) => k.trim())
-          .filter(Boolean);
-        const colorPicker = document.getElementById(
-          `${panelId}_edit_color_${index}`,
-        );
-        const newColor = colorPicker ? colorPicker.value : entry.color;
-        all[scope][index] = { keywords: newKeywords, color: newColor };
+        all[scope][index] = {
+          keywords: splitKeywords(val),
+          color: colorPicker ? colorPicker.value : entry.color,
+        };
         saveKeywordHighlights(all);
         applyKeywordHighlights();
       }
@@ -1082,7 +1373,6 @@
       }
     });
 
-    // Focus and select all on open
     setTimeout(() => {
       input.focus();
       input.select();
@@ -1102,9 +1392,8 @@
 
     if (entries.length === 0) {
       const empty = document.createElement("div");
-      empty.style.cssText =
-        "color:#666; font-size:10px; text-align:center; padding:4px 0; font-family:sans-serif;";
-      empty.textContent = "No entries";
+      empty.className = "pp_kw_empty";
+      empty.textContent = "Nothing here yet";
       list.appendChild(empty);
       return;
     }
@@ -1114,71 +1403,47 @@
       const color = isFilter ? null : entry.color;
 
       const row = document.createElement("div");
-      row.style.cssText =
-        "display:flex; align-items:center; gap:4px; margin-bottom:3px;";
+      row.className = "pp_kw_row";
       row.dataset.index = i;
 
       if (!isFilter) {
         const swatch = document.createElement("span");
-        swatch.style.cssText = `width:10px; height:10px; border-radius:2px; background:${color}; flex-shrink:0; display:inline-block;`;
+        swatch.className = "pp_kw_swatch";
+        swatch.style.background = color;
         row.appendChild(swatch);
       }
 
       const label = document.createElement("span");
       label.textContent = keywords.join(", ");
       label.title = readonly ? keywords.join(", ") : "Click to edit";
-      label.style.cssText = `flex:1; font-size:10px; color:#d7dadc; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; ${readonly ? "" : "cursor:pointer;"}`;
+      label.className = "pp_kw_label";
+      if (readonly) label.style.cursor = "default";
 
       if (!readonly) {
-        label.addEventListener(
-          "mouseenter",
-          () => (label.style.color = "#fff"),
-        );
-        label.addEventListener(
-          "mouseleave",
-          () => (label.style.color = "#d7dadc"),
-        );
         label.addEventListener("click", () => {
-          const editRow = makeEditableRow(
-            mode,
-            scope,
-            entry,
-            i,
-            panelId,
-            () => {
+          row.replaceWith(
+            makeEditableRow(mode, scope, entry, i, panelId, () => {
               renderKwList(mode, scope, panelId, readonly);
-            },
+            }),
           );
-          row.replaceWith(editRow);
         });
       }
 
       row.appendChild(label);
 
       if (!readonly) {
-        const removeBtn = document.createElement("button");
-        removeBtn.textContent = "✕";
-        removeBtn.style.cssText =
-          "background:none; border:none; color:#666; cursor:pointer; font-size:10px; padding:0 2px; flex-shrink:0; line-height:1;";
-        removeBtn.addEventListener(
-          "mouseenter",
-          () => (removeBtn.style.color = "#ff4500"),
+        row.appendChild(
+          makeDeleteButton(() => {
+            if (isFilter) {
+              removeFilterForScope(scope, i);
+              applyKeywordFilters();
+            } else {
+              removeHighlightForScope(scope, i);
+              applyKeywordHighlights();
+            }
+            renderKwList(mode, scope, panelId, readonly);
+          }),
         );
-        removeBtn.addEventListener(
-          "mouseleave",
-          () => (removeBtn.style.color = "#666"),
-        );
-        removeBtn.addEventListener("click", () => {
-          if (isFilter) {
-            removeFilterForScope(scope, i);
-            applyKeywordFilters();
-          } else {
-            removeHighlightForScope(scope, i);
-            applyKeywordHighlights();
-          }
-          renderKwList(mode, scope, panelId, readonly);
-        });
-        row.appendChild(removeBtn);
       }
 
       list.appendChild(row);
@@ -1195,9 +1460,8 @@
 
     if (scopes.length === 0) {
       const empty = document.createElement("div");
-      empty.style.cssText =
-        "color:#666; font-size:10px; text-align:center; padding:4px 0; font-family:sans-serif;";
-      empty.textContent = "No entries anywhere";
+      empty.className = "pp_kw_empty";
+      empty.textContent = "Nothing saved anywhere";
       list.appendChild(empty);
       return;
     }
@@ -1207,91 +1471,65 @@
       if (!entries?.length) return;
 
       const header = document.createElement("div");
-      header.style.cssText = `
-      display:flex; align-items:center; justify-content:space-between;
-      padding:3px 4px; border-radius:3px; cursor:pointer; margin-bottom:2px;
-      background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.08);
-    `;
-
-      const scopeLabel = document.createElement("span");
-      scopeLabel.textContent =
-        scope === "global" ? "🌐 global" : `r/${scope.replace(/,/g, ", r/")}`;
-      scopeLabel.style.cssText =
-        "font-size:9px; font-weight:700; font-family:sans-serif; color:#d7dadc; flex:1;";
-
-      const countBadge = document.createElement("span");
-      countBadge.textContent = entries.length;
-      countBadge.style.cssText =
-        "font-size:9px; font-family:sans-serif; color:#666; margin-right:4px;";
+      header.className = "pp_scope_header";
 
       const chevron = document.createElement("span");
+      chevron.className = "pp_scope_chevron";
       chevron.textContent = "▶";
-      chevron.style.cssText =
-        "font-size:8px; color:#666; transition:transform 0.15s;";
 
-      header.append(scopeLabel, countBadge, chevron);
+      const scopeLabel = document.createElement("span");
+      scopeLabel.className = "pp_scope_name";
+      scopeLabel.textContent =
+        scope === "global" ? "🌐 Global" : `r/${scope.replace(/,/g, ", r/")}`;
+
+      const countBadge = document.createElement("span");
+      countBadge.className = "pp_scope_count";
+      countBadge.textContent = entries.length;
+
+      header.append(chevron, scopeLabel, countBadge);
 
       const body = document.createElement("div");
-      body.style.cssText = "display:none; padding:2px 0 4px 4px;";
+      body.className = "pp_scope_body";
 
       const renderBodyEntries = () => {
         body.innerHTML = "";
-        const currentEntries = isFilter
-          ? getFiltersForScope(scope)
-          : getHighlightsForScope(scope);
+        const currentAll = isFilter
+          ? getKeywordFilters()
+          : getKeywordHighlights();
+        const currentEntries = currentAll[scope] || [];
 
         currentEntries.forEach((entry, i) => {
           const keywords = isFilter ? [entry] : entry.keywords;
           const color = isFilter ? null : entry.color;
 
           const row = document.createElement("div");
-          row.style.cssText =
-            "display:flex; align-items:center; gap:4px; margin-bottom:2px;";
+          row.className = "pp_kw_row";
 
           if (!isFilter) {
             const swatch = document.createElement("span");
-            swatch.style.cssText = `width:8px; height:8px; border-radius:2px; background:${color}; flex-shrink:0; display:inline-block;`;
+            swatch.className = "pp_kw_swatch";
+            swatch.style.background = color;
             row.appendChild(swatch);
           }
 
           const label = document.createElement("span");
           label.textContent = keywords.join(", ");
           label.title = "Click to edit";
-          label.style.cssText =
-            "flex:1; font-size:10px; color:#d7dadc; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer;";
-          label.addEventListener(
-            "mouseenter",
-            () => (label.style.color = "#fff"),
-          );
-          label.addEventListener(
-            "mouseleave",
-            () => (label.style.color = "#d7dadc"),
-          );
+          label.className = "pp_kw_label";
           label.addEventListener("click", () => {
-            const editRow = makeEditableRow(
-              mode,
-              scope,
-              entry,
-              i,
-              panelId,
-              renderBodyEntries,
+            row.replaceWith(
+              makeEditableRow(
+                mode,
+                scope,
+                entry,
+                i,
+                panelId,
+                renderBodyEntries,
+              ),
             );
-            row.replaceWith(editRow);
           });
 
-          const removeBtn = document.createElement("button");
-          removeBtn.textContent = "✕";
-          removeBtn.style.cssText =
-            "background:none; border:none; color:#555; cursor:pointer; font-size:9px; padding:0 2px; flex-shrink:0; line-height:1;";
-          removeBtn.addEventListener(
-            "mouseenter",
-            () => (removeBtn.style.color = "#ff4500"),
-          );
-          removeBtn.addEventListener(
-            "mouseleave",
-            () => (removeBtn.style.color = "#555"),
-          );
-          removeBtn.addEventListener("click", () => {
+          const delBtn = makeDeleteButton(() => {
             if (isFilter) {
               removeFilterForScope(scope, i);
               applyKeywordFilters();
@@ -1302,15 +1540,14 @@
             renderBodyEntries();
           });
 
-          row.append(label, removeBtn);
+          row.append(label, delBtn);
           body.appendChild(row);
         });
 
-        // Update count badge
-        const currentAll = isFilter
+        const currentAll2 = isFilter
           ? getKeywordFilters()
           : getKeywordHighlights();
-        countBadge.textContent = (currentAll[scope] || []).length;
+        countBadge.textContent = (currentAll2[scope] || []).length;
       };
 
       let open = false;
@@ -1341,20 +1578,20 @@
     const menuList = drawerContent.querySelector('ul, nav, [role="menu"]');
     if (!menuList) return;
 
-    const makeEntry = (id, label, mode) => {
+    const makeMenuEntry = (id, label, mode) => {
       const entry = document.createElement("li");
       entry.id = id;
       entry.style.cssText = "list-style:none;";
       const btn = document.createElement("button");
       btn.textContent = label;
       btn.style.cssText = `
-      display: flex; align-items: center; width: 100%;
-      padding: 8px 16px; background: transparent; border: none;
-      border-top: 1px solid rgba(255,255,255,0.06);
-      color: #d7dadc; font-family: sans-serif; font-size: 14px;
-      font-weight: 500; cursor: pointer; text-align: left;
-      gap: 8px; box-sizing: border-box;
-    `;
+        display: flex; align-items: center; width: 100%;
+        padding: 8px 16px; background: transparent; border: none;
+        border-top: 1px solid rgba(255,255,255,0.06);
+        color: #d7dadc; font-family: sans-serif; font-size: 14px;
+        font-weight: 500; cursor: pointer; text-align: left;
+        gap: 8px; box-sizing: border-box;
+      `;
       btn.addEventListener(
         "mouseenter",
         () => (btn.style.background = "rgba(255,255,255,0.06)"),
@@ -1373,36 +1610,20 @@
     };
 
     menuList.appendChild(
-      makeEntry("pp_filter_menu_entry", "⊘ Keyword Filters", "filter"),
+      makeMenuEntry("pp_filter_menu_entry", "⊘ Keyword Filters", "filter"),
     );
     menuList.appendChild(
-      makeEntry("pp_highlight_menu_entry", "◈ Keyword Highlights", "highlight"),
+      makeMenuEntry(
+        "pp_highlight_menu_entry",
+        "◈ Keyword Highlights",
+        "highlight",
+      ),
     );
   }
 
   // =========================================================
-  // COMMENT NAVIGATION & STRUCTURE PIPELINES
+  // COMMENT NAVIGATION
   // =========================================================
-
-  const collapseBtn = document.createElement("div");
-  collapseBtn.id = "pp_float_collapse";
-  collapseBtn.innerHTML = `
-    <div class="pp_collapse_main_btn" id="pp_collapse_text" role="button" title="Toggle comment trees [S]">COL</div>
-    <button class="pp_collapse_sub_btn" id="pp_jump_top" title="Scroll to top [W]">⤒</button>
-    <button class="pp_collapse_sub_btn" id="pp_jump_prev" title="Previous comment [A]">▲</button>
-    <button class="pp_collapse_sub_btn" id="pp_jump_next" title="Next comment [D]">▼</button>
-    <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">⤓</button>
-    <div class="pp_collapse_divider"></div>
-  `;
-
-  const _savedPos = JSON.parse(
-    localStorage.getItem("pp_collapse_pos") || "null",
-  );
-  collapseBtn.style.top = _savedPos ? _savedPos.top + "px" : "auto";
-  collapseBtn.style.right = _savedPos ? _savedPos.right + "px" : "auto";
-  collapseBtn.style.bottom = _savedPos ? "auto" : "24px";
-  collapseBtn.style.left = _savedPos ? "auto" : "24px";
-  document.documentElement.appendChild(collapseBtn);
 
   function toggleCollapseAll() {
     const allComments = Array.from(
@@ -1411,9 +1632,7 @@
     if (!allComments.length) return;
 
     collapseState = (collapseState + 1) % 3;
-    const topThreads = Array.from(
-      document.querySelectorAll("shreddit-comment[depth='0']"),
-    );
+    const topThreads = getTopLevelComments();
     const offset = getHeaderOffset();
     let anchor = topThreads.find(
       (el) => el.getBoundingClientRect().top > offset - 10,
@@ -1480,7 +1699,6 @@
     const targets = getTopLevelComments();
     if (!targets.length) return;
     const offset = getHeaderOffset();
-    const currentScrollY = window.scrollY;
     const next = targets.find(
       (el) => el.getBoundingClientRect().top > offset + 5,
     );
@@ -1493,9 +1711,9 @@
       return;
     }
 
-    const targetY = currentScrollY + next.getBoundingClientRect().top - offset;
+    const targetY = window.scrollY + next.getBoundingClientRect().top - offset;
     if (
-      Math.abs(targetY - currentScrollY) < 3 ||
+      Math.abs(targetY - window.scrollY) < 3 ||
       Math.abs(targetY - lastScrollY) < 3
     ) {
       window.scrollTo({
@@ -1518,8 +1736,6 @@
       window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   }
 
-  let _lastPathname = window.location.pathname;
-
   function syncCollapseButtonVisibility() {
     _onAllowedSubreddit = ALLOWED_SUBREDDITS.some((sub) =>
       window.location.pathname.toLowerCase().startsWith(sub),
@@ -1530,7 +1746,7 @@
   }
 
   // =========================================================
-  // ENCRYPTED DATA & NATO CODEX STRIPS
+  // NATO / BINARY DECODER
   // =========================================================
 
   function createTranslationComponent(type, translatedText) {
@@ -1606,7 +1822,6 @@
   function scanParagraph(p) {
     if (p.hasAttribute("data-decoded")) return;
     p.setAttribute("data-decoded", "true");
-
     const nodes = [];
     const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
     let n;
@@ -1625,17 +1840,17 @@
   }
 
   // =========================================================
-  // ACTIONS PIPELINE ENGINE
+  // ACTIONS PIPELINE
   // =========================================================
 
   const Actions = {
-    applyKeywordFilters: applyKeywordFilters,
-    applyKeywordHighlights: applyKeywordHighlights,
-    injectAccountBadge: injectAccountBadge,
-    injectFilterMenuEntry: injectFilterMenuEntry,
-    syncCollapseButton: syncCollapseButtonVisibility,
+    nuke() {
+      deepQueryAll(document, NUKE_SELECTOR_STRING).forEach((item) => {
+        if (item.isConnected) item.remove();
+      });
+    },
 
-    nukeAwardButtons: () => {
+    nukeAwardButtons() {
       deepQueryAll(
         document,
         "award-button:not([pp-award-hidden]), shreddit-slot[slot='award-button']:not([pp-award-hidden])",
@@ -1645,13 +1860,13 @@
       });
     },
 
-    nuke: () => {
-      deepQueryAll(document, NUKE_SELECTOR_STRING).forEach((item) => {
-        if (item.isConnected) item.remove();
-      });
-    },
+    injectAccountBadge,
+    injectFilterMenuEntry,
+    syncCollapseButton: syncCollapseButtonVisibility,
+    applyKeywordFilters,
+    applyKeywordHighlights,
 
-    handleImages: (post) => {
+    handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
 
       const isGallery = post.hasAttribute("gallery");
@@ -1666,24 +1881,20 @@
             imgEl.addEventListener(
               "click",
               (e) => {
-                const clickedSrc = (
+                const clickedSrc = decodeAmpEntities(
                   imgEl.getAttribute("src") ||
-                  imgEl.querySelector("img")?.getAttribute("src") ||
-                  ""
-                ).replaceAll("&amp;", "&");
+                    imgEl.querySelector("img")?.getAttribute("src") ||
+                    "",
+                );
                 e.preventDefault();
                 e.stopPropagation();
-                attachLightbox();
-                currentGalleryImages = urls;
                 const idx = urls.findIndex((u) => {
                   const id = u.match(
                     /\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/,
                   )?.[1];
                   return id && clickedSrc.includes(id);
                 });
-                currentGalleryIndex = idx !== -1 ? idx : 0;
-                updateLightboxImage();
-                lightbox.style.display = "flex";
+                openLightbox(urls, idx !== -1 ? idx : 0);
               },
               true,
             );
@@ -1709,18 +1920,17 @@
               imgEl.getAttribute("src") ||
               imgEl.querySelector("img")?.getAttribute("src");
             if (!clickedSrc) return;
-
             e.preventDefault();
             e.stopPropagation();
-            attachLightbox();
 
             const galleryContainer =
               imgEl.closest("gallery-carousel") || imgEl.closest("ul");
+            let images, startIndex;
             if (galleryContainer) {
               const allImgs = Array.from(
                 galleryContainer.querySelectorAll("faceplate-img, img"),
               );
-              currentGalleryImages = [
+              images = [
                 ...new Set(
                   allImgs
                     .map(
@@ -1731,14 +1941,13 @@
                     .filter(Boolean),
                 ),
               ];
-              currentGalleryIndex = currentGalleryImages.indexOf(clickedSrc);
-              if (currentGalleryIndex === -1) currentGalleryIndex = 0;
+              startIndex = images.indexOf(clickedSrc);
+              if (startIndex === -1) startIndex = 0;
             } else {
-              currentGalleryImages = [clickedSrc];
-              currentGalleryIndex = 0;
+              images = [clickedSrc];
+              startIndex = 0;
             }
-            updateLightboxImage();
-            lightbox.style.display = "flex";
+            openLightbox(images, startIndex);
           },
           true,
         );
@@ -1746,7 +1955,7 @@
       post.setAttribute("pp-images-handled", "true");
     },
 
-    processComments: () => {
+    processComments() {
       document
         .querySelectorAll("shreddit-comment:not([pp-checked])")
         .forEach((comment) => {
@@ -1764,9 +1973,9 @@
             const style = document.createElement("style");
             style.className = "pp-line-style";
             style.textContent = `
-            div[data-testid="main-thread-line"] { background-color: ${color} !important; width: 2px !important; opacity: 1 !important; }
-            div[data-testid="branch-line"] { border-left: 2px solid ${color} !important; border-bottom: 2px solid ${color} !important; opacity: 1 !important; }
-          `;
+              div[data-testid="main-thread-line"] { background-color: ${color} !important; width: 2px !important; opacity: 1 !important; }
+              div[data-testid="branch-line"] { border-left: 2px solid ${color} !important; border-bottom: 2px solid ${color} !important; opacity: 1 !important; }
+            `;
             shadow.appendChild(style);
             comment.setAttribute("pp-shadow-styled", "true");
             comment.setAttribute("pp-checked", "true");
@@ -1774,7 +1983,7 @@
         });
     },
 
-    initSidebar: () => {
+    initSidebar() {
       if (!/^\/r\/[^/]/.test(window.location.pathname)) {
         document.getElementById("pp_sidebar_wrap")?.remove();
         return;
@@ -1792,8 +2001,7 @@
         existingWrap.remove();
       }
 
-      const collapsed =
-        localStorage.getItem("pp_sidebar_collapsed") !== "false";
+      const collapsed = lsGet("pp_sidebar_collapsed", true) !== false;
       const wrap = document.createElement("div");
       wrap.id = "pp_sidebar_wrap";
       if (collapsed) wrap.classList.add("pp_sb_collapsed");
@@ -1820,11 +2028,11 @@
       tab.addEventListener("click", () => {
         const isCollapsed = wrap.classList.toggle("pp_sb_collapsed");
         tab.textContent = isCollapsed ? "❮" : "❯";
-        localStorage.setItem("pp_sidebar_collapsed", String(isCollapsed));
+        lsSet("pp_sidebar_collapsed", isCollapsed);
       });
     },
 
-    processDecoders: () => {
+    processDecoders() {
       if (!isAllowedSubreddit()) return;
       COMMENT_SELECTORS.forEach((selector) => {
         document
@@ -1838,10 +2046,10 @@
   };
 
   // =========================================================
-  // INTERFACE INTERACTION LISTENERS & INTERCEPTORS
+  // EVENT LISTENERS
   // =========================================================
 
-  // Floating Toolbar Drag Logic
+  // Floating toolbar drag
   collapseBtn.addEventListener("mousedown", (e) => {
     if (e.target.tagName === "BUTTON" || e.target.id === "pp_collapse_text")
       return;
@@ -1868,18 +2076,15 @@
     if (!_dragging) return;
     _dragging = false;
     if (_dragMoved) {
-      localStorage.setItem(
-        "pp_collapse_pos",
-        JSON.stringify({
-          top: parseInt(collapseBtn.style.top),
-          right: parseInt(collapseBtn.style.right),
-        }),
-      );
+      lsSet("pp_collapse_pos", {
+        top: parseInt(collapseBtn.style.top),
+        right: parseInt(collapseBtn.style.right),
+      });
     }
     _dragMoved = false;
   });
 
-  // Structural Click Binding
+  // Floating toolbar buttons
   collapseBtn
     .querySelector("#pp_collapse_text")
     .addEventListener("click", (e) => {
@@ -1906,7 +2111,7 @@
       jumpToBottom();
     });
 
-  // Native History Patching
+  // SPA navigation
   const _patchHistory =
     (original) =>
     (...args) => {
@@ -1917,7 +2122,7 @@
   history.replaceState = _patchHistory(history.replaceState.bind(history));
   window.addEventListener("popstate", syncCollapseButtonVisibility);
 
-  // Keyboard Navigation Engine
+  // Keyboard navigation
   window.addEventListener(
     "keydown",
     (e) => {
@@ -1947,8 +2152,7 @@
           e.stopImmediatePropagation();
           if (key === "arrowright" || key === "d") navigateGallery(1);
           else if (key === "arrowleft" || key === "a") navigateGallery(-1);
-          else if (key === "escape" || key === "w")
-            lightbox.style.display = "none";
+          else if (key === "escape" || key === "w") closeLightbox();
         }
         return;
       }
@@ -1967,7 +2171,7 @@
     true,
   );
 
-  // Gallery Mouse Wheel Event Listener
+  // Gallery mouse wheel
   window.addEventListener(
     "wheel",
     (e) => {
@@ -1987,7 +2191,7 @@
     { passive: false, capture: true },
   );
 
-  // Custom Search Scope Subreddit Overlay
+  // Search scope override
   window.addEventListener(
     "keydown",
     (e) => {
@@ -2008,7 +2212,6 @@
       const chip = document.querySelector(
         "rpl-input-chip[id='search-input-remove-filter'][selected]",
       );
-
       if (chip) {
         const match = (chip.getAttribute("aria-label") || "").match(
           /Remove r\/([^\s]+) filter/,
@@ -2026,7 +2229,7 @@
     { capture: true },
   );
 
-  // Floating Context Selection Menu Lookup Helper
+  // Text selection social search popup
   document.addEventListener("mouseup", (e) => {
     const inComment = COMMENT_SELECTORS.some((s) => e.target.closest?.(s));
     setTimeout(() => {
@@ -2054,7 +2257,7 @@
   });
 
   // =========================================================
-  // CORE RUNTIME DRIVER (OBSERVER ENGINE)
+  // MUTATION OBSERVER ENGINE
   // =========================================================
 
   const observer = new MutationObserver(() => {
@@ -2071,12 +2274,9 @@
       Actions.applyKeywordFilters();
       Actions.applyKeywordHighlights();
       Actions.injectFilterMenuEntry();
-
       document
         .querySelectorAll("shreddit-post:not([pp-images-handled])")
-        .forEach((post) => {
-          Actions.handleImages(post);
-        });
+        .forEach((post) => Actions.handleImages(post));
       updateScheduled = false;
     }, 0);
   });
@@ -2087,15 +2287,15 @@
   });
 
   // =========================================================
-  // BOOTSTRAP INITIALIZATION ENGINE
+  // BOOTSTRAP
   // =========================================================
 
-  const bootstrap = () => {
+  function bootstrap() {
     attachLightbox();
     syncCollapseButtonVisibility();
     Actions.processDecoders();
     Actions.injectAccountBadge();
-  };
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bootstrap);
@@ -2103,5 +2303,5 @@
     bootstrap();
   }
 
-  console.log("Reddit Enhancements v2.2 loaded");
+  console.log("Reddit Enhancements v2.3 loaded");
 })();
