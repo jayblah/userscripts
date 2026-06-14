@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.2
+// @version         2.3
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -95,14 +95,16 @@
     "babepedia.com",
   ];
 
-  const FILTER_TARGETS = ["r4r", "r4r30plus", "bdsmpersonals", "dirtyr4r"];
-  const FILTER_LOCATIONS = [
-    "KANSAS CITY",
-    "KCMO",
-    "MISSOURI",
-    "MIDWEST",
-    "KANSAS",
-  ];
+  // const FILTER_TARGETS = ["r4r", "r4r30plus", "bdsmpersonals", "dirtyr4r"];
+  // const FILTER_LOCATIONS = [
+  //   "KANSAS CITY",
+  //   "KCMO",
+  //   "MISSOURI",
+  //   "MIDWEST",
+  //   "KANSAS",
+  // ];
+
+  const FILTER_STORAGE_KEY = "pp_keyword_filters";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -178,6 +180,7 @@
   let currentSelText = "";
   let lastScrollY = 0;
   let updateScheduled = false;
+  let _showFiltered = false;
 
   let _dragging = false,
     _dragOffsetX = 0,
@@ -571,42 +574,810 @@
   // SUBREDDIT FILTERS & HIGHLIGHTERS
   // =========================================================
 
-  function filterStrictF4M() {
-    const currentPath = window.location.pathname.toLowerCase();
-    const isOnTargetSub =
-      FILTER_TARGETS.some((sub) => currentPath.includes(`/r/${sub}`)) ||
-      currentPath.includes("/m/dating/");
+  // function filterStrictF4M() {
+  //   const currentPath = window.location.pathname.toLowerCase();
+  //   const isOnTargetSub =
+  //     FILTER_TARGETS.some((sub) => currentPath.includes(`/r/${sub}`)) ||
+  //     currentPath.includes("/m/dating/");
 
-    if (!isOnTargetSub) return;
+  //   if (!isOnTargetSub) return;
 
+  //   document
+  //     .querySelectorAll("shreddit-post:not([pp-f4m-filtered])")
+  //     .forEach((post) => {
+  //       post.setAttribute("pp-f4m-filtered", "true");
+
+  //       const titleEl =
+  //         post.querySelector('[slot="title"]') ||
+  //         post.querySelector('a[id^="post-title"]');
+  //       const titleText =
+  //         post.getAttribute("post-title") || titleEl?.textContent || "";
+  //       const upperTitle = titleText.toUpperCase();
+
+  //       if (!/\bF4M\b/.test(upperTitle)) {
+  //         post.remove();
+  //         return;
+  //       }
+
+  //       if (titleEl) {
+  //         const regexStr = `\\b(${FILTER_LOCATIONS.map((loc) => loc.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")).join("|")})\\b`;
+  //         const locationRegex = new RegExp(regexStr, "gi");
+
+  //         if (locationRegex.test(titleText)) {
+  //           titleEl.innerHTML = titleText.replace(locationRegex, (match) => {
+  //             return `<mark style="background-color: rgba(76, 175, 80, 0.35); color: #4CAF50; border-radius: 3px; padding: 0 3px; font-weight: bold;">${match}</mark>`;
+  //           });
+  //         }
+  //       }
+  //     });
+  // }
+
+  // =========================================================
+  // KEYWORD FILTER & HIGHLIGHT ENGINE
+  // =========================================================
+
+  const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
+
+  function getCurrentSubreddit() {
+    const parts = window.location.pathname.toLowerCase().split("/");
+    if (parts[1] === "r" && parts[2]) return parts[2];
+    return null;
+  }
+
+  // --- Storage ---
+
+  function getKeywordFilters() {
+    try {
+      return JSON.parse(localStorage.getItem(FILTER_STORAGE_KEY) || "{}");
+    } catch {
+      return {};
+    }
+  }
+
+  function saveKeywordFilters(f) {
+    localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(f));
+  }
+
+  function getKeywordHighlights() {
+    try {
+      return JSON.parse(localStorage.getItem(HIGHLIGHT_STORAGE_KEY) || "{}");
+    } catch {
+      return {};
+    }
+  }
+
+  function saveKeywordHighlights(h) {
+    localStorage.setItem(HIGHLIGHT_STORAGE_KEY, JSON.stringify(h));
+  }
+
+  function getFiltersForScope(scope) {
+    return getKeywordFilters()[scope] || [];
+  }
+
+  function getHighlightsForScope(scope) {
+    return getKeywordHighlights()[scope] || [];
+  }
+
+  function addFilterForScope(scope, keyword) {
+    const all = getKeywordFilters();
+    if (!all[scope]) all[scope] = [];
+    if (!all[scope].includes(keyword)) all[scope].push(keyword);
+    saveKeywordFilters(all);
+  }
+
+  function removeFilterForScope(scope, index) {
+    const all = getKeywordFilters();
+    if (!all[scope]) return;
+    all[scope].splice(index, 1);
+    if (all[scope].length === 0) delete all[scope];
+    saveKeywordFilters(all);
+  }
+
+  function addHighlightForScope(scope, keywords, color) {
+    // keywords is an array (comma-separated input split by caller)
+    const all = getKeywordHighlights();
+    if (!all[scope]) all[scope] = [];
+    // Store as { keywords: [...], color }
+    const entry = { keywords, color };
+    // Avoid exact duplicate sets
+    const exists = all[scope].some(
+      (h) =>
+        h.color === color &&
+        JSON.stringify(h.keywords) === JSON.stringify(keywords),
+    );
+    if (!exists) all[scope].push(entry);
+    saveKeywordHighlights(all);
+  }
+
+  function removeHighlightForScope(scope, index) {
+    const all = getKeywordHighlights();
+    if (!all[scope]) return;
+    all[scope].splice(index, 1);
+    if (all[scope].length === 0) delete all[scope];
+    saveKeywordHighlights(all);
+  }
+
+  // --- Matching ---
+
+  function keywordMatchesTitle(keyword, title) {
+    if (/^\/.*\/[gimsuy]*$/.test(keyword)) {
+      try {
+        const lastSlash = keyword.lastIndexOf("/");
+        const pattern = keyword.slice(1, lastSlash);
+        const flags = keyword.slice(lastSlash + 1) || "i";
+        return new RegExp(pattern, flags).test(title);
+      } catch {
+        return false;
+      }
+    }
+    const escaped = keyword
+      .toLowerCase()
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".");
+    return new RegExp(escaped).test(title.toLowerCase());
+  }
+
+  function getScopesForCurrentSub() {
+    const sub = getCurrentSubreddit();
+    const scopes = ["global"];
+    const allFilters = getKeywordFilters();
+    const allHighlights = getKeywordHighlights();
+    const allScopes = new Set([
+      ...Object.keys(allFilters),
+      ...Object.keys(allHighlights),
+    ]);
+    allScopes.forEach((scope) => {
+      if (scope === "global") return;
+      if (!sub) return;
+      const subs = scope.split(",").map((s) => s.trim().toLowerCase());
+      if (subs.includes(sub) && !scopes.includes(scope)) scopes.push(scope);
+    });
+    if (sub && !scopes.includes(sub)) scopes.push(sub);
+    return scopes;
+  }
+
+  // --- Apply ---
+
+  function applyKeywordFilters() {
+    const scopes = getScopesForCurrentSub();
+    const allFilters = getKeywordFilters();
+    const activeFilters = scopes.flatMap((s) => allFilters[s] || []);
+
+    document.querySelectorAll("shreddit-post").forEach((post) => {
+      const title =
+        post.getAttribute("post-title") ||
+        post.querySelector('[slot="title"]')?.textContent ||
+        post.querySelector('a[id^="post-title"]')?.textContent ||
+        "";
+
+      const matched =
+        activeFilters.length > 0 &&
+        activeFilters.some((kw) => keywordMatchesTitle(kw, title));
+
+      if (matched) {
+        post.setAttribute("pp-kw-filtered", "true");
+        post.style.display = _showFiltered ? "" : "none";
+        post.style.opacity = _showFiltered ? "0.35" : "";
+      } else if (post.hasAttribute("pp-kw-filtered")) {
+        post.removeAttribute("pp-kw-filtered");
+        post.style.display = "";
+        post.style.opacity = "";
+      }
+    });
+  }
+
+  function applyKeywordHighlights() {
+    const scopes = getScopesForCurrentSub();
+    const allHighlights = getKeywordHighlights();
+    const activeHighlights = scopes.flatMap((s) => allHighlights[s] || []);
+
+    document.querySelectorAll("shreddit-post").forEach((post) => {
+      const title =
+        post.getAttribute("post-title") ||
+        post.querySelector('[slot="title"]')?.textContent ||
+        post.querySelector('a[id^="post-title"]')?.textContent ||
+        "";
+
+      const match = activeHighlights.find((h) =>
+        h.keywords.some((kw) => keywordMatchesTitle(kw, title)),
+      );
+
+      if (match) {
+        post.style.outline = `2px solid ${match.color}`;
+        post.style.background = `${match.color}18`;
+        post.setAttribute("pp-kw-highlighted", "true");
+      } else if (post.hasAttribute("pp-kw-highlighted")) {
+        post.style.outline = "";
+        post.style.background = "";
+        post.removeAttribute("pp-kw-highlighted");
+      }
+    });
+  }
+
+  function toggleShowFiltered() {
+    _showFiltered = !_showFiltered;
     document
-      .querySelectorAll("shreddit-post:not([pp-f4m-filtered])")
+      .querySelectorAll("shreddit-post[pp-kw-filtered]")
       .forEach((post) => {
-        post.setAttribute("pp-f4m-filtered", "true");
-
-        const titleEl =
-          post.querySelector('[slot="title"]') ||
-          post.querySelector('a[id^="post-title"]');
-        const titleText =
-          post.getAttribute("post-title") || titleEl?.textContent || "";
-        const upperTitle = titleText.toUpperCase();
-
-        if (!/\bF4M\b/.test(upperTitle)) {
-          post.remove();
-          return;
-        }
-
-        if (titleEl) {
-          const regexStr = `\\b(${FILTER_LOCATIONS.map((loc) => loc.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")).join("|")})\\b`;
-          const locationRegex = new RegExp(regexStr, "gi");
-
-          if (locationRegex.test(titleText)) {
-            titleEl.innerHTML = titleText.replace(locationRegex, (match) => {
-              return `<mark style="background-color: rgba(76, 175, 80, 0.35); color: #4CAF50; border-radius: 3px; padding: 0 3px; font-weight: bold;">${match}</mark>`;
-            });
-          }
-        }
+        post.style.display = _showFiltered ? "" : "none";
+        post.style.opacity = _showFiltered ? "0.35" : "";
       });
+    const btn = document.getElementById("pp_filter_show_toggle");
+    if (btn) btn.textContent = _showFiltered ? "HIDE" : "SHOW";
+  }
+
+  // --- Panel ---
+
+  function buildKwPanel(mode) {
+    const id = mode === "filter" ? "pp_filter_panel" : "pp_highlight_panel";
+    if (document.getElementById(id)) return;
+
+    const sub = getCurrentSubreddit();
+    const defaultScope = sub || "global";
+    const isFilter = mode === "filter";
+    const accentColor = isFilter ? "#ff4500" : "#1E88DB";
+    const title = isFilter ? "KEYWORD FILTERS" : "KEYWORD HIGHLIGHTS";
+
+    const panel = document.createElement("div");
+    panel.id = id;
+    panel.style.cssText = `
+    display: none; flex-direction: column; gap: 4px; padding: 6px;
+    background: rgba(21,24,26,0.97); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; position: fixed; z-index: 99998; width: 240px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5); backdrop-filter: blur(8px);
+    top: 80px; left: 50%; transform: translateX(-50%);
+  `;
+
+    panel.innerHTML = `
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:2px;">
+      <span style="color:#fff; font-size:10px; font-weight:700; font-family:sans-serif; letter-spacing:0.5px;">${title}</span>
+      <div style="display:flex; gap:4px; align-items:center;">
+        ${isFilter ? `<button id="${id}_show_toggle" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); color:#b3b3b3; font-size:9px; font-weight:700; font-family:sans-serif; padding:2px 6px; border-radius:3px; cursor:pointer;">SHOW</button>` : ""}
+        <button id="${id}_close" style="background:none; border:none; color:#666; font-size:14px; cursor:pointer; line-height:1; padding:0 2px;">✕</button>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:3px; margin-bottom:2px;">
+      <button id="${id}_tab_global" data-tab="global" style="flex:1; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 0; border-radius:3px; cursor:pointer; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#b3b3b3;">GLOBAL</button>
+      <button id="${id}_tab_sub" data-tab="sub" style="flex:1; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 4px; border-radius:3px; cursor:pointer; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#b3b3b3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sub ? `r/${sub}` : "SUB"}</button>
+      <button id="${id}_tab_all" data-tab="all" style="flex:1; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 0; border-radius:3px; cursor:pointer; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); color:#b3b3b3;">ALL</button>
+    </div>
+
+    <div id="${id}_sub_edit" style="display:none; margin-bottom:4px;">
+      <input id="${id}_sub_input" type="text" placeholder="sub1, sub2, sub3" value="${sub || ""}"
+        style="width:100%; box-sizing:border-box; background:#050505; border:1px solid #343536; color:#d7dadc; font-size:10px; font-family:monospace; padding:4px 6px; border-radius:3px; outline:none;" />
+      <div style="display:flex; gap:4px; margin-top:3px;">
+        <button id="${id}_sub_confirm" style="flex:1; background:${accentColor}; border:none; color:#fff; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 0; border-radius:3px; cursor:pointer;">APPLY</button>
+        <button id="${id}_sub_cancel" style="flex:1; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); color:#b3b3b3; font-size:9px; font-weight:700; font-family:sans-serif; padding:3px 0; border-radius:3px; cursor:pointer;">CANCEL</button>
+      </div>
+    </div>
+
+    <div id="${id}_list" style="max-height:160px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.2) transparent; margin-bottom:2px;"></div>
+
+    <div id="${id}_add_row" style="display:flex; gap:4px; margin-top:2px;">
+      <input id="${id}_input" type="text"
+        placeholder="${isFilter ? "keyword, wild*, /regex/" : "kw1, kw2, kw3"}"
+        style="flex:1; background:#050505; border:1px solid #343536; color:#d7dadc; font-size:10px; font-family:monospace; padding:4px 6px; border-radius:3px; outline:none; min-width:0;" />
+      ${!isFilter ? `<input id="${id}_color" type="color" value="#FFD700" style="width:28px; height:28px; border:none; border-radius:3px; cursor:pointer; padding:0; background:none; flex-shrink:0;" />` : ""}
+      <button id="${id}_add" style="background:${accentColor}; border:none; color:#fff; font-size:10px; font-weight:700; font-family:sans-serif; padding:4px 8px; border-radius:3px; cursor:pointer; flex-shrink:0;">ADD</button>
+    </div>
+  `;
+
+    document.body.appendChild(panel);
+
+    // Close
+    panel.querySelector(`#${id}_close`).addEventListener("click", () => {
+      panel.style.display = "none";
+    });
+
+    if (isFilter) {
+      panel
+        .querySelector(`#${id}_show_toggle`)
+        .addEventListener("click", toggleShowFiltered);
+    }
+
+    // Tab state
+    let activeTab = "sub"; // 'global' | 'sub' | 'all'
+    let activeScope = defaultScope;
+
+    function setTab(tab) {
+      activeTab = tab;
+      const isAll = tab === "all";
+
+      // Style tabs
+      ["global", "sub", "all"].forEach((t) => {
+        const btn = panel.querySelector(`#${id}_tab_${t}`);
+        if (!btn) return;
+        const isActive = t === tab;
+        btn.style.background = isActive
+          ? `${accentColor}33`
+          : "rgba(255,255,255,0.05)";
+        btn.style.borderColor = isActive
+          ? accentColor
+          : "rgba(255,255,255,0.12)";
+        btn.style.color = isActive ? accentColor : "#b3b3b3";
+      });
+
+      // Hide add row in ALL tab
+      panel.querySelector(`#${id}_add_row`).style.display = isAll
+        ? "none"
+        : "flex";
+      panel.querySelector(`#${id}_sub_edit`).style.display = "none";
+
+      if (tab === "global") {
+        activeScope = "global";
+        renderKwList(mode, activeScope, id, false);
+      } else if (tab === "sub") {
+        activeScope =
+          panel.querySelector(`#${id}_tab_sub`).dataset.scope || defaultScope;
+        renderKwList(mode, activeScope, id, false);
+      } else {
+        renderAllScopes(mode, id);
+      }
+    }
+
+    panel.querySelector(`#${id}_tab_global`).addEventListener("click", () => {
+      panel.querySelector(`#${id}_sub_edit`).style.display = "none";
+      setTab("global");
+    });
+
+    // Sub tab: single click = select, double click = edit
+    const subTab = panel.querySelector(`#${id}_tab_sub`);
+    let subClickTimer = null;
+    subTab.addEventListener("click", () => {
+      if (subClickTimer) {
+        clearTimeout(subClickTimer);
+        subClickTimer = null;
+        panel.querySelector(`#${id}_sub_edit`).style.display = "block";
+        panel.querySelector(`#${id}_sub_input`).focus();
+      } else {
+        subClickTimer = setTimeout(() => {
+          subClickTimer = null;
+          setTab("sub");
+        }, 220);
+      }
+    });
+
+    panel.querySelector(`#${id}_sub_confirm`).addEventListener("click", () => {
+      const raw = panel.querySelector(`#${id}_sub_input`).value.trim();
+      if (!raw) return;
+      const normalized = raw
+        .split(",")
+        .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
+        .filter(Boolean)
+        .join(",");
+      subTab.dataset.scope = normalized;
+      subTab.textContent = normalized.includes(",")
+        ? normalized
+        : `r/${normalized}`;
+      subTab.title = normalized;
+      panel.querySelector(`#${id}_sub_edit`).style.display = "none";
+      setTab("sub");
+    });
+
+    panel.querySelector(`#${id}_sub_cancel`).addEventListener("click", () => {
+      panel.querySelector(`#${id}_sub_edit`).style.display = "none";
+    });
+
+    panel.querySelector(`#${id}_tab_all`).addEventListener("click", () => {
+      panel.querySelector(`#${id}_sub_edit`).style.display = "none";
+      setTab("all");
+    });
+
+    // Add entry
+    const input = panel.querySelector(`#${id}_input`);
+    const addBtn = panel.querySelector(`#${id}_add`);
+    const colorPicker = isFilter ? null : panel.querySelector(`#${id}_color`);
+
+    const addEntry = () => {
+      const val = input.value.trim();
+      if (!val) return;
+      if (isFilter) {
+        addFilterForScope(activeScope, val);
+        applyKeywordFilters();
+      } else {
+        const keywords = val
+          .split(",")
+          .map((k) => k.trim())
+          .filter(Boolean);
+        const color = colorPicker.value;
+        addHighlightForScope(activeScope, keywords, color);
+        applyKeywordHighlights();
+      }
+      renderKwList(mode, activeScope, id, false);
+      input.value = "";
+      input.focus();
+    };
+
+    addBtn.addEventListener("click", addEntry);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.stopPropagation();
+        addEntry();
+      }
+    });
+
+    setTab(sub ? "sub" : "global");
+  }
+
+  function makeEditableRow(mode, scope, entry, index, panelId, onDone) {
+    const isFilter = mode === "filter";
+    const keywords = isFilter ? [entry] : entry.keywords;
+    const color = isFilter ? null : entry.color;
+    const accentColor = isFilter ? "#ff4500" : "#1E88DB";
+
+    const row = document.createElement("div");
+    row.style.cssText =
+      "display:flex; flex-direction:column; gap:3px; margin-bottom:4px; padding:4px; background:rgba(255,255,255,0.04); border-radius:4px; border:1px solid rgba(255,255,255,0.1);";
+
+    const editRow = document.createElement("div");
+    editRow.style.cssText = "display:flex; gap:4px; align-items:center;";
+
+    if (!isFilter) {
+      const colorPicker = document.createElement("input");
+      colorPicker.type = "color";
+      colorPicker.value = color;
+      colorPicker.id = `${panelId}_edit_color_${index}`;
+      colorPicker.style.cssText =
+        "width:24px; height:24px; border:none; border-radius:3px; cursor:pointer; padding:0; background:none; flex-shrink:0;";
+      editRow.appendChild(colorPicker);
+    }
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = keywords.join(", ");
+    input.style.cssText =
+      "flex:1; background:#050505; border:1px solid #343536; color:#d7dadc; font-size:10px; font-family:monospace; padding:3px 6px; border-radius:3px; outline:none; min-width:0;";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "✓";
+    saveBtn.style.cssText = `background:${accentColor}; border:none; color:#fff; font-size:11px; font-weight:700; cursor:pointer; border-radius:3px; padding:0 6px; height:22px; flex-shrink:0;`;
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "✕";
+    cancelBtn.style.cssText =
+      "background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); color:#b3b3b3; font-size:11px; cursor:pointer; border-radius:3px; padding:0 6px; height:22px; flex-shrink:0;";
+
+    editRow.append(input, saveBtn, cancelBtn);
+    row.appendChild(editRow);
+
+    const save = () => {
+      const val = input.value.trim();
+      if (!val) return;
+      if (isFilter) {
+        const all = getKeywordFilters();
+        if (!all[scope]) return;
+        all[scope][index] = val;
+        saveKeywordFilters(all);
+        applyKeywordFilters();
+      } else {
+        const all = getKeywordHighlights();
+        if (!all[scope]) return;
+        const newKeywords = val
+          .split(",")
+          .map((k) => k.trim())
+          .filter(Boolean);
+        const colorPicker = document.getElementById(
+          `${panelId}_edit_color_${index}`,
+        );
+        const newColor = colorPicker ? colorPicker.value : entry.color;
+        all[scope][index] = { keywords: newKeywords, color: newColor };
+        saveKeywordHighlights(all);
+        applyKeywordHighlights();
+      }
+      onDone();
+    };
+
+    saveBtn.addEventListener("click", save);
+    cancelBtn.addEventListener("click", onDone);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.stopPropagation();
+        save();
+      }
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onDone();
+      }
+    });
+
+    // Focus and select all on open
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+
+    return row;
+  }
+
+  function renderKwList(mode, scope, panelId, readonly) {
+    const list = document.getElementById(`${panelId}_list`);
+    if (!list) return;
+    const isFilter = mode === "filter";
+    const entries = isFilter
+      ? getFiltersForScope(scope)
+      : getHighlightsForScope(scope);
+    list.innerHTML = "";
+
+    if (entries.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText =
+        "color:#666; font-size:10px; text-align:center; padding:4px 0; font-family:sans-serif;";
+      empty.textContent = "No entries";
+      list.appendChild(empty);
+      return;
+    }
+
+    entries.forEach((entry, i) => {
+      const keywords = isFilter ? [entry] : entry.keywords;
+      const color = isFilter ? null : entry.color;
+
+      const row = document.createElement("div");
+      row.style.cssText =
+        "display:flex; align-items:center; gap:4px; margin-bottom:3px;";
+      row.dataset.index = i;
+
+      if (!isFilter) {
+        const swatch = document.createElement("span");
+        swatch.style.cssText = `width:10px; height:10px; border-radius:2px; background:${color}; flex-shrink:0; display:inline-block;`;
+        row.appendChild(swatch);
+      }
+
+      const label = document.createElement("span");
+      label.textContent = keywords.join(", ");
+      label.title = readonly ? keywords.join(", ") : "Click to edit";
+      label.style.cssText = `flex:1; font-size:10px; color:#d7dadc; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; ${readonly ? "" : "cursor:pointer;"}`;
+
+      if (!readonly) {
+        label.addEventListener(
+          "mouseenter",
+          () => (label.style.color = "#fff"),
+        );
+        label.addEventListener(
+          "mouseleave",
+          () => (label.style.color = "#d7dadc"),
+        );
+        label.addEventListener("click", () => {
+          const editRow = makeEditableRow(
+            mode,
+            scope,
+            entry,
+            i,
+            panelId,
+            () => {
+              renderKwList(mode, scope, panelId, readonly);
+            },
+          );
+          row.replaceWith(editRow);
+        });
+      }
+
+      row.appendChild(label);
+
+      if (!readonly) {
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "✕";
+        removeBtn.style.cssText =
+          "background:none; border:none; color:#666; cursor:pointer; font-size:10px; padding:0 2px; flex-shrink:0; line-height:1;";
+        removeBtn.addEventListener(
+          "mouseenter",
+          () => (removeBtn.style.color = "#ff4500"),
+        );
+        removeBtn.addEventListener(
+          "mouseleave",
+          () => (removeBtn.style.color = "#666"),
+        );
+        removeBtn.addEventListener("click", () => {
+          if (isFilter) {
+            removeFilterForScope(scope, i);
+            applyKeywordFilters();
+          } else {
+            removeHighlightForScope(scope, i);
+            applyKeywordHighlights();
+          }
+          renderKwList(mode, scope, panelId, readonly);
+        });
+        row.appendChild(removeBtn);
+      }
+
+      list.appendChild(row);
+    });
+  }
+
+  function renderAllScopes(mode, panelId) {
+    const list = document.getElementById(`${panelId}_list`);
+    if (!list) return;
+    const isFilter = mode === "filter";
+    const all = isFilter ? getKeywordFilters() : getKeywordHighlights();
+    const scopes = Object.keys(all);
+    list.innerHTML = "";
+
+    if (scopes.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText =
+        "color:#666; font-size:10px; text-align:center; padding:4px 0; font-family:sans-serif;";
+      empty.textContent = "No entries anywhere";
+      list.appendChild(empty);
+      return;
+    }
+
+    scopes.forEach((scope) => {
+      const entries = all[scope];
+      if (!entries?.length) return;
+
+      const header = document.createElement("div");
+      header.style.cssText = `
+      display:flex; align-items:center; justify-content:space-between;
+      padding:3px 4px; border-radius:3px; cursor:pointer; margin-bottom:2px;
+      background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.08);
+    `;
+
+      const scopeLabel = document.createElement("span");
+      scopeLabel.textContent =
+        scope === "global" ? "🌐 global" : `r/${scope.replace(/,/g, ", r/")}`;
+      scopeLabel.style.cssText =
+        "font-size:9px; font-weight:700; font-family:sans-serif; color:#d7dadc; flex:1;";
+
+      const countBadge = document.createElement("span");
+      countBadge.textContent = entries.length;
+      countBadge.style.cssText =
+        "font-size:9px; font-family:sans-serif; color:#666; margin-right:4px;";
+
+      const chevron = document.createElement("span");
+      chevron.textContent = "▶";
+      chevron.style.cssText =
+        "font-size:8px; color:#666; transition:transform 0.15s;";
+
+      header.append(scopeLabel, countBadge, chevron);
+
+      const body = document.createElement("div");
+      body.style.cssText = "display:none; padding:2px 0 4px 4px;";
+
+      const renderBodyEntries = () => {
+        body.innerHTML = "";
+        const currentEntries = isFilter
+          ? getFiltersForScope(scope)
+          : getHighlightsForScope(scope);
+
+        currentEntries.forEach((entry, i) => {
+          const keywords = isFilter ? [entry] : entry.keywords;
+          const color = isFilter ? null : entry.color;
+
+          const row = document.createElement("div");
+          row.style.cssText =
+            "display:flex; align-items:center; gap:4px; margin-bottom:2px;";
+
+          if (!isFilter) {
+            const swatch = document.createElement("span");
+            swatch.style.cssText = `width:8px; height:8px; border-radius:2px; background:${color}; flex-shrink:0; display:inline-block;`;
+            row.appendChild(swatch);
+          }
+
+          const label = document.createElement("span");
+          label.textContent = keywords.join(", ");
+          label.title = "Click to edit";
+          label.style.cssText =
+            "flex:1; font-size:10px; color:#d7dadc; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer;";
+          label.addEventListener(
+            "mouseenter",
+            () => (label.style.color = "#fff"),
+          );
+          label.addEventListener(
+            "mouseleave",
+            () => (label.style.color = "#d7dadc"),
+          );
+          label.addEventListener("click", () => {
+            const editRow = makeEditableRow(
+              mode,
+              scope,
+              entry,
+              i,
+              panelId,
+              renderBodyEntries,
+            );
+            row.replaceWith(editRow);
+          });
+
+          const removeBtn = document.createElement("button");
+          removeBtn.textContent = "✕";
+          removeBtn.style.cssText =
+            "background:none; border:none; color:#555; cursor:pointer; font-size:9px; padding:0 2px; flex-shrink:0; line-height:1;";
+          removeBtn.addEventListener(
+            "mouseenter",
+            () => (removeBtn.style.color = "#ff4500"),
+          );
+          removeBtn.addEventListener(
+            "mouseleave",
+            () => (removeBtn.style.color = "#555"),
+          );
+          removeBtn.addEventListener("click", () => {
+            if (isFilter) {
+              removeFilterForScope(scope, i);
+              applyKeywordFilters();
+            } else {
+              removeHighlightForScope(scope, i);
+              applyKeywordHighlights();
+            }
+            renderBodyEntries();
+          });
+
+          row.append(label, removeBtn);
+          body.appendChild(row);
+        });
+
+        // Update count badge
+        const currentAll = isFilter
+          ? getKeywordFilters()
+          : getKeywordHighlights();
+        countBadge.textContent = (currentAll[scope] || []).length;
+      };
+
+      let open = false;
+      header.addEventListener("click", () => {
+        open = !open;
+        body.style.display = open ? "block" : "none";
+        chevron.style.transform = open ? "rotate(90deg)" : "";
+        if (open) renderBodyEntries();
+      });
+
+      list.appendChild(header);
+      list.appendChild(body);
+    });
+  }
+
+  function openKwPanel(mode) {
+    const id = mode === "filter" ? "pp_filter_panel" : "pp_highlight_panel";
+    buildKwPanel(mode);
+    const panel = document.getElementById(id);
+    if (!panel) return;
+    panel.style.display = panel.style.display === "flex" ? "none" : "flex";
+  }
+
+  function injectFilterMenuEntry() {
+    if (document.getElementById("pp_filter_menu_entry")) return;
+    const drawerContent = document.getElementById("user-drawer-content");
+    if (!drawerContent) return;
+    const menuList = drawerContent.querySelector('ul, nav, [role="menu"]');
+    if (!menuList) return;
+
+    const makeEntry = (id, label, mode) => {
+      const entry = document.createElement("li");
+      entry.id = id;
+      entry.style.cssText = "list-style:none;";
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      btn.style.cssText = `
+      display: flex; align-items: center; width: 100%;
+      padding: 8px 16px; background: transparent; border: none;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      color: #d7dadc; font-family: sans-serif; font-size: 14px;
+      font-weight: 500; cursor: pointer; text-align: left;
+      gap: 8px; box-sizing: border-box;
+    `;
+      btn.addEventListener(
+        "mouseenter",
+        () => (btn.style.background = "rgba(255,255,255,0.06)"),
+      );
+      btn.addEventListener(
+        "mouseleave",
+        () => (btn.style.background = "transparent"),
+      );
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        document.getElementById("expand-user-drawer-button")?.click();
+        openKwPanel(mode);
+      });
+      entry.appendChild(btn);
+      return entry;
+    };
+
+    menuList.appendChild(
+      makeEntry("pp_filter_menu_entry", "⊘ Keyword Filters", "filter"),
+    );
+    menuList.appendChild(
+      makeEntry("pp_highlight_menu_entry", "◈ Keyword Highlights", "highlight"),
+    );
   }
 
   // =========================================================
@@ -617,11 +1388,11 @@
   collapseBtn.id = "pp_float_collapse";
   collapseBtn.innerHTML = `
     <div class="pp_collapse_main_btn" id="pp_collapse_text" role="button" title="Toggle comment trees [S]">COL</div>
-    <div class="pp_collapse_divider"></div>
     <button class="pp_collapse_sub_btn" id="pp_jump_top" title="Scroll to top [W]">⤒</button>
     <button class="pp_collapse_sub_btn" id="pp_jump_prev" title="Previous comment [A]">▲</button>
     <button class="pp_collapse_sub_btn" id="pp_jump_next" title="Next comment [D]">▼</button>
     <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">⤓</button>
+    <div class="pp_collapse_divider"></div>
   `;
 
   const _savedPos = JSON.parse(
@@ -747,6 +1518,8 @@
       window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   }
 
+  let _lastPathname = window.location.pathname;
+
   function syncCollapseButtonVisibility() {
     _onAllowedSubreddit = ALLOWED_SUBREDDITS.some((sub) =>
       window.location.pathname.toLowerCase().startsWith(sub),
@@ -856,9 +1629,11 @@
   // =========================================================
 
   const Actions = {
-    syncCollapseButton: syncCollapseButtonVisibility,
-
+    applyKeywordFilters: applyKeywordFilters,
+    applyKeywordHighlights: applyKeywordHighlights,
     injectAccountBadge: injectAccountBadge,
+    injectFilterMenuEntry: injectFilterMenuEntry,
+    syncCollapseButton: syncCollapseButtonVisibility,
 
     nukeAwardButtons: () => {
       deepQueryAll(
@@ -1293,7 +2068,9 @@
       Actions.processComments();
       Actions.syncCollapseButton();
       Actions.processDecoders();
-      filterStrictF4M();
+      Actions.applyKeywordFilters();
+      Actions.applyKeywordHighlights();
+      Actions.injectFilterMenuEntry();
 
       document
         .querySelectorAll("shreddit-post:not([pp-images-handled])")
