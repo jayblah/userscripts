@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.5.10
+// @version         2.5.13
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -35,6 +35,9 @@
     success: "#05a133",
     darkInput: "#050505",
   };
+
+  /** Per-mode accent colors for filter/highlight panels. */
+  const MODE_ACCENT = { filter: "#ff4500", highlight: "#1E88DB" };
 
   const COMMENT_SELECTORS = [
     '[data-testid="comment"]',
@@ -165,7 +168,7 @@
 
   let gallery = { images: [], index: 0 };
   let lastWheelTime = 0;
-  let collapseState = 0; // 0=EXP, 1=COL, 2=1LV
+  let collapseState = 0; // 0=EXP, 1=COL
   let selectionPopup = null;
   let currentSelText = "";
   let lastScrollY = 0;
@@ -236,6 +239,7 @@
     document.querySelector("header.v2")?.offsetHeight || 56;
   const getTopLevelComments = () =>
     Array.from(document.querySelectorAll("shreddit-comment[depth='0']"));
+  const getCommentDepth = (el) => parseInt(el.getAttribute("depth") || "0", 10);
   const getPostTitle = (post) =>
     post.getAttribute("post-title") ||
     post.querySelector('[slot="title"]')?.textContent ||
@@ -669,10 +673,9 @@
   }
 
   function applyKeywordRules(isFilter) {
-    const storageKey = storageKeyFor(isFilter);
     const ctx = getPageContext();
     const isAggregate = ctx.type !== "subreddit";
-    const allData = getStorage(storageKey);
+    const allData = getStorage(storageKeyFor(isFilter));
     const pageData = isAggregate
       ? null
       : getScopesForSub(ctx.sub, Object.keys(allData)).flatMap(
@@ -689,8 +692,7 @@
           entries.some((kw) => keywordMatchesTitle(kw, title));
         if (matched) {
           post.setAttribute("pp-kw-filtered", "true");
-          post.style.display = _showFiltered ? "" : "none";
-          post.style.opacity = _showFiltered ? "0.35" : "";
+          applyFilteredPostStyle(post);
         } else if (post.hasAttribute("pp-kw-filtered")) {
           post.removeAttribute("pp-kw-filtered");
           post.style.display = "";
@@ -720,14 +722,17 @@
     applyKeywordHighlights();
   };
 
+  /** Apply display/opacity to a filtered post based on current _showFiltered state. */
+  const applyFilteredPostStyle = (post) => {
+    post.style.display = _showFiltered ? "" : "none";
+    post.style.opacity = _showFiltered ? "0.35" : "";
+  };
+
   function toggleShowFiltered() {
     _showFiltered = !_showFiltered;
     document
       .querySelectorAll("shreddit-post[pp-kw-filtered]")
-      .forEach((post) => {
-        post.style.display = _showFiltered ? "" : "none";
-        post.style.opacity = _showFiltered ? "0.35" : "";
-      });
+      .forEach(applyFilteredPostStyle);
     document
       .querySelectorAll(".pp_panel_show_btn")
       .forEach((btn) => btn.classList.toggle("pp_show_active", !_showFiltered));
@@ -772,7 +777,7 @@
     const id = isFilter ? "pp_filter_panel" : "pp_highlight_panel";
     if (document.getElementById(id)) return;
 
-    const accent = isFilter ? "#ff4500" : "#1E88DB";
+    const accent = MODE_ACCENT[mode] ?? "#ff4500";
     const sub = getCurrentSubreddit();
     const defaultScope = sub || "global";
 
@@ -1057,7 +1062,7 @@
       "pp_edit_save",
       "Save",
       null,
-      `color:${isFilter ? "#ff4500" : "#1E88DB"};${btnStyle}`,
+      `color:${MODE_ACCENT[mode] ?? "#ff4500"};${btnStyle}`,
     );
     const cancelBtn = makeBtn("pp_edit_cancel", "✕", null, btnStyle);
 
@@ -1207,26 +1212,21 @@
     );
     if (!allComments.length) return;
 
-    collapseState = (collapseState + 1) % 3;
+    collapseState = (collapseState + 1) % 2;
     const offset = getHeaderOffset();
     const topThreads = getTopLevelComments();
     const anchor =
       topThreads.find((el) => el.getBoundingClientRect().top > offset - 10) ??
       topThreads[topThreads.length - 1];
 
+    const shouldCollapse = collapseState === 1;
     allComments.forEach((c) => {
-      const depth = parseInt(c.getAttribute("depth") || "0", 10);
-      if (
-        (collapseState === 1 && depth > 0) ||
-        (collapseState === 2 && depth > 1)
-      )
-        c.setAttribute("collapsed", "");
-      else c.removeAttribute("collapsed");
+      if (getCommentDepth(c) === 0) return;
+      c.handleCollapse?.(shouldCollapse);
     });
 
     const mainBtnLabel = collapseBtn.querySelector("#pp_collapse_text");
-    if (mainBtnLabel)
-      mainBtnLabel.textContent = ["COL", "1LV", "EXP"][collapseState];
+    if (mainBtnLabel) mainBtnLabel.textContent = shouldCollapse ? "EXP" : "COL";
     collapseBtn.classList.toggle("pp_collapsed", collapseState !== 0);
 
     if (anchor)
@@ -1495,15 +1495,12 @@
         .forEach((comment) => {
           if (
             comment.getAttribute("author") === "AutoModerator" &&
-            !comment.hasAttribute("collapsed")
+            !comment.__collapsed
           )
-            comment.setAttribute("collapsed", "");
+            comment.handleCollapse?.(true);
           if (comment.shadowRoot && !comment.hasAttribute("pp-shadow-styled")) {
             const color =
-              THREAD_COLORS[
-                parseInt(comment.getAttribute("depth") || "0", 10) %
-                  THREAD_COLORS.length
-              ];
+              THREAD_COLORS[getCommentDepth(comment) % THREAD_COLORS.length];
             comment.shadowRoot.appendChild(
               createElement("style", {
                 className: "pp-line-style",
@@ -1877,5 +1874,5 @@
     ? document.addEventListener("DOMContentLoaded", bootstrap)
     : bootstrap();
 
-  console.log("Reddit Enhancements v2.5.10 loaded");
+  console.log("Reddit Enhancements v2.5.13 loaded");
 })();
