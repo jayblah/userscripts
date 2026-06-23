@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Leak Finder
-// @version      1.3
+// @version      1.4
 // @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SC.
 // @author       JR
 // @license      MIT
@@ -85,7 +85,7 @@
 
     if (document.querySelector(`[data-lfo="${id}"]`)) return;
 
-    const url = `https://simpcity.cr/search/1/?q=${encodeURIComponent(query)}&o=relevance`;
+    const url = `https://simpcity.cr/search/1/?q=${encodeURIComponent(query)}&c[title_only]=1&o=relevance`;
     const li = document.createElement("li");
     li.className = "lfo-item";
     li.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="lfo-link checking" data-lfo="${id}">${prefix}: ${query}</a>`;

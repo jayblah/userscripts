@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.5.13
+// @version         2.5.16
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -266,6 +266,8 @@
       .split("/")
       .filter(Boolean);
     if (parts[0] === "user" && parts[2] === "m") return { type: "multireddit" };
+    if (parts[0] === "user" && parts[1])
+      return { type: "user", username: parts[1] };
     if (parts[0] === "r" && parts[1])
       return { type: "subreddit", sub: parts[1] };
     return { type: "aggregate" };
@@ -313,11 +315,12 @@
   // KEYWORD MODE HELPERS
   // =========================================================
 
+  /** True when mode is the filter mode (accepts both the string and legacy bool). */
+  const isFilterMode = (mode) => mode === "filter" || mode === true;
+
   /** Return the storage key for a given mode string or isFilter bool. */
   const storageKeyFor = (mode) =>
-    mode === "filter" || mode === true
-      ? FILTER_STORAGE_KEY
-      : HIGHLIGHT_STORAGE_KEY;
+    isFilterMode(mode) ? FILTER_STORAGE_KEY : HIGHLIGHT_STORAGE_KEY;
 
   /** Return the entries array for a scope (never mutate the result). */
   const getScopeEntries = (mode, scope) =>
@@ -325,9 +328,7 @@
 
   /** Apply keyword rules after a storage mutation. */
   const applyRulesForMode = (mode) =>
-    mode === "filter" || mode === true
-      ? applyKeywordFilters()
-      : applyKeywordHighlights();
+    isFilterMode(mode) ? applyKeywordFilters() : applyKeywordHighlights();
 
   // =========================================================
   // GLOBAL STYLESHEET
@@ -417,6 +418,7 @@
     #pp_sidebar_tab:hover { background: #1a1a1b; }
     #pp_sidebar_inner { pointer-events: all; width: 312px; height: 100%; overflow-y: auto; background: var(--color-neutral-background, #1a1a1b); box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
     [grid-area="right-sidebar"], #right-sidebar-container, aside:has(shreddit-sidebar), .right-sidebar { display: none !important; }
+    html[data-pp-page="user"] #right-sidebar-container { display: block !important; }
 
     div#pp_float_collapse { position: fixed; z-index: 99999; display: none; cursor: grab; flex-direction: column; align-items: center; justify-content: center; background: rgba(21,24,26,0.9) !important; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.08) !important; border-radius: 8px !important; box-shadow: 0 8px 32px rgba(0,0,0,0.5); width: 34px; padding: 4px 0; box-sizing: border-box; }
     div#pp_float_collapse:active { cursor: grabbing; }
@@ -444,10 +446,12 @@
   `;
 
   const _savedPos = lsGet("pp_collapse_pos", null);
-  collapseBtn.style.top = _savedPos ? _savedPos.top + "px" : "auto";
-  collapseBtn.style.right = _savedPos ? _savedPos.right + "px" : "auto";
-  collapseBtn.style.bottom = _savedPos ? "auto" : "24px";
-  collapseBtn.style.left = _savedPos ? "auto" : "24px";
+  Object.assign(collapseBtn.style, {
+    top:    _savedPos ? _savedPos.top + "px"   : "auto",
+    right:  _savedPos ? _savedPos.right + "px" : "auto",
+    bottom: _savedPos ? "auto" : "24px",
+    left:   _savedPos ? "auto" : "24px",
+  });
   document.documentElement.appendChild(collapseBtn);
 
   // =========================================================
@@ -551,6 +555,7 @@
       const res = await fetch(`https://www.reddit.com${permalink}.json`, {
         headers: { Accept: "application/json" },
       });
+      if (!res.ok) return null;
       const json = await res.json();
       const post = json?.[0]?.data?.children?.[0]?.data;
       if (!post || !post.gallery_data?.items || !post.media_metadata)
@@ -1275,8 +1280,7 @@
 
   function jumpToBottom() {
     const container =
-      document.querySelector("#comment-tree-container") ||
-      document.querySelector("shreddit-comment-tree");
+      document.querySelector("#comment-tree-container, shreddit-comment-tree");
     if (container)
       container.scrollIntoView({ behavior: "smooth", block: "end" });
     else smoothScrollTo(document.body.scrollHeight);
@@ -1289,6 +1293,12 @@
     collapseBtn.style.display = window.location.href.includes("/comments/")
       ? "flex"
       : "none";
+    const pageCtx = getPageContext();
+    if (pageCtx.type === "user") {
+      document.documentElement.setAttribute("data-pp-page", "user");
+    } else {
+      document.documentElement.removeAttribute("data-pp-page");
+    }
   }
 
   // =========================================================
@@ -1521,7 +1531,7 @@
         return;
       }
       const sidebar = SIDEBAR_SELECTORS.reduce(
-        (found, sel) => found || document.querySelector(sel),
+        (found, sel) => found ?? document.querySelector(sel),
         null,
       );
       if (!sidebar) return;
@@ -1608,8 +1618,8 @@
     drag.active = false;
     if (drag.moved)
       lsSet("pp_collapse_pos", {
-        top: parseInt(collapseBtn.style.top),
-        right: parseInt(collapseBtn.style.right),
+        top: parseInt(collapseBtn.style.top, 10),
+        right: parseInt(collapseBtn.style.right, 10),
       });
     drag.moved = false;
   });
@@ -1874,5 +1884,5 @@
     ? document.addEventListener("DOMContentLoaded", bootstrap)
     : bootstrap();
 
-  console.log("Reddit Enhancements v2.5.13 loaded");
+  console.log("Reddit Enhancements v2.5.16 loaded");
 })();
