@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.5.16
+// @version         2.5.20
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -39,9 +39,22 @@
   /** Per-mode accent colors for filter/highlight panels. */
   const MODE_ACCENT = { filter: "#ff4500", highlight: "#1E88DB" };
 
-  const COMMENT_SELECTORS = [
+  // Containers scanned for NATO/binary content (tighter — paragraph-level bodies).
+  const DECODER_SELECTORS = [
     '[data-testid="comment"]',
     "shreddit-comment",
+    ".Comment",
+    ".usertext-body",
+  ];
+
+  // Selectors used to detect whether a mouseup occurred inside any comment area.
+  // The old-Reddit selectors (.md, .comment, .Comment, .usertext-body) are kept
+  // for safety but are effectively dead on new Reddit — shreddit-comment is the
+  // only one that matches in practice (and e.target.closest works on the host
+  // element even when the click originated inside the shadow DOM).
+  const COMMENT_SELECTORS = [
+    "shreddit-comment",
+    '[data-testid="comment"]',
     ".Comment",
     ".usertext-body",
     ".md",
@@ -98,6 +111,7 @@
 
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
+  const VERSION = "2.5.20";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -172,11 +186,14 @@
   let selectionPopup = null;
   let currentSelText = "";
   let lastScrollY = 0;
-  let _showFiltered = false;
+  // true  = filtered posts are shown at reduced opacity (user toggled them on)
+  // false = filtered posts are hidden entirely (default)
+  let _filteredVisible = false;
   let _cachedUsername = null;
   let _badgeFetchPromise = null;
   let drag = { active: false, offsetX: 0, offsetY: 0, moved: false };
 
+  let _postsDirty = false;
   let _onAllowedSubreddit = false;
 
   // =========================================================
@@ -212,9 +229,12 @@
   };
 
   const createElement = (tag, props = {}, ...children) => {
-    const el = Object.assign(document.createElement(tag), props);
-    if (props.style && typeof props.style === "string")
-      el.style.cssText = props.style;
+    const { style, ...rest } = props;
+    const el = Object.assign(document.createElement(tag), rest);
+    if (style) {
+      if (typeof style === "string") el.style.cssText = style;
+      else Object.assign(el.style, style);
+    }
     children.forEach((c) => c && el.appendChild(c));
     return el;
   };
@@ -229,6 +249,9 @@
 
   function deepQueryAll(root, selector, results = []) {
     root.querySelectorAll(selector).forEach((el) => results.push(el));
+    // Walk every element to find shadow roots, then recurse only into those.
+    // This is still O(n) over the DOM, but shadow-root recursion is bounded by
+    // the number of custom elements rather than total DOM size.
     root.querySelectorAll("*").forEach((el) => {
       if (el.shadowRoot) deepQueryAll(el.shadowRoot, selector, results);
     });
@@ -303,7 +326,13 @@
     if (!oldScope || !newScope || oldScope === newScope) return;
     const renameLogic = (all) => {
       if (all[oldScope] !== undefined) {
-        all[newScope] = [...(all[newScope] || []), ...all[oldScope]];
+        const merged = [...(all[newScope] || []), ...all[oldScope]];
+        // Deduplicate only plain string entries (filter mode); highlight entries
+        // are objects and intentional duplicates are allowed.
+        all[newScope] =
+          merged.length > 0 && typeof merged[0] === "string"
+            ? [...new Set(merged)]
+            : merged;
         delete all[oldScope];
       }
     };
@@ -447,12 +476,12 @@
 
   const _savedPos = lsGet("pp_collapse_pos", null);
   Object.assign(collapseBtn.style, {
-    top:    _savedPos ? _savedPos.top + "px"   : "auto",
-    right:  _savedPos ? _savedPos.right + "px" : "auto",
+    top: _savedPos ? _savedPos.top + "px" : "auto",
+    right: _savedPos ? _savedPos.right + "px" : "auto",
     bottom: _savedPos ? "auto" : "24px",
-    left:   _savedPos ? "auto" : "24px",
+    left: _savedPos ? "auto" : "24px",
   });
-  document.documentElement.appendChild(collapseBtn);
+  // Append is deferred to bootstrap() so document.body is guaranteed to exist.
 
   // =========================================================
   // LIGHTBOX & GALLERY
@@ -517,7 +546,12 @@
     }
 
     if (filmstrip) {
-      if (filmstrip.children.length !== gallery.images.length) {
+      // Rebuild the filmstrip whenever the gallery changes (keyed on the first
+      // image URL), not just when the image count changes — that would fail if
+      // two different galleries happen to have the same number of images.
+      const galleryKey = gallery.images[0] ?? "";
+      if (filmstrip.dataset.galleryKey !== galleryKey) {
+        filmstrip.dataset.galleryKey = galleryKey;
         filmstrip.innerHTML = "";
         gallery.images.forEach((src, i) => {
           const thumb = createElement("img", {
@@ -567,8 +601,8 @@
           return src ? decodeAmp(src) : null;
         })
         .filter(Boolean);
-    } catch (e) {
-      console.warn("[RE] Gallery fetch failed:", e);
+    } catch (err) {
+      console.warn("[RE] Gallery fetch failed:", err);
       return null;
     }
   }
@@ -631,24 +665,48 @@
   // KEYWORD FILTER & HIGHLIGHT ENGINE
   // =========================================================
 
-  function keywordMatchesTitle(keyword, title) {
+  // Cache compiled keyword regexes so we don't recompile on every post×keyword
+  // call during applyKeywordRules (which runs for every post on every tick).
+  // Capped at 256 entries with LRU eviction (delete-oldest = Map insertion order).
+  const _KW_CACHE_MAX = 256;
+  const _kwRegexCache = new Map();
+
+  function _buildKeywordRegex(keyword) {
+    if (_kwRegexCache.has(keyword)) return _kwRegexCache.get(keyword);
+    let entry;
     if (/^\/.*\/[gimsuy]*$/.test(keyword)) {
+      // User-supplied /regex/flags — compile as-is; flags are already embedded.
       try {
         const lastSlash = keyword.lastIndexOf("/");
-        return new RegExp(
-          keyword.slice(1, lastSlash),
-          keyword.slice(lastSlash + 1) || "i",
-        ).test(title);
+        entry = {
+          re: new RegExp(
+            keyword.slice(1, lastSlash),
+            keyword.slice(lastSlash + 1) || "i",
+          ),
+          caseFold: false, // regex carries its own flags
+        };
       } catch {
-        return false;
+        entry = { re: null, caseFold: false }; // invalid — cache the failure
       }
+    } else {
+      // Plain keyword or glob — match case-insensitively via title lowercasing.
+      const escaped = keyword
+        .toLowerCase()
+        .replace(/[.+^^${}()|[\]\\]/g, "\\$&")
+        .replace(/\*/g, ".*")
+        .replace(/\?/g, ".");
+      entry = { re: new RegExp(escaped), caseFold: true };
     }
-    const escaped = keyword
-      .toLowerCase()
-      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-      .replace(/\*/g, ".*")
-      .replace(/\?/g, ".");
-    return new RegExp(escaped).test(title.toLowerCase());
+    if (_kwRegexCache.size >= _KW_CACHE_MAX)
+      _kwRegexCache.delete(_kwRegexCache.keys().next().value); // evict oldest
+    _kwRegexCache.set(keyword, entry);
+    return entry;
+  }
+
+  function keywordMatchesTitle(keyword, title) {
+    const { re, caseFold } = _buildKeywordRegex(keyword);
+    if (!re) return false;
+    return re.test(caseFold ? title.toLowerCase() : title);
   }
 
   function getScopesForSub(sub, allScopeKeys) {
@@ -727,20 +785,24 @@
     applyKeywordHighlights();
   };
 
-  /** Apply display/opacity to a filtered post based on current _showFiltered state. */
+  /** Apply display/opacity to a filtered post based on current _filteredVisible state. */
   const applyFilteredPostStyle = (post) => {
-    post.style.display = _showFiltered ? "" : "none";
-    post.style.opacity = _showFiltered ? "0.35" : "";
+    // _filteredVisible=true  → show at reduced opacity (user chose to reveal them)
+    // _filteredVisible=false → hide entirely (default)
+    post.style.display = _filteredVisible ? "" : "none";
+    post.style.opacity = _filteredVisible ? "0.35" : "";
   };
 
   function toggleShowFiltered() {
-    _showFiltered = !_showFiltered;
+    _filteredVisible = !_filteredVisible;
     document
       .querySelectorAll("shreddit-post[pp-kw-filtered]")
       .forEach(applyFilteredPostStyle);
     document
       .querySelectorAll(".pp_panel_show_btn")
-      .forEach((btn) => btn.classList.toggle("pp_show_active", !_showFiltered));
+      .forEach((btn) =>
+        btn.classList.toggle("pp_show_active", !_filteredVisible),
+      );
   }
 
   // =========================================================
@@ -796,9 +858,9 @@
         </div>
       </div>
       <div class="pp_tab_bar">
-        <button id="${id}_tab_global" class="pp_tab">Global</button>
-        <button id="${id}_tab_sub" class="pp_tab">${sub ? `r/${sub}` : "Subreddit"}</button>
-        <button id="${id}_tab_all" class="pp_tab">All</button>
+        <button id="${id}_tab_global" class="pp_tab" data-tab="global">Global</button>
+        <button id="${id}_tab_sub" class="pp_tab" data-tab="sub">${sub ? `r/${sub}` : "Subreddit"}</button>
+        <button id="${id}_tab_all" class="pp_tab" data-tab="all">All</button>
       </div>
       <div id="${id}_sub_edit" class="pp_sub_edit">
         <input id="${id}_sub_input" type="text" class="pp_input" placeholder="sub1, sub2, sub3" value="${sub || ""}" style="width:100%;height:30px;" />
@@ -821,7 +883,7 @@
 
     if (isFilter) {
       const showToggle = $("_show_toggle");
-      showToggle.classList.toggle("pp_show_active", !_showFiltered);
+      showToggle.classList.toggle("pp_show_active", !_filteredVisible);
       showToggle.addEventListener("click", toggleShowFiltered);
     }
     $("_close").addEventListener("click", () => {
@@ -833,8 +895,8 @@
     const subEdit = $("_sub_edit");
 
     function setTab(tab) {
-      panel.querySelectorAll(".pp_tab").forEach((btn, i) => {
-        const active = ["global", "sub", "all"][i] === tab;
+      panel.querySelectorAll(".pp_tab").forEach((btn) => {
+        const active = btn.dataset.tab === tab;
         btn.classList.toggle("pp_tab_active", active);
         btn.style.color = active ? accent : "";
       });
@@ -1154,6 +1216,11 @@
 
   function openKwPanel(mode) {
     const id = mode === "filter" ? "pp_filter_panel" : "pp_highlight_panel";
+    // If the panel was removed from the DOM (e.g. by a Reddit re-render or a
+    // nuke pass) the id guard inside buildKwPanel would have passed but the
+    // element is gone — so check isConnected and remove the stale node first.
+    const existing = document.getElementById(id);
+    if (existing && !existing.isConnected) existing.remove();
     buildKwPanel(mode);
     const panel = document.getElementById(id);
     if (panel)
@@ -1279,8 +1346,9 @@
   const jumpToNextParent = () => jumpToTarget(1);
 
   function jumpToBottom() {
-    const container =
-      document.querySelector("#comment-tree-container, shreddit-comment-tree");
+    const container = document.querySelector(
+      "#comment-tree-container, shreddit-comment-tree",
+    );
     if (container)
       container.scrollIntoView({ behavior: "smooth", block: "end" });
     else smoothScrollTo(document.body.scrollHeight);
@@ -1318,7 +1386,7 @@
         count++;
       }
     }
-    return count >= 2 ? res : null;
+    return count >= 3 ? res : null; // ≥3 tokens required to avoid "november oscar" → "NO" false positives
   }
 
   function binaryToText(b) {
@@ -1371,18 +1439,22 @@
     return container;
   }
 
-  function processTextNode(node) {
+  function processTextNode(node, seenDecoded) {
     const text = node.textContent;
     const processMatch = (val, type, decoder) => {
       if (!val) return;
       const decoded = decoder(val);
-      if (decoded?.trim().length > 0) {
-        const target = node.parentNode.tagName === "P" ? node.parentNode : node;
-        target.parentNode.insertBefore(
-          createTranslationComponent(type, decoded),
-          target.nextSibling,
-        );
-      }
+      if (!decoded?.trim().length) return;
+      // Guard against inserting duplicate decoder boxes when multiple text nodes
+      // within the same <p> produce the same decoded output.
+      const dedupeKey = `${type}:${decoded}`;
+      if (seenDecoded.has(dedupeKey)) return;
+      seenDecoded.add(dedupeKey);
+      const target = node.parentNode.tagName === "P" ? node.parentNode : node;
+      target.parentNode.insertBefore(
+        createTranslationComponent(type, decoded),
+        target.nextSibling,
+      );
     };
     text
       .match(BINARY_RE)
@@ -1397,10 +1469,14 @@
     const nodes = [];
     let n;
     while ((n = walker.nextNode())) nodes.push(n);
-    nodes.forEach(processTextNode);
+    // Share a Set across all text nodes in this <p> to deduplicate decoder boxes.
+    const seenDecoded = new Set();
+    nodes.forEach((node) => processTextNode(node, seenDecoded));
   }
 
   function createSelectionPopup() {
+    // Only ever called once (guarded by `if (!selectionPopup)` at the call
+    // site), so this single node lives in the DOM for the page lifetime.
     const popup = createElement("div", { className: "pp_selection_popup" });
     const btn = createElement("button", { innerHTML: "🔍 Search" });
     popup.appendChild(btn);
@@ -1505,9 +1581,20 @@
         .forEach((comment) => {
           if (
             comment.getAttribute("author") === "AutoModerator" &&
-            !comment.__collapsed
-          )
-            comment.handleCollapse?.(true);
+            !comment.hasAttribute("pp-am-collapsed")
+          ) {
+            // Only mark as collapsed (and stamp the attribute) if handleCollapse
+            // actually exists. If the custom element isn't fully upgraded yet the
+            // method won't be present; we deliberately skip pp-checked on this
+            // branch so the next observer tick can retry.
+            if (typeof comment.handleCollapse === "function") {
+              comment.handleCollapse(true);
+              comment.setAttribute("pp-am-collapsed", "true");
+            } else {
+              // Not upgraded yet — bail without stamping pp-checked so we retry.
+              return;
+            }
+          }
           if (comment.shadowRoot && !comment.hasAttribute("pp-shadow-styled")) {
             const color =
               THREAD_COLORS[getCommentDepth(comment) % THREAD_COLORS.length];
@@ -1573,7 +1660,7 @@
       if (!_onAllowedSubreddit) return;
       document
         .querySelectorAll(
-          COMMENT_SELECTORS.map((s) => `${s}:not([pp-decoder-scanned])`).join(
+          DECODER_SELECTORS.map((s) => `${s}:not([pp-decoder-scanned])`).join(
             ", ",
           ),
         )
@@ -1613,15 +1700,23 @@
     collapseBtn.style.top = Math.max(0, e.clientY - drag.offsetY) + "px";
   });
 
+  const saveCollapsePos = () =>
+    lsSet("pp_collapse_pos", {
+      top: parseInt(collapseBtn.style.top, 10),
+      right: parseInt(collapseBtn.style.right, 10),
+    });
+
   document.addEventListener("mouseup", () => {
     if (!drag.active) return;
     drag.active = false;
-    if (drag.moved)
-      lsSet("pp_collapse_pos", {
-        top: parseInt(collapseBtn.style.top, 10),
-        right: parseInt(collapseBtn.style.right, 10),
-      });
+    if (drag.moved) saveCollapsePos();
     drag.moved = false;
+  });
+
+  // Persist position even if the tab is closed while a drag is technically
+  // still in progress (e.g. user releases mouse outside the window first).
+  window.addEventListener("beforeunload", () => {
+    if (drag.moved && collapseBtn.style.top) saveCollapsePos();
   });
 
   // Collapse toolbar button wiring
@@ -1648,6 +1743,12 @@
   //      Reddit builds its search URLs with unencoded spaces in `q`, which
   //      breaks multi-word queries. We intercept after Reddit commits the
   //      navigation and immediately replace it with a clean URL.
+  //
+  // IMPORTANT: corrections call _origReplaceState directly (not the patched
+  // wrapper) to prevent the wrapper re-entering itself and risking recursion.
+  const _origPushState = history.pushState.bind(history);
+  const _origReplaceState = history.replaceState.bind(history);
+
   const _patchHistory =
     (original) =>
     (...args) => {
@@ -1671,30 +1772,46 @@
           extractSubFromPathname(u.pathname),
         );
 
-        // Only replace if the URL actually differs (avoids an infinite loop)
-        if (corrected !== u.pathname + u.search)
-          history.replaceState(args[0], args[1], corrected);
+        // Compare decoded `q` params rather than raw URL strings to avoid an
+        // infinite loop if Reddit appends extra params (e.g. &type=link).
+        const correctedU = new URL(corrected, location.origin);
+
+        // Carry forward any extra params Reddit set (sort, type, etc.) so we
+        // don't silently drop them while fixing the encoding.
+        for (const [k, v] of u.searchParams) {
+          if (!correctedU.searchParams.has(k))
+            correctedU.searchParams.set(k, v);
+        }
+
+        if (
+          u.searchParams.get("q") !== correctedU.searchParams.get("q") ||
+          u.pathname !== correctedU.pathname
+        )
+          // Use the original (unpatched) replaceState to avoid re-entering the
+          // wrapper and risking infinite recursion.
+          _origReplaceState(args[0], args[1], correctedU.toString());
       } catch {
         // Malformed URL — ignore
       }
     };
-  history.pushState = _patchHistory(history.pushState.bind(history));
-  history.replaceState = _patchHistory(history.replaceState.bind(history));
+  history.pushState = _patchHistory(_origPushState);
+  history.replaceState = _patchHistory(_origReplaceState);
   window.addEventListener("popstate", syncCollapseButtonVisibility);
 
   window.addEventListener(
     "keydown",
     (e) => {
-      if (
-        e.target.tagName === "INPUT" ||
-        e.target.tagName === "TEXTAREA" ||
-        e.target.isContentEditable ||
-        e.ctrlKey ||
-        e.metaKey ||
-        e.altKey ||
-        e.shiftKey
-      )
-        return;
+      // composedPath() pierces shadow roots so we catch Reddit's shadow-DOM
+      // search input even when e.target is the custom-element host.
+      const _path = e.composedPath();
+      const _inInput = _path.some(
+        (el) =>
+          el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable ||
+          el.getAttribute?.("contenteditable") === "true",
+      );
+      if (_inInput || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       const key = e.key.toLowerCase();
       const prevent = () => {
         e.preventDefault();
@@ -1735,78 +1852,78 @@
   // =========================================================
   // INTRA-SUBREDDIT SEARCH — URL correction
   // =========================================================
-  // Reddit's hybridNavigate (SPA navigation) is unreliable on search pages
-  // and often aborts with a DOMException. We listen on the "navigate" event,
-  // let Reddit's handler run first, then use setTimeout(0) to force a real
-  // page load to the corrected URL. This bypasses Reddit's broken SPA path
-  // entirely. We do NOT call e.intercept() — that would compete with Reddit's
-  // own intercept handler and cause it to abort before rendering.
+  // Strategy: intercept Enter on the search input in capture phase, before
+  // Reddit's own handlers see it. We preventDefault + stopImmediatePropagation
+  // and navigate directly with a clean URL. This bypasses Reddit's SPA
+  // machinery entirely and avoids the DOMException that fires when
+  // location.assign() is called while a Navigation API transition is still
+  // in flight.
+  //
+  // composedPath() pierces shadow roots during a live event, so this correctly
+  // finds Reddit's shadow-DOM search input without needing deepQueryAll.
+  //
+  // A passive navigatesuccess listener handles any edge cases where the search
+  // form submits without an Enter keypress (e.g. clicking the search icon),
+  // correcting the URL via history.replaceState after the fact — which is safe
+  // because the page has already finished loading by that point.
 
-  if (window.navigation) {
-    window.navigation.addEventListener("navigate", (e) => {
-      if (!e.canIntercept || e.hashChange || e.downloadRequest) return;
-
-      let u;
-      try {
-        u = new URL(e.destination.url);
-      } catch {
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)
         return;
-      }
 
+      const input = e
+        .composedPath()
+        .find(
+          (el) =>
+            el.tagName === "INPUT" && (el.name === "q" || el.type === "search"),
+        );
+      if (!input) return;
+
+      const query = input.value?.trim();
+      if (!query) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+
+      window.location.assign(
+        buildRedditSearchUrl(
+          query,
+          extractSubFromPathname(window.location.pathname),
+        ),
+      );
+    },
+    { capture: true },
+  );
+
+  // Passive post-navigation corrector: fires after the page has settled.
+  // Fixes search-icon clicks and any other non-keyboard submission paths.
+  // Uses replaceState (not assign) so there is no second navigation — just
+  // a silent URL fixup on the already-loaded page.
+  if (window.navigation) {
+    window.navigation.addEventListener("navigatesuccess", () => {
+      const u = new URL(location.href);
       if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
         return;
-
       const q = u.searchParams.get("q");
       if (!q) return;
-
       const corrected = buildRedditSearchUrl(
         q,
         extractSubFromPathname(u.pathname),
       );
-      if (corrected === u.pathname + u.search) return;
-
-      // Let Reddit's navigate handler run first (we do not intercept).
-      // After it commits (or aborts), force a real load to the corrected URL.
-      setTimeout(() => window.location.assign(corrected), 0);
+      const correctedU = new URL(corrected, location.origin);
+      // Carry forward any extra params Reddit set (sort, type, etc.).
+      for (const [k, v] of u.searchParams) {
+        if (!correctedU.searchParams.has(k)) correctedU.searchParams.set(k, v);
+      }
+      if (
+        u.searchParams.get("q") !== correctedU.searchParams.get("q") ||
+        u.pathname !== correctedU.pathname
+      ) {
+        history.replaceState(history.state, "", correctedU.toString());
+      }
     });
-  } else {
-    // Fallback for browsers without Navigation API
-    document.addEventListener(
-      "keydown",
-      (e) => {
-        if (
-          e.key !== "Enter" ||
-          e.ctrlKey ||
-          e.metaKey ||
-          e.altKey ||
-          e.shiftKey
-        )
-          return;
-
-        const input = e
-          .composedPath()
-          .find(
-            (el) =>
-              el.tagName === "INPUT" &&
-              (el.name === "q" || el.type === "search"),
-          );
-        if (!input) return;
-
-        const query = input.value?.trim();
-        if (!query) return;
-
-        e.preventDefault();
-        e.stopImmediatePropagation();
-
-        window.location.assign(
-          buildRedditSearchUrl(
-            query,
-            extractSubFromPathname(window.location.pathname),
-          ),
-        );
-      },
-      { capture: true },
-    );
   }
 
   window.addEventListener(
@@ -1853,6 +1970,20 @@
   let debounceTimer = null;
   new MutationObserver((mutations) => {
     if (!mutations.some((m) => m.addedNodes.length > 0)) return;
+    // Mark posts dirty if any shreddit-post was added this tick, either directly
+    // or wrapped in a container (Reddit typically wraps in faceplate-batch or div).
+    // querySelector is only available on Element nodes, so the ?. handles text/
+    // comment nodes without needing a separate nodeType === 1 check.
+    if (
+      mutations.some((m) =>
+        Array.from(m.addedNodes).some(
+          (n) =>
+            n.nodeName === "SHREDDIT-POST" ||
+            n.querySelector?.("shreddit-post"),
+        ),
+      )
+    )
+      _postsDirty = true;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       Actions.nuke();
@@ -1862,7 +1993,10 @@
       Actions.processComments();
       Actions.syncCollapseButton();
       Actions.processDecoders();
-      Actions.applyAllKeywordRules();
+      if (_postsDirty) {
+        Actions.applyAllKeywordRules();
+        _postsDirty = false;
+      }
       Actions.injectFilterMenuEntry();
       document
         .querySelectorAll("shreddit-post:not([pp-images-handled])")
@@ -1875,6 +2009,8 @@
   // =========================================================
 
   function bootstrap() {
+    // Append toolbar and lightbox now that document.body exists.
+    document.body.appendChild(collapseBtn);
     attachLightbox();
     syncCollapseButtonVisibility();
     Actions.processDecoders();
@@ -1884,5 +2020,5 @@
     ? document.addEventListener("DOMContentLoaded", bootstrap)
     : bootstrap();
 
-  console.log("Reddit Enhancements v2.5.16 loaded");
+  console.log(`Reddit Enhancements v${VERSION} loaded`);
 })();

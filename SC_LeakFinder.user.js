@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SC Leak Finder
-// @version      1.4
-// @description  Cross-checks profiles on OF, Fansly, IG, TikTok, and Fanfix against SC.
+// @version      1.8
+// @description  Cross-checks profiles on OF, Fansly, IG, TikTok, Fanfix, VSCO, and X against SC.
 // @author       JR
 // @license      MIT
 // @match        https://onlyfans.com/*
@@ -10,6 +10,9 @@
 // @match        https://www.instagram.com/*
 // @match        https://www.tiktok.com/*
 // @match        https://app.fanfix.io/*
+// @match        https://vsco.co/*
+// @match        https://x.com/*
+// @match        https://twitter.com/*
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SC_LeakFinder.user.js
 // @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SC_LeakFinder.user.js
 // @grant        GM.xmlHttpRequest
@@ -41,6 +44,10 @@
       "feed",
       "messages",
       "discover",
+      "i",
+      "search",
+      "compose",
+      "intent",
     ]),
   };
 
@@ -55,6 +62,23 @@
     State.intervals.forEach(clearInterval);
     State.intervals = [];
   };
+
+  // Strip emojis, non-ASCII unicode, and collapse extra whitespace
+  const sanitizeQuery = (str) =>
+    str
+      .replace(/[\u{1F000}-\u{1FFFF}]/gu, "")
+      .replace(/[\u{2600}-\u{27FF}]/gu, "")
+      .replace(/[^\x00-\x7F]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  // Extract only text nodes from an element, ignoring child elements (e.g. SVG badges)
+  const textNodesOnly = (el) =>
+    [...el.childNodes]
+      .filter((n) => n.nodeType === Node.TEXT_NODE)
+      .map((n) => n.textContent)
+      .join(" ")
+      .trim();
 
   const getUsername = () => {
     const { hostname, pathname } = window.location;
@@ -71,30 +95,38 @@
   };
 
   const updateUIStatus = (id, found) => {
-    const el = document.querySelector(`[data-lfo="${id}"]`);
-    if (el) {
+    document.querySelectorAll(`[data-lfo="${id}"]`).forEach((el) => {
       el.classList.remove("checking");
       el.classList.add(found ? "found" : "not-found");
-    }
+    });
   };
 
-  const searchSimpCity = async (query, list, prefix) => {
+  const searchSimpCity = async (rawQuery, list, prefix) => {
+    const query = sanitizeQuery(rawQuery);
     if (!query || query.length < 2) return;
     const safeSlug = query.replace(/[^\w]/g, "-").toLowerCase();
     const id = `sc-${safeSlug}`;
 
     if (document.querySelector(`[data-lfo="${id}"]`)) return;
 
-    const url = `https://simpcity.cr/search/1/?q=${encodeURIComponent(query)}&c[title_only]=1&o=relevance`;
+    const urlGeneral = `https://simpcity.cr/search/1/?q=${encodeURIComponent(query)}&o=relevance`;
+    const urlTitleOnly = `https://simpcity.cr/search/1/?q=${encodeURIComponent(query)}&c[title_only]=1&o=relevance`;
+
     const li = document.createElement("li");
     li.className = "lfo-item";
-    li.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="lfo-link checking" data-lfo="${id}">${prefix}: ${query}</a>`;
+    li.innerHTML = `
+      <span class="lfo-label">${prefix}: ${query}</span>
+      <span class="lfo-links">
+        <a href="${urlGeneral}"   target="_blank" rel="noopener" class="lfo-link checking" data-lfo="${id}" title="General search">All</a>
+        <a href="${urlTitleOnly}" target="_blank" rel="noopener" class="lfo-link checking" data-lfo="${id}" title="Title-only search">Title</a>
+      </span>
+    `;
     list.appendChild(li);
 
     try {
       const res = await GM.xmlHttpRequest({
         method: "GET",
-        url,
+        url: urlTitleOnly,
         timeout: CONFIG.TIMEOUT,
       });
       updateUIStatus(
@@ -163,38 +195,70 @@
     return State.container.querySelector(".lfo-list");
   };
 
+  const pollForDisplayName = (
+    username,
+    list,
+    selectorFn,
+    extractFn,
+    prefix,
+    maxTicks = 20,
+  ) => {
+    const found = new Set([username.toLowerCase()]);
+    let count = 0;
+    const interval = setInterval(() => {
+      const el = selectorFn();
+      const raw = el ? (extractFn ? extractFn(el) : el.innerText.trim()) : null;
+      const displayName = raw ? sanitizeQuery(raw) : null;
+      if (
+        displayName &&
+        displayName.length > 2 &&
+        !found.has(displayName.toLowerCase())
+      ) {
+        found.add(displayName.toLowerCase());
+        searchSimpCity(displayName, list, prefix);
+      }
+      if (++count > maxTicks) clearInterval(interval);
+    }, 1000);
+    State.intervals.push(interval);
+  };
+
   const runChecks = (username) => {
     cleanup();
     const list = initUI();
     list.innerHTML = "";
-    searchSimpCity(username, list, "SimpCity");
+    searchSimpCity(username, list, "SC");
 
-    if (window.location.hostname.includes("instagram.com")) {
-      const found = new Set([username.toLowerCase()]);
-      let count = 0;
+    const { hostname } = window.location;
 
-      const interval = setInterval(() => {
-        // Updated selector: Instagram typically keeps the display name in an <h1> tag
-        // or a span immediately following the username.
-        const nameEl = document.querySelector(
-          "h1, header section span[dir='auto']",
-        );
+    if (hostname.includes("onlyfans.com")) {
+      // .g-user-name contains a text node + an SVG badge; use textNodesOnly to avoid badge text
+      pollForDisplayName(
+        username,
+        list,
+        () => document.querySelector(".g-user-name"),
+        textNodesOnly,
+        "SC (Name)",
+      );
+    }
 
-        // Ensure we aren't just grabbing the username itself again
-        const displayName = nameEl ? nameEl.innerText.trim() : null;
+    if (hostname.includes("instagram.com")) {
+      pollForDisplayName(
+        username,
+        list,
+        () => document.querySelector("h1, header section span[dir='auto']"),
+        null,
+        "SC (Name)",
+      );
+    }
 
-        if (
-          displayName &&
-          displayName.length > 2 &&
-          !found.has(displayName.toLowerCase())
-        ) {
-          found.add(displayName.toLowerCase());
-          searchSimpCity(displayName, list, "SC (Name)");
-        }
-
-        if (++count > 20) clearInterval(interval); // Increased attempts for slower loads
-      }, 1000);
-      State.intervals.push(interval);
+    if (hostname.includes("x.com") || hostname.includes("twitter.com")) {
+      pollForDisplayName(
+        username,
+        list,
+        () => document.querySelector("div.text-headline1.font-bold"),
+        null,
+        "SC (Name)",
+      );
     }
   };
 
@@ -213,19 +277,21 @@
   };
 
   GM_addStyle(`
-    #${CONFIG.UI_ID} { position: fixed; top: 70px; right: 20px; width: 230px; background: #1a1a1a; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); color: #f0f0f0; font-family: system-ui; font-size: 13px; z-index: 99999; overflow: hidden; }
+    #${CONFIG.UI_ID} { position: fixed; top: 70px; right: 20px; width: 260px; background: #1a1a1a; border: 1px solid #444; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); color: #f0f0f0; font-family: system-ui; font-size: 13px; z-index: 99999; overflow: hidden; }
     .lfo-header { padding: 10px; background: #2a2a2a; cursor: move; display: flex; justify-content: space-between; font-weight: bold; border-bottom: 1px solid #444; user-select: none; }
     .lfo-list { list-style: none; padding: 5px 10px; margin: 0; max-height: 450px; overflow-y: auto; }
     #${CONFIG.UI_ID}.collapsed .lfo-list { max-height: 0; padding: 0; }
 
-    /* Updated Logic: Add border to all items, then remove it from the last one */
-    .lfo-item { margin: 4px 0; border-bottom: 1px solid #333; padding-bottom: 4px; }
+    .lfo-item { margin: 4px 0; border-bottom: 1px solid #333; padding-bottom: 4px; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
     .lfo-item:last-child { border-bottom: none; margin-bottom: 0; }
 
-    .lfo-link { text-decoration: none; display: block; padding: 4px; color: #ffc107; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .lfo-link.found { color: #4CAF50; font-weight: bold; }
-    .lfo-link.not-found { color: #ff4d4d; }
-    .lfo-link.checking { color: #888; font-style: italic; }
+    .lfo-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ccc; padding: 4px 0; }
+    .lfo-links { display: flex; gap: 4px; flex-shrink: 0; }
+
+    .lfo-link { text-decoration: none; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; border: 1px solid #555; white-space: nowrap; }
+    .lfo-link.checking  { color: #888; border-color: #444; font-style: italic; }
+    .lfo-link.found     { color: #4CAF50; border-color: #4CAF50; }
+    .lfo-link.not-found { color: #ff4d4d; border-color: #ff4d4d; }
     .lfo-tgl-btn { cursor: pointer; padding: 0 5px; }
   `);
 
