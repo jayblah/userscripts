@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.5.20
+// @version         2.5.21
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -82,6 +82,8 @@
     "search-telemetry-tracker:has(search-answers-response-container-streaming)",
     "search-answers-response-container-streaming",
     "in-feed-community-recommendations",
+    "shreddit-lightbox",
+    "shreddit-media-lightbox",
   ];
 
   const SIDEBAR_SELECTORS = [
@@ -111,7 +113,7 @@
 
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
-  const VERSION = "2.5.20";
+  const VERSION = "2.5.21";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -481,7 +483,6 @@
     bottom: _savedPos ? "auto" : "24px",
     left: _savedPos ? "auto" : "24px",
   });
-  // Append is deferred to bootstrap() so document.body is guaranteed to exist.
 
   // =========================================================
   // LIGHTBOX & GALLERY
@@ -490,11 +491,18 @@
   const lightbox = createElement("div", { id: "pp_lightbox" });
   const closeLightbox = () => {
     lightbox.style.display = "none";
+    if (location.hash === "#lightbox") {
+      history.replaceState(
+        history.state,
+        "",
+        location.href.replace("#lightbox", ""),
+      );
+    }
   };
 
   function attachLightbox() {
-    if (document.body?.contains(lightbox)) return;
-    document.body?.appendChild(lightbox);
+    if (document.documentElement.contains(lightbox)) return;
+    document.documentElement.appendChild(lightbox);
 
     lightbox.innerHTML = `
       <div id="pp_lightbox_close" style="position:absolute;top:20px;right:20px;color:white;font-size:32px;cursor:pointer;z-index:1000001;line-height:1;" title="Close [Esc]">&times;</div>
@@ -524,6 +532,14 @@
     gallery = { images, index: startIndex };
     updateLightboxImage();
     lightbox.style.display = "flex";
+    // Prevent Reddit's #lightbox hash from triggering its native viewer
+    if (location.hash === "#lightbox") {
+      history.replaceState(
+        history.state,
+        "",
+        location.href.replace("#lightbox", ""),
+      );
+    }
   }
 
   function updateLightboxImage() {
@@ -597,7 +613,12 @@
       return post.gallery_data.items
         .map((i) => {
           const entry = post.media_metadata[i.media_id];
-          const src = entry?.s?.u || entry?.p?.slice(-1)?.[0]?.u || null;
+          const src =
+            entry?.s?.gif ||
+            entry?.s?.mp4 ||
+            entry?.s?.u ||
+            entry?.p?.slice(-1)?.[0]?.u ||
+            null;
           return src ? decodeAmp(src) : null;
         })
         .filter(Boolean);
@@ -1480,7 +1501,7 @@
     const popup = createElement("div", { className: "pp_selection_popup" });
     const btn = createElement("button", { innerHTML: "🔍 Search" });
     popup.appendChild(btn);
-    document.body.appendChild(popup);
+    document.documentElement.appendChild(popup);
     return { popup, btn };
   }
 
@@ -1514,28 +1535,37 @@
       if (post.hasAttribute("pp-images-handled")) return;
       const isGallery = post.hasAttribute("gallery");
       const permalink = post.getAttribute("permalink");
-
       if (isGallery && permalink) {
         post.setAttribute("pp-images-handled", "true");
-        fetchGalleryImages(permalink).then((urls) => {
-          if (!urls?.length) return;
-          post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
-            imgEl.classList.add("pp_imageViewable");
-            imgEl.addEventListener(
-              "click",
-              (e) => {
-                stopEvent(e);
-                const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
-                const idx = urls.findIndex((u) =>
-                  clickedSrc.includes(
-                    u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1],
-                  ),
-                );
-                openLightbox(urls, idx !== -1 ? idx : 0);
-              },
-              true,
-            );
-          });
+
+        // Store the promise on the post element so click handlers can await it
+        const galleryPromise = fetchGalleryImages(permalink);
+
+        // Attach click listeners immediately — await the promise inside the handler
+        post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
+          imgEl.classList.add("pp_imageViewable");
+          imgEl.addEventListener(
+            "click",
+            async (e) => {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              document
+                .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
+                .forEach((el) => el.remove());
+
+              const urls = await galleryPromise;
+              if (!urls?.length) return;
+
+              const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
+              const idx = urls.findIndex((u) =>
+                clickedSrc.includes(
+                  u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1],
+                ),
+              );
+              openLightbox(urls, idx !== -1 ? idx : 0);
+            },
+            true,
+          );
         });
         return;
       }
@@ -1553,7 +1583,11 @@
           (e) => {
             const clickedSrc = getImgSrc(imgEl);
             if (!clickedSrc) return;
-            stopEvent(e);
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            document
+              .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
+              .forEach((el) => el.remove());
             const galleryContainer =
               imgEl.closest("gallery-carousel") || imgEl.closest("ul");
             const imgs = galleryContainer
@@ -2009,9 +2043,7 @@
   // =========================================================
 
   function bootstrap() {
-    // Append toolbar and lightbox now that document.body exists.
-    document.body.appendChild(collapseBtn);
-    attachLightbox();
+    document.documentElement.appendChild(collapseBtn);
     syncCollapseButtonVisibility();
     Actions.processDecoders();
     Actions.injectAccountBadge();
