@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.5.21
+// @version         2.5.28
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -69,8 +69,10 @@
     'faceplate-tracker[noun="resources_menu"]',
     'faceplate-tracker[noun="news_home"]',
     'faceplate-tracker[noun="explore_home"]',
-    'a[href*="/news/"]',
-    'a[href*="/explore/"]',
+    'a[href^="/news/"]',
+    'a[href^="/explore/"]',
+    'a[href^="https://www.reddit.com/news/"]',
+    'a[href^="https://www.reddit.com/explore/"]',
     "shreddit-related-communities",
     'details:has(summary[aria-controls="RESOURCES"])',
     "community-highlight-carousel",
@@ -82,8 +84,6 @@
     "search-telemetry-tracker:has(search-answers-response-container-streaming)",
     "search-answers-response-container-streaming",
     "in-feed-community-recommendations",
-    "shreddit-lightbox",
-    "shreddit-media-lightbox",
   ];
 
   const SIDEBAR_SELECTORS = [
@@ -113,7 +113,8 @@
 
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
-  const VERSION = "2.5.21";
+  const FILTER_VISIBLE_KEY = "pp_filter_show_state";
+  const VERSION = "2.5.22";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -190,7 +191,10 @@
   let lastScrollY = 0;
   // true  = filtered posts are shown at reduced opacity (user toggled them on)
   // false = filtered posts are hidden entirely (default)
-  let _filteredVisible = false;
+  // Persisted across sessions so the ON/OFF state survives page reloads.
+  let _filteredVisible = JSON.parse(
+    localStorage.getItem(FILTER_VISIBLE_KEY) || "false",
+  );
   let _cachedUsername = null;
   let _badgeFetchPromise = null;
   let drag = { active: false, offsetX: 0, offsetY: 0, moved: false };
@@ -274,6 +278,17 @@
     post.getAttribute("subreddit-name") ||
     post.getAttribute("subreddit") ||
     null;
+  const getPostAuthor = (post) => post.getAttribute("author") || null;
+
+  /** True when a post was authored by the logged-in user (username known via _cachedUsername). */
+  const isOwnPost = (post) => {
+    const author = getPostAuthor(post);
+    return (
+      !!_cachedUsername &&
+      !!author &&
+      author.toLowerCase() === _cachedUsername.toLowerCase()
+    );
+  };
 
   /** Get the src from an img-like element (faceplate-img or img). */
   const getImgSrc = (imgEl) =>
@@ -648,6 +663,9 @@
         if (d?.data?.name && d.data.name !== "undefined") {
           _cachedUsername = d.data.name;
           insertBadge(d.data.name);
+          // Re-run keyword filters now that we know the logged-in username,
+          // so any own posts already hidden before this resolved get shown.
+          applyKeywordFilters();
         }
       })
       .catch(() => {})
@@ -772,6 +790,7 @@
 
       if (isFilter) {
         const matched =
+          !isOwnPost(post) &&
           entries.length > 0 &&
           entries.some((kw) => keywordMatchesTitle(kw, title));
         if (matched) {
@@ -816,6 +835,7 @@
 
   function toggleShowFiltered() {
     _filteredVisible = !_filteredVisible;
+    lsSet(FILTER_VISIBLE_KEY, _filteredVisible);
     document
       .querySelectorAll("shreddit-post[pp-kw-filtered]")
       .forEach(applyFilteredPostStyle);
@@ -1647,7 +1667,10 @@
     },
 
     initSidebar() {
-      if (!/^\/r\/[^/]/.test(window.location.pathname)) {
+      if (
+        !/^\/r\/[^/]/.test(window.location.pathname) ||
+        /\/search\/?(\?|$)/.test(window.location.href)
+      ) {
         document.getElementById("pp_sidebar_wrap")?.remove();
         return;
       }
@@ -1884,79 +1907,66 @@
   );
 
   // =========================================================
-  // INTRA-SUBREDDIT SEARCH — URL correction
+  // INTRA-SUBREDDIT SEARCH — SPA render failure recovery
   // =========================================================
-  // Strategy: intercept Enter on the search input in capture phase, before
-  // Reddit's own handlers see it. We preventDefault + stopImmediatePropagation
-  // and navigate directly with a clean URL. This bypasses Reddit's SPA
-  // machinery entirely and avoids the DOMException that fires when
-  // location.assign() is called while a Navigation API transition is still
-  // in flight.
+  // Problem: Reddit's SPA intercepts the "navigate" event (via e.intercept())
+  // before any userscript listener can cancel it. After the SPA-driven
+  // navigation "completes", the search results component sometimes fails to
+  // render — the URL changes but the page stays blank or shows the previous
+  // content. A manual address-bar Enter forces a hard load which always works.
   //
-  // composedPath() pierces shadow roots during a live event, so this correctly
-  // finds Reddit's shadow-DOM search input without needing deepQueryAll.
+  // Strategy: on navigatesuccess to a search URL, wait a short tick for the
+  // SPA to finish rendering, then check whether a search results container
+  // actually appeared in the DOM. If it didn't, fall back to location.replace()
+  // which forces a full HTTP load of the (already-correct) URL.
   //
-  // A passive navigatesuccess listener handles any edge cases where the search
-  // form submits without an Enter keypress (e.g. clicking the search icon),
-  // correcting the URL via history.replaceState after the fact — which is safe
-  // because the page has already finished loading by that point.
+  // URL correction (restrict_sr, encoding) is handled by the existing
+  // pushState/replaceState patch above; this block only handles the render
+  // failure. We also keep a capture-phase keydown handler so that Enter always
+  // produces a hard navigation directly, bypassing the SPA entirely — the most
+  // reliable fix for the keyboard path.
 
-  document.addEventListener(
-    "keydown",
-    (e) => {
-      if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)
-        return;
-
-      const input = e
-        .composedPath()
-        .find(
-          (el) =>
-            el.tagName === "INPUT" && (el.name === "q" || el.type === "search"),
-        );
-      if (!input) return;
-
-      const query = input.value?.trim();
-      if (!query) return;
-
-      e.preventDefault();
-      e.stopImmediatePropagation();
-
-      window.location.assign(
-        buildRedditSearchUrl(
-          query,
-          extractSubFromPathname(window.location.pathname),
-        ),
-      );
-    },
-    { capture: true },
-  );
-
-  // Passive post-navigation corrector: fires after the page has settled.
-  // Fixes search-icon clicks and any other non-keyboard submission paths.
-  // Uses replaceState (not assign) so there is no second navigation — just
-  // a silent URL fixup on the already-loaded page.
+  // Fallback for non-keyboard submissions (search icon click, etc.):
+  // after the SPA navigation settles, check if results actually rendered.
+  // If not, force a hard reload of the current (already URL-corrected) URL.
   if (window.navigation) {
+    let _lastSearchHref = null;
+    window.navigation.addEventListener("navigate", (e) => {
+      // Track the URL we're navigating FROM so navigatesuccess can tell whether
+      // a real page transition occurred vs. an in-page SPA event.
+      _lastSearchHref = location.href;
+    });
     window.navigation.addEventListener("navigatesuccess", () => {
       const u = new URL(location.href);
       if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
         return;
-      const q = u.searchParams.get("q");
-      if (!q) return;
-      const corrected = buildRedditSearchUrl(
-        q,
-        extractSubFromPathname(u.pathname),
-      );
-      const correctedU = new URL(corrected, location.origin);
-      // Carry forward any extra params Reddit set (sort, type, etc.).
-      for (const [k, v] of u.searchParams) {
-        if (!correctedU.searchParams.has(k)) correctedU.searchParams.set(k, v);
-      }
-      if (
-        u.searchParams.get("q") !== correctedU.searchParams.get("q") ||
-        u.pathname !== correctedU.pathname
-      ) {
-        history.replaceState(history.state, "", correctedU.toString());
-      }
+      if (!u.searchParams.get("q")) return;
+
+      // Only act when the URL actually changed (real navigation, not an
+      // in-page SPA event like lazy-loading more results). If the href is the
+      // same as before the navigate event, this is not a page transition.
+      if (_lastSearchHref === location.href) return;
+      _lastSearchHref = location.href;
+
+      // Give the SPA ~800 ms to render results, then check.
+      setTimeout(() => {
+        // Any of these indicate results actually rendered.
+        const rendered =
+          document.querySelector(
+            [
+              "search-results-page",
+              "shreddit-search-results",
+              "[data-testid='search-results']",
+              "faceplate-tracker[noun='search_result']",
+              ".search-result-group",
+            ].join(","),
+          ) !== null;
+
+        if (!rendered) {
+          // SPA failed to render — hard reload the corrected URL.
+          window.location.replace(location.href);
+        }
+      }, 800);
     });
   }
 

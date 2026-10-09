@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.5.10
+// @version      2.5.12
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -91,7 +91,10 @@
   // _fetchTurboCDNSrc don't each maintain their own boilerplate.
   function gmFetch(url, options = {}) {
     return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
+      if (options.signal?.aborted) {
+        return reject(new Error(`gmFetch aborted: ${url}`));
+      }
+      const req = GM_xmlhttpRequest({
         method: "GET",
         url,
         timeout: options.timeout ?? 10000,
@@ -100,6 +103,12 @@
         onload: (resp) => resolve(resp),
         onerror: () => reject(new Error(`gmFetch error: ${url}`)),
         ontimeout: () => reject(new Error(`gmFetch timeout: ${url}`)),
+      });
+      options.signal?.addEventListener("abort", () => {
+        try {
+          req?.abort();
+        } catch {}
+        reject(new Error(`gmFetch aborted: ${url}`));
       });
     });
   }
@@ -132,6 +141,9 @@
     // Async/abort handles
     _decodeAbort: null,
     _mediaListenerAbort: null,
+    _renderAbort: null,
+    _currentRenderId: 0,
+    _lastWheelNav: 0,
 
     // Zoom/pan state
     _scale: 1,
@@ -422,6 +434,10 @@
           max-height: calc(100vh - 150px);
           object-fit: contain;
         }
+        #media-container :is(video, iframe) {
+          max-height: calc(100vh - 170px);
+          margin-bottom: 25px;
+        }
         #media-container img {
           transform-origin: center center;
           transition: transform 0.12s ease;
@@ -435,7 +451,9 @@
         .counter-row {
           position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
           display: flex; align-items: center; gap: 8px;
+          pointer-events: none;
         }
+        .counter-row > * { pointer-events: auto; }
         .counter {
           color: var(--theme); font-weight: 800; background: rgba(0,0,0,0.8);
           padding: 5px 14px; border-radius: 24px; border: none;
@@ -515,6 +533,28 @@
             font-size: 13px; min-width: 18px; padding: 0 2px 0 4px;
           }
           .btn-jump { font-size: 16px; min-width: 18px; padding: 2px 4px; }
+
+          /* Video mode: keep controls compact in a single horizontal row so they don't cover the video player */
+          #overlay.is-video .counter-row {
+            flex-direction: row;
+            width: auto;
+            max-width: calc(100vw - 16px);
+            bottom: 10px;
+            gap: 6px;
+          }
+          #overlay.is-video .slideshow-ctrl {
+            width: auto;
+            padding: 2px 4px;
+            flex-shrink: 0;
+          }
+          #overlay.is-video .counter {
+            width: auto;
+            flex: 0 0 auto;
+          }
+          #overlay.is-video #media-container :is(video, iframe) {
+            max-height: calc(100vh - 160px);
+            margin-bottom: 35px;
+          }
         }
       `;
     },
@@ -1000,7 +1040,7 @@
 
     // ── Cross-page fetching ───────────────────────────────────────────────
 
-    async _fetchTurboCDNSrc(iframeEl) {
+    async _fetchTurboCDNSrc(iframeEl, signal = null) {
       if (IS_F95) return null;
       const src = iframeEl?.getAttribute("src");
       if (!src) return null;
@@ -1010,6 +1050,7 @@
       try {
         const resp = await gmFetch(`https://turbo.cr/api/sign?v=${id}`, {
           timeout: 8000,
+          signal,
           headers: {
             Referer: `https://turbo.cr/embed/${id}`,
             Origin: "https://turbo.cr",
@@ -1033,6 +1074,7 @@
           const raw = (
             await gmFetch(`https://turbo.cr/api/sign?v=${id}`, {
               timeout: 8000,
+              signal,
             })
           ).responseText;
           return raw.match(/https?:\/\/\S+/)?.[0] ?? null;
@@ -1230,7 +1272,7 @@
         this._twoFingerStart.x = (a.screenX + b.screenX) / 2;
         this._twoFingerStart.y = (a.screenY + b.screenY) / 2;
       } else if (e.touches.length === 1) {
-        if (e.target.closest("#gv-slideshow-ctrl")) return;
+        if (e.target.closest("#gv-slideshow-ctrl, video, iframe")) return;
         this._isPinching = false;
         const t = e.changedTouches[0];
         this._touchStart.x = t.screenX;
@@ -1334,7 +1376,7 @@
         return;
       }
 
-      if (e.target.closest("#gv-slideshow-ctrl")) return;
+      if (e.target.closest("#gv-slideshow-ctrl, video, iframe")) return;
       const dx = e.changedTouches[0].screenX - this._touchStart.x;
       const dy = e.changedTouches[0].screenY - this._touchStart.y;
       if (Math.abs(dx) > Math.abs(dy)) {
@@ -1489,6 +1531,9 @@
               this._scale + (e.deltaY < 0 ? this._zoomStep : -this._zoomStep),
             );
           } else if (Math.abs(e.deltaY) > 30) {
+            const now = Date.now();
+            if (now - this._lastWheelNav < 350) return; // Increased from 180ms
+            this._lastWheelNav = now;
             this._navigateGallery(this._galleryMode, e.deltaY > 0 ? 1 : -1);
           }
         },
@@ -1683,8 +1728,24 @@
       this._decodeAbort?.abort();
       this._mediaListenerAbort?.abort();
       this._mediaListenerAbort = null;
+
+      // Force teardown of active HTML5 video and iframe instances
+      const existingVid = container.querySelector("video");
+      if (existingVid) {
+        existingVid.pause();
+        existingVid.removeAttribute("src");
+        existingVid.load();
+      }
+      const existingIframe = container.querySelector("iframe");
+      if (existingIframe) {
+        existingIframe.src = "about:blank";
+      }
+
       container.replaceChildren();
       this._resetZoom();
+
+      const isVideo = current.tagName !== "IMG";
+      overlay.classList.toggle("is-video", isVideo);
 
       if (current.tagName === "IMG") {
         await this._renderImage(current, lastDirection);
@@ -1812,7 +1873,7 @@
       if (src?.startsWith("//")) src = "https:" + src;
 
       el.style.cssText =
-        "width: 85vw; height: 85vh; border: none; background: #000;";
+        "width: 90vw; height: calc(100vh - 170px); max-height: 80vh; border: none; background: #000;";
       el.allow = "fullscreen; autoplay";
       el.setAttribute("allowfullscreen", "");
       this._el.container.appendChild(el);
@@ -1920,6 +1981,7 @@
       const iframe = container.querySelector("iframe");
       if (iframe) iframe.src = "";
       container.replaceChildren();
+      overlay?.classList.remove("is-video");
       overlay.style.display = "none";
       document.body.classList.remove("gv-noscroll");
       window.focus();
