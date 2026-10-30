@@ -1819,22 +1819,30 @@
     //   if (post.hasAttribute("pp-images-handled")) return;
     //   post.setAttribute("pp-images-handled", "true");
 
-    //   // --- HANDLE REDGIFS / EMBEDS ---
+    //   // --- HANDLE REDGIFS / EMBEDS & NATIVE VIDEOS ---
     //   const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
-    //   if (embedEl) {
-    //     let src = embedEl.getAttribute("src") || "";
-    //     if (!src && embedEl.hasAttribute("html")) {
-    //       const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
-    //       if (match) src = match[1];
+    //   const videoEl = post.querySelector('video');
+
+    //   if (embedEl || videoEl) {
+    //     let src = "";
+    //     if (embedEl) {
+    //       src = embedEl.getAttribute("src") || "";
+    //       if (!src && embedEl.hasAttribute("html")) {
+    //         const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
+    //         if (match) src = match[1];
+    //       }
+    //     } else if (videoEl) {
+    //       src = videoEl.getAttribute("src") || videoEl.querySelector("source")?.getAttribute("src") || "";
     //     }
 
     //     if (src) {
-    //       const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
+    //       const targetEl = embedEl || videoEl;
+    //       const container = targetEl.closest('[slot="post-media-container"]') || targetEl.parentElement;
     //       if (container && !container.querySelector(".pp-embed-blocker")) {
     //         container.style.position = "relative";
     //         container.style.cursor = "zoom-in";
 
-    //         // Create a physical DOM overlay directly over the iframe to intercept touches/clicks
+    //         // Create a physical DOM overlay directly over the media player to intercept clicks
     //         const blocker = createElement("div", {
     //           className: "pp-embed-blocker",
     //           style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
@@ -1926,15 +1934,16 @@
     //     );
     //   });
     // },
-    handleImages(post) {
+handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
       post.setAttribute("pp-images-handled", "true");
 
-      // --- HANDLE REDGIFS / EMBEDS & NATIVE VIDEOS ---
+      // --- HANDLE REDGIFS, SHREDDIT PLAYERS & EMBEDS ---
       const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
+      const shredditPlayer = post.querySelector('shreddit-player');
       const videoEl = post.querySelector('video');
 
-      if (embedEl || videoEl) {
+      if (embedEl || shredditPlayer || videoEl) {
         let src = "";
         if (embedEl) {
           src = embedEl.getAttribute("src") || "";
@@ -1942,18 +1951,21 @@
             const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
             if (match) src = match[1];
           }
+        } else if (shredditPlayer) {
+          src = shredditPlayer.querySelector('source')?.getAttribute("src") ||
+                shredditPlayer.getAttribute("src") || "";
         } else if (videoEl) {
           src = videoEl.getAttribute("src") || videoEl.querySelector("source")?.getAttribute("src") || "";
         }
 
         if (src) {
-          const targetEl = embedEl || videoEl;
+          const targetEl = embedEl || shredditPlayer || videoEl;
           const container = targetEl.closest('[slot="post-media-container"]') || targetEl.parentElement;
           if (container && !container.querySelector(".pp-embed-blocker")) {
             container.style.position = "relative";
             container.style.cursor = "zoom-in";
 
-            // Create a physical DOM overlay directly over the media player to intercept clicks
+            // Create a physical DOM overlay directly over the custom player to intercept clicks
             const blocker = createElement("div", {
               className: "pp-embed-blocker",
               style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
@@ -2012,7 +2024,7 @@
       );
       if (!images.length) return;
       images.forEach((imgEl) => {
-        imgEl.classList.add("pp_imageViewable");
+        imgEl.classList.add: imgEl.classList.add("pp_imageViewable");
         if (imgEl.tagName !== "IMG")
           imgEl.setAttribute("pp-img-handled", "true");
         imgEl.addEventListener(
