@@ -1729,12 +1729,11 @@
     handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
 
-      // =========================================================
-      // MODIFICATION: Intercept RedGIFs / iframes to open in lightbox instead of redirecting
-      // =========================================================
+      // --- HANDLE REDGIFS / EMBEDS ---
       const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
       if (embedEl) {
         post.setAttribute("pp-images-handled", "true");
+
         let src = embedEl.getAttribute("src") || "";
         if (!src && embedEl.hasAttribute("html")) {
           const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
@@ -1742,17 +1741,30 @@
         }
 
         if (src) {
-          const container = embedEl.closest('[slot="post-media-container"]') || embedEl;
-          container.style.cursor = "zoom-in";
-          container.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            openLightbox([src], 0);
-          }, true);
+          const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
+          if (container) {
+            container.style.position = "relative";
+            container.style.cursor = "zoom-in";
+
+            // Create an invisible blocking layer over the iframe so taps hit our listener instead of RedGIFs
+            const blocker = createElement("div", {
+              style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
+            });
+
+            blocker.addEventListener("click", (e) => {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              e.stopPropagation();
+              openLightbox([src], 0);
+            }, true);
+
+            container.appendChild(blocker);
+          }
         }
         return;
       }
 
+      // --- EXISTING GALLERY & IMAGE HANDLING ---
       const isGallery = post.hasAttribute("gallery");
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
