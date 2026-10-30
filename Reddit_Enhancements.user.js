@@ -730,6 +730,78 @@
     }
   }
 
+  // function updateLightboxImage() {
+  //   if (!gallery.images.length) return;
+  //   const stage = lightbox.querySelector("#pp_stage");
+  //   const counterEl = lightbox.querySelector("#pp_gallery_counter");
+  //   const prevEl = lightbox.querySelector("#pp_nav_prev");
+  //   const nextEl = lightbox.querySelector("#pp_nav_next");
+  //   const filmstrip = lightbox.querySelector("#pp_filmstrip");
+
+  //   const currentUrl = decodeAmp(gallery.images[gallery.index]);
+  //   const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
+
+  //   // Render stage content (iframe vs image)
+  //   stage.innerHTML = isIframe
+  //     ? `<iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>`
+  //     : `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+
+  //   const multi = gallery.images.length > 1 && !isIframe;
+
+  //   if (prevEl) prevEl.style.display = multi ? "flex" : "none";
+  //   if (nextEl) nextEl.style.display = multi ? "flex" : "none";
+  //   if (counterEl) {
+  //     counterEl.style.display = multi ? "block" : "none";
+  //     if (multi)
+  //       counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
+  //   }
+
+  //   // =========================================================
+  //   // MODIFICATION: Hide filmstrip completely for iframes/RedGIFs
+  //   // =========================================================
+  //   if (filmstrip) {
+  //     if (isIframe || !multi) {
+  //       filmstrip.style.display = "none";
+  //       filmstrip.innerHTML = "";
+  //       filmstrip.dataset.galleryKey = "";
+  //     } else {
+  //       filmstrip.style.display = "flex";
+  //       const galleryKey = gallery.images[0] ?? "";
+  //       let rebuilt = false;
+  //       if (filmstrip.dataset.galleryKey !== galleryKey) {
+  //         rebuilt = true;
+  //         filmstrip.dataset.galleryKey = galleryKey;
+  //         filmstrip.innerHTML = "";
+  //         gallery.images.forEach((src, i) => {
+  //           const thumb = createElement("img", {
+  //             className: "pp_film_thumb",
+  //             src: decodeAmp(src),
+  //             loading: "lazy",
+  //             decoding: "async",
+  //           });
+  //           thumb.addEventListener("click", (e) => {
+  //             e.stopPropagation();
+  //             gallery.index = i;
+  //             updateLightboxImage();
+  //           });
+  //           filmstrip.appendChild(thumb);
+  //         });
+  //       }
+  //       Array.from(filmstrip.children).forEach((t, i) =>
+  //         t.classList.toggle("pp_film_active", i === gallery.index),
+  //       );
+  //       const active = filmstrip.children[gallery.index];
+  //       if (active) {
+  //         const left =
+  //           active.offsetLeft - (filmstrip.clientWidth - active.offsetWidth) / 2;
+  //         filmstrip.scrollTo({
+  //           left: Math.max(0, left),
+  //           behavior: rebuilt ? "auto" : "smooth",
+  //         });
+  //       }
+  //     }
+  //   }
+  // }
   function updateLightboxImage() {
     if (!gallery.images.length) return;
     const stage = lightbox.querySelector("#pp_stage");
@@ -741,9 +813,15 @@
     const currentUrl = decodeAmp(gallery.images[gallery.index]);
     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
 
-    // Render stage content (iframe vs image)
+    // =========================================================
+    // MODIFICATION: Place the iframe first, then a transparent
+    // touch shield div on top (z-index: 10) so swipes are caught
+    // =========================================================
     stage.innerHTML = isIframe
-      ? `<iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>`
+      ? `
+        <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
+        <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
+      `
       : `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
 
     const multi = gallery.images.length > 1 && !isIframe;
@@ -756,9 +834,6 @@
         counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
     }
 
-    // =========================================================
-    // MODIFICATION: Hide filmstrip completely for iframes/RedGIFs
-    // =========================================================
     if (filmstrip) {
       if (isIframe || !multi) {
         filmstrip.style.display = "none";
