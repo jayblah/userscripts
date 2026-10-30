@@ -715,7 +715,7 @@
     lightbox.addEventListener("pointercancel", endGesture, true);
   }
 
-function updateLightboxImage() {
+  function updateLightboxImage() {
     if (!gallery.images.length) return;
     const stage = lightbox.querySelector("#pp_stage");
     const counterEl = lightbox.querySelector("#pp_gallery_counter");
@@ -843,7 +843,7 @@ function updateLightboxImage() {
           applyKeywordFilters();
         }
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         _badgeFetchPromise = null;
       });
@@ -951,8 +951,8 @@ function updateLightboxImage() {
     const pageData = isAggregate
       ? null
       : getScopesForSub(ctx.sub, Object.keys(allData)).flatMap(
-          (s) => allData[s] || [],
-        );
+        (s) => allData[s] || [],
+      );
 
     document.querySelectorAll("shreddit-post").forEach((post) => {
       const title = getPostTitle(post);
@@ -1225,9 +1225,9 @@ function updateLightboxImage() {
           all[scope][index] = isFilter
             ? val
             : {
-                keywords: splitKeywords(val),
-                color: colorPicker?.value ?? entry.color,
-              };
+              keywords: splitKeywords(val),
+              color: colorPicker?.value ?? entry.color,
+            };
       });
       applyRulesForMode(mode);
       onDone();
@@ -1323,9 +1323,9 @@ function updateLightboxImage() {
         oldScope === "global"
           ? "global"
           : oldScope
-              .split(",")
-              .map((s) => `r/${s.trim()}`)
-              .join(", "),
+            .split(",")
+            .map((s) => `r/${s.trim()}`)
+            .join(", "),
     });
 
     const btnStyle = `height:32px;font-size:11px;line-height:1;display:inline-flex;align-items:center;justify-content:center;`;
@@ -1344,11 +1344,11 @@ function updateLightboxImage() {
         input.value.trim() === "global"
           ? "global"
           : input.value
-              .trim()
-              .split(",")
-              .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
-              .filter(Boolean)
-              .join(",");
+            .trim()
+            .split(",")
+            .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
+            .filter(Boolean)
+            .join(",");
       if (!newScope) return;
       renameScopeInStorage(oldScope, newScope);
       applyAllKeywordRules();
@@ -1718,109 +1718,16 @@ function updateLightboxImage() {
     applyKeywordHighlights,
     applyAllKeywordRules,
 
-  handleImages(post) {
+    handleImages(post) {
+      // Mark post as handled to avoid redundant scans
       if (post.hasAttribute("pp-images-handled")) return;
-
-      // --- HANDLE REDGIFS / EMBEDS ---
-      const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
-      if (embedEl) {
-        post.setAttribute("pp-images-handled", "true");
-
-        let src = embedEl.getAttribute("src") || "";
-        if (!src && embedEl.hasAttribute("html")) {
-          const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
-          if (match) src = match[1];
-        }
-
-        if (src) {
-          const mediaContainer = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
-          if (mediaContainer) {
-            mediaContainer.style.cursor = "zoom-in";
-            mediaContainer.addEventListener("click", (e) => {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              e.stopPropagation();
-              openLightbox([src], 0);
-            }, true);
-          }
-        }
-        return;
-      }
-
-      // --- EXISTING GALLERY & IMAGE HANDLING ---
-      const isGallery = post.hasAttribute("gallery");
-      const permalink = post.getAttribute("permalink");
-      if (isGallery && permalink) {
-        post.setAttribute("pp-images-handled", "true");
-        const galleryPromise = fetchGalleryImages(permalink);
-
-        post.querySelectorAll("faceplate-img, img, [data-testid='post-thumbnail']").forEach((imgEl) => {
-          imgEl.classList.add("pp_imageViewable");
-          imgEl.addEventListener(
-            "click",
-            async (e) => {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              e.stopPropagation();
-              document
-                .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
-                .forEach((el) => el.remove());
-
-              const urls = await galleryPromise;
-              if (!urls?.length) return;
-
-              const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
-              const idx = urls.findIndex((u) =>
-                clickedSrc.includes(
-                  u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1],
-                ),
-              );
-              openLightbox(urls, idx !== -1 ? idx : 0);
-            },
-            true,
-          );
-        });
-        return;
-      }
-
-      const images = post.querySelectorAll(
-        "faceplate-img:not([pp-img-handled]), img:not(.pp_imageViewable)",
-      );
-      if (!images.length) return;
-      images.forEach((imgEl) => {
-        imgEl.classList.add("pp_imageViewable");
-        if (imgEl.tagName !== "IMG")
-          imgEl.setAttribute("pp-img-handled", "true");
-        imgEl.addEventListener(
-          "click",
-          (e) => {
-            const clickedSrc = getImgSrc(imgEl);
-            if (!clickedSrc) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            e.stopPropagation();
-            document
-              .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
-              .forEach((el) => el.remove());
-            const galleryContainer =
-              imgEl.closest("gallery-carousel") || imgEl.closest("ul");
-            const imgs = galleryContainer
-              ? [
-                  ...new Set(
-                    Array.from(
-                      galleryContainer.querySelectorAll("faceplate-img, img"),
-                    )
-                      .map(getImgSrc)
-                      .filter(Boolean),
-                  ),
-                ]
-              : [clickedSrc];
-            openLightbox(imgs, Math.max(0, imgs.indexOf(clickedSrc)));
-          },
-          true,
-        );
-      });
       post.setAttribute("pp-images-handled", "true");
+
+      // We now handle clicks globally via document delegation below,
+      // but we still mark images/embeds with visual cues if needed.
+      post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
+        imgEl.classList.add("pp_imageViewable");
+      });
     },
 
     processComments() {
@@ -1966,7 +1873,7 @@ function updateLightboxImage() {
       collapseBtn.classList.add("pp_dragging");
       try {
         collapseBtn.setPointerCapture(e.pointerId);
-      } catch {}
+      } catch { }
     }
     const maxLeft = Math.max(
       0,
@@ -2005,7 +1912,7 @@ function updateLightboxImage() {
     collapseBtn.classList.remove("pp_dragging");
     try {
       collapseBtn.releasePointerCapture(e.pointerId);
-    } catch {}
+    } catch { }
     if (!drag.moved) return;
     _collapseClickGuard = Date.now() + 350;
     snapCollapseBar();
@@ -2047,39 +1954,39 @@ function updateLightboxImage() {
 
   const _patchHistory =
     (original) =>
-    (...args) => {
-      original(...args);
-      syncCollapseButtonVisibility();
+      (...args) => {
+        original(...args);
+        syncCollapseButtonVisibility();
 
-      const rawUrl = args[2];
-      if (!rawUrl) return;
-      try {
-        const u = new URL(rawUrl, location.origin);
-        const q = u.searchParams.get("q");
-        if (!q) return;
+        const rawUrl = args[2];
+        if (!rawUrl) return;
+        try {
+          const u = new URL(rawUrl, location.origin);
+          const q = u.searchParams.get("q");
+          if (!q) return;
 
-        if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
-          return;
+          if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
+            return;
 
-        const corrected = buildRedditSearchUrl(
-          q,
-          extractSubFromPathname(u.pathname),
-        );
+          const corrected = buildRedditSearchUrl(
+            q,
+            extractSubFromPathname(u.pathname),
+          );
 
-        const correctedU = new URL(corrected, location.origin);
+          const correctedU = new URL(corrected, location.origin);
 
-        for (const [k, v] of u.searchParams) {
-          if (!correctedU.searchParams.has(k))
-            correctedU.searchParams.set(k, v);
-        }
+          for (const [k, v] of u.searchParams) {
+            if (!correctedU.searchParams.has(k))
+              correctedU.searchParams.set(k, v);
+          }
 
-        if (
-          u.searchParams.get("q") !== correctedU.searchParams.get("q") ||
-          u.pathname !== correctedU.pathname
-        )
-          _origReplaceState(args[0], args[1], correctedU.toString());
-      } catch {}
-    };
+          if (
+            u.searchParams.get("q") !== correctedU.searchParams.get("q") ||
+            u.pathname !== correctedU.pathname
+          )
+            _origReplaceState(args[0], args[1], correctedU.toString());
+        } catch { }
+      };
   history.pushState = _patchHistory(_origPushState);
   history.replaceState = _patchHistory(_origReplaceState);
   window.addEventListener("popstate", syncCollapseButtonVisibility);
@@ -2202,6 +2109,72 @@ function updateLightboxImage() {
       } else if (selectionPopup) selectionPopup.popup.style.display = "none";
     }, 50);
   });
+
+  // =========================================================
+  // GLOBAL CLICK DELEGATION FOR MEDIA & REDGIFS
+  // =========================================================
+  document.addEventListener("click", async (e) => {
+    // 1. Check for RedGIFs / iframes
+    const embedEl = e.target.closest('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"], [slot="post-media-container"] shreddit-async-loader');
+    if (embedEl) {
+      const iframe = embedEl.querySelector('iframe') || embedEl.closest('shreddit-post')?.querySelector('iframe[src*="redgifs.com"]');
+      let src = iframe?.getAttribute("src") || "";
+      if (!src) {
+        const embedTag = embedEl.closest('shreddit-post')?.querySelector('shreddit-embed[providername="RedGIFs"]');
+        const html = embedTag?.getAttribute("html") || "";
+        const match = html.match(/src="([^"]+)"/);
+        if (match) src = match[1];
+      }
+
+      if (src) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        e.stopPropagation();
+        openLightbox([src], 0);
+        return;
+      }
+    }
+
+    // 2. Check for Galleries / Images
+    const imgEl = e.target.closest("faceplate-img, img.pp_imageViewable, [data-testid='post-thumbnail']");
+    if (imgEl) {
+      const post = imgEl.closest("shreddit-post");
+      if (!post) return;
+
+      const isGallery = post.hasAttribute("gallery");
+      const permalink = post.getAttribute("permalink");
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+
+      document.querySelectorAll("shreddit-lightbox, shreddit-media-lightbox").forEach((el) => el.remove());
+
+      if (isGallery && permalink) {
+        const urls = await fetchGalleryImages(permalink);
+        if (urls?.length) {
+          const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
+          const idx = urls.findIndex((u) =>
+            clickedSrc.includes(u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1]),
+          );
+          openLightbox(urls, idx !== -1 ? idx : 0);
+        }
+      } else {
+        const clickedSrc = getImgSrc(imgEl);
+        if (clickedSrc) {
+          const galleryContainer = imgEl.closest("gallery-carousel") || imgEl.closest("ul") || post;
+          const imgs = [
+            ...new Set(
+              Array.from(galleryContainer.querySelectorAll("faceplate-img, img"))
+                .map(getImgSrc)
+                .filter(Boolean),
+            ),
+          ];
+          openLightbox(imgs.length ? imgs : [clickedSrc], Math.max(0, imgs.indexOf(clickedSrc)));
+        }
+      }
+    }
+  }, true);
 
   // =========================================================
   // MUTATION OBSERVER ENGINE
