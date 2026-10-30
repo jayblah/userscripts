@@ -715,7 +715,7 @@
     lightbox.addEventListener("pointercancel", endGesture, true);
   }
 
-  function updateLightboxImage() {
+function updateLightboxImage() {
     if (!gallery.images.length) return;
     const stage = lightbox.querySelector("#pp_stage");
     const counterEl = lightbox.querySelector("#pp_gallery_counter");
@@ -726,9 +726,12 @@
     const currentUrl = decodeAmp(gallery.images[gallery.index]);
     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
 
-    // Render stage content (iframe vs image)
+    // Render stage content with a transparent touch shield over iframes for swipe-to-close
     stage.innerHTML = isIframe
-      ? `<iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>`
+      ? `
+        <div style="position:absolute; inset:0; z-index:5; background:transparent; touch-action:none;"></div>
+        <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
+      `
       : `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
 
     const multi = gallery.images.length > 1 && !isIframe;
@@ -741,9 +744,6 @@
         counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
     }
 
-    // =========================================================
-    // MODIFICATION: Hide filmstrip completely for iframes/RedGIFs
-    // =========================================================
     if (filmstrip) {
       if (isIframe || !multi) {
         filmstrip.style.display = "none";
@@ -1718,7 +1718,7 @@
     applyKeywordHighlights,
     applyAllKeywordRules,
 
-    handleImages(post) {
+  handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
 
       // --- HANDLE REDGIFS / EMBEDS ---
@@ -1735,22 +1735,14 @@
         if (src) {
           const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
           if (container) {
-            container.style.position = "relative";
             container.style.cursor = "zoom-in";
-
-            // Create an invisible blocking layer over the iframe so taps hit our listener instead of RedGIFs
-            const blocker = createElement("div", {
-              style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
-            });
-
-            blocker.addEventListener("click", (e) => {
+            // Intercept clicks directly on the container via capture phase
+            container.addEventListener("click", (e) => {
               e.preventDefault();
               e.stopImmediatePropagation();
               e.stopPropagation();
               openLightbox([src], 0);
             }, true);
-
-            container.appendChild(blocker);
           }
         }
         return;
