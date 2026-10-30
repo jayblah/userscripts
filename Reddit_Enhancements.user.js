@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, social search helpers, and mobile media/font optimizations.
 // @author          JR
-// @version         2.8.0
+// @version         2.7.0
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -651,17 +651,13 @@
 
     const stage = lightbox.querySelector("#pp_stage");
     let g = null;
-
-    // Use capture phase on the lightbox root so we catch touches before the iframe swallows them
     lightbox.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "mouse" || !e.isPrimary) return;
       if (e.target.closest?.("#pp_filmstrip, #pp_lightbox_close, .pp_nav_btn"))
         return;
-
       g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), axis: null, dx: 0, dy: 0 };
       stage.classList.remove("pp_snap");
-    }, true);
-
+    });
     lightbox.addEventListener("pointermove", (e) => {
       if (!g || e.pointerId !== g.id) return;
       g.dx = e.clientX - g.x;
@@ -673,16 +669,17 @@
       if (g.axis === "x" && gallery.images.length > 1) {
         stage.style.transform = `translateX(${g.dx}px)`;
       } else if (g.axis === "y") {
+        // =========================================================
+        // MODIFICATION: Support vertical dragging (up or down) for dismissal
+        // =========================================================
         stage.style.transform = `translateY(${g.dy}px)`;
         stage.style.opacity = String(Math.max(0.3, 1 - Math.abs(g.dy) / 400));
       }
-    }, true);
-
+    });
     const endGesture = (e) => {
       if (!g || e.pointerId !== g.id) return;
       const { axis, dx, dy, t } = g;
       g = null;
-
       const resetStage = (animate) => {
         if (animate) stage.classList.add("pp_snap");
         stage.style.transform = "";
@@ -703,6 +700,9 @@
         navigateGallery(dx < 0 ? 1 : -1);
       } else if (
         axis === "y" &&
+        // =========================================================
+        // MODIFICATION: Trigger close on swipe up or swipe down
+        // =========================================================
         (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 40))
       ) {
         resetStage(false);
@@ -711,8 +711,23 @@
         resetStage(true);
       }
     };
-    lightbox.addEventListener("pointerup", endGesture, true);
-    lightbox.addEventListener("pointercancel", endGesture, true);
+    lightbox.addEventListener("pointerup", endGesture);
+    lightbox.addEventListener("pointercancel", endGesture);
+  }
+
+  function openLightbox(images, startIndex) {
+    attachLightbox();
+    gallery = { images, index: startIndex };
+    lightbox.style.display = "flex";
+    syncLightboxViewport();
+    updateLightboxImage();
+    if (location.hash === "#lightbox") {
+      history.replaceState(
+        history.state,
+        "",
+        location.href.replace("#lightbox", ""),
+      );
+    }
   }
 
   function updateLightboxImage() {
@@ -1718,14 +1733,13 @@
     applyKeywordHighlights,
     applyAllKeywordRules,
 
-  handleImages(post) {
+    handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
+      post.setAttribute("pp-images-handled", "true");
 
       // --- HANDLE REDGIFS / EMBEDS ---
       const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
       if (embedEl) {
-        post.setAttribute("pp-images-handled", "true");
-
         let src = embedEl.getAttribute("src") || "";
         if (!src && embedEl.hasAttribute("html")) {
           const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
@@ -1734,15 +1748,24 @@
 
         if (src) {
           const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
-          if (container) {
+          if (container && !container.querySelector(".pp-embed-blocker")) {
+            container.style.position = "relative";
             container.style.cursor = "zoom-in";
-            // Intercept clicks directly on the container via capture phase
-            container.addEventListener("click", (e) => {
+
+            // Create a physical DOM overlay directly over the iframe to intercept touches/clicks
+            const blocker = createElement("div", {
+              className: "pp-embed-blocker",
+              style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
+            });
+
+            blocker.addEventListener("click", (e) => {
               e.preventDefault();
               e.stopImmediatePropagation();
               e.stopPropagation();
               openLightbox([src], 0);
             }, true);
+
+            container.appendChild(blocker);
           }
         }
         return;
@@ -1752,7 +1775,6 @@
       const isGallery = post.hasAttribute("gallery");
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
-        post.setAttribute("pp-images-handled", "true");
         const galleryPromise = fetchGalleryImages(permalink);
 
         post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
@@ -1762,6 +1784,7 @@
             async (e) => {
               e.preventDefault();
               e.stopImmediatePropagation();
+              e.stopPropagation();
               document
                 .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
                 .forEach((el) => el.remove());
@@ -1798,6 +1821,7 @@
             if (!clickedSrc) return;
             e.preventDefault();
             e.stopImmediatePropagation();
+            e.stopPropagation();
             document
               .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
               .forEach((el) => el.remove());
@@ -1819,7 +1843,6 @@
           true,
         );
       });
-      post.setAttribute("pp-images-handled", "true");
     },
 
     processComments() {
@@ -2178,29 +2201,6 @@
     },
     { passive: false, capture: true },
   );
-
-  document.addEventListener("mouseup", (e) => {
-    const inComment = COMMENT_SELECTORS.some((s) => e.target.closest?.(s));
-    setTimeout(() => {
-      const selection = window.getSelection();
-      const selText = selection.toString().trim();
-      if (selText.length > 0 && inComment) {
-        if (!selectionPopup) {
-          selectionPopup = createSelectionPopup();
-          selectionPopup.btn.addEventListener("click", () => {
-            if (currentSelText)
-              window.open(buildSocialURL(currentSelText), "_blank");
-            selectionPopup.popup.style.display = "none";
-          });
-        }
-        currentSelText = selText;
-        const rect = selection.getRangeAt(0).getBoundingClientRect();
-        selectionPopup.popup.style.left = `${rect.left + window.scrollX + rect.width / 2 - 40}px`;
-        selectionPopup.popup.style.top = `${rect.top + window.scrollY - 40}px`;
-        selectionPopup.popup.style.display = "block";
-      } else if (selectionPopup) selectionPopup.popup.style.display = "none";
-    }, 50);
-  });
 
   // =========================================================
   // MUTATION OBSERVER ENGINE
