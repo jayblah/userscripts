@@ -2114,13 +2114,20 @@
   // GLOBAL CLICK DELEGATION FOR MEDIA & REDGIFS
   // =========================================================
   document.addEventListener("click", async (e) => {
-    // 1. Check for RedGIFs / iframes
-    const embedEl = e.target.closest('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"], [slot="post-media-container"] shreddit-async-loader');
+    const path = e.composedPath();
+
+    // 1. Check for RedGIFs / iframes across shadow boundaries
+    const embedEl = path.find((el) =>
+      el.matches?.('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"], [slot="post-media-container"]')
+    );
+
     if (embedEl) {
-      const iframe = embedEl.querySelector('iframe') || embedEl.closest('shreddit-post')?.querySelector('iframe[src*="redgifs.com"]');
+      const post = path.find((el) => el.matches?.("shreddit-post")) || embedEl.closest("shreddit-post");
+      const iframe = embedEl.querySelector?.('iframe') || post?.querySelector('iframe[src*="redgifs.com"]');
       let src = iframe?.getAttribute("src") || "";
+
       if (!src) {
-        const embedTag = embedEl.closest('shreddit-post')?.querySelector('shreddit-embed[providername="RedGIFs"]');
+        const embedTag = post?.querySelector('shreddit-embed[providername="RedGIFs"]');
         const html = embedTag?.getAttribute("html") || "";
         const match = html.match(/src="([^"]+)"/);
         if (match) src = match[1];
@@ -2135,10 +2142,13 @@
       }
     }
 
-    // 2. Check for Galleries / Images
-    const imgEl = e.target.closest("faceplate-img, img.pp_imageViewable, [data-testid='post-thumbnail']");
+    // 2. Check for Galleries / Images across shadow boundaries
+    const imgEl = path.find((el) =>
+      el.matches?.("faceplate-img, img, [data-testid='post-thumbnail']")
+    );
+
     if (imgEl) {
-      const post = imgEl.closest("shreddit-post");
+      const post = path.find((el) => el.matches?.("shreddit-post")) || imgEl.closest("shreddit-post");
       if (!post) return;
 
       const isGallery = post.hasAttribute("gallery");
