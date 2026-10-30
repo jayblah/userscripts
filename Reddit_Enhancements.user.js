@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.5.28
+// @version         2.5.31
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -391,18 +391,34 @@
 
     .pp_imageViewable { cursor: zoom-in !important; }
 
-    #pp_lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 999999; display: none; flex-direction: column; align-items: center; cursor: zoom-out; user-select: none; box-sizing: border-box; padding-top: 60px; }
-    #pp_lightbox img#pp_lightbox_img { max-width: 90%; max-height: calc(100vh - 60px - 86px); flex: 1 1 0; min-height: 0; align-self: center; pointer-events: none; object-fit: contain; }
-    #pp_filmstrip { flex-shrink: 0; display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto; max-width: 90vw; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
+    #pp_lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 999999; display: none; flex-direction: column; align-items: center; cursor: zoom-out; user-select: none; -webkit-user-select: none; box-sizing: border-box; padding: 56px 0 0; overflow: hidden; overscroll-behavior: contain; touch-action: none; -webkit-tap-highlight-color: transparent; transform-origin: 0 0; }
+    @supports (height: 100dvh) { #pp_lightbox { height: 100dvh; } }
+    #pp_stage { position: relative; flex: 1 1 0; min-height: 0; width: 90%; }
+    #pp_stage.pp_snap { transition: transform 0.18s ease-out, opacity 0.18s ease-out; }
+    #pp_lightbox img#pp_lightbox_img { position: absolute; inset: 0; margin: auto; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; pointer-events: none; }
+    #pp_filmstrip { position: relative; flex-shrink: 0; display: flex; gap: 6px; padding: 10px 12px; box-sizing: border-box; max-width: 90%; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; overscroll-behavior: contain; cursor: default; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
     #pp_filmstrip:empty { display: none; }
     .pp_film_thumb { width: 54px; height: 54px; object-fit: cover; border-radius: 4px; cursor: pointer; opacity: 0.45; border: 2px solid transparent; flex-shrink: 0; transition: opacity 0.15s, border-color 0.15s; }
     .pp_film_thumb:hover { opacity: 0.75; }
     .pp_film_thumb.pp_film_active { opacity: 1; border-color: #ff4500; }
 
+    #pp_lightbox_close { position: absolute; top: 6px; right: 8px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 32px; line-height: 1; cursor: pointer; border-radius: 50%; z-index: 1000001; }
+    #pp_lightbox_close:hover { background: rgba(255,255,255,0.15); }
     .pp_nav_btn { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.1); color: white; border: none; font-size: 28px; cursor: pointer; border-radius: 4px; transition: background 0.2s; z-index: 1000000; box-sizing: border-box; height: 60px; width: 60px; display: flex; justify-content: center; align-items: center; padding: 0; line-height: 1; }
     .pp_nav_btn:hover { background: rgba(255,255,255,0.25); }
     #pp_nav_prev { left: 20px; } #pp_nav_next { right: 20px; }
-    #pp_gallery_counter { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-family: sans-serif; font-size: 14px; background: rgba(0,0,0,0.6); padding: 6px 16px; border-radius: 20px; display: none; z-index: 1000001; }
+    #pp_gallery_counter { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-family: sans-serif; font-size: 14px; background: rgba(0,0,0,0.6); padding: 6px 16px; border-radius: 20px; display: none; z-index: 1000001; }
+
+    /* Touch devices: edge-to-edge image, compact top bar + filmstrip, swipe instead of arrow buttons. */
+    @media (pointer: coarse) {
+      #pp_lightbox { padding-top: calc(52px + env(safe-area-inset-top, 0px)); }
+      #pp_stage { width: 100%; }
+      #pp_filmstrip { max-width: 100%; padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+      .pp_film_thumb { width: 46px; height: 46px; }
+      .pp_nav_btn { display: none !important; }
+      #pp_lightbox_close { top: calc(4px + env(safe-area-inset-top, 0px)); background: rgba(255,255,255,0.12); }
+      #pp_gallery_counter { top: calc(12px + env(safe-area-inset-top, 0px)); }
+    }
 
     .pp_decoder_box { margin: 8px 0; padding: 6px; background: ${DC.bg}; border: 1px solid ${DC.border}; border-radius: 6px; font-family: sans-serif; display: flex; align-items: center; gap: 10px; color: ${DC.text}; }
     .pp_decoder_label { font-size: 10px; font-weight: 900; color: ${DC.accent}; text-transform: uppercase; letter-spacing: 1px; }
@@ -468,6 +484,8 @@
 
     div#pp_float_collapse { position: fixed; z-index: 99999; display: none; cursor: grab; flex-direction: column; align-items: center; justify-content: center; background: rgba(21,24,26,0.9) !important; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.08) !important; border-radius: 8px !important; box-shadow: 0 8px 32px rgba(0,0,0,0.5); width: 34px; padding: 4px 0; box-sizing: border-box; }
     div#pp_float_collapse:active { cursor: grabbing; }
+    div#pp_float_collapse { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    div#pp_float_collapse.pp_dragging, div#pp_float_collapse.pp_dragging * { cursor: grabbing !important; }
     div#pp_float_collapse .pp_collapse_main_btn, div#pp_float_collapse .pp_collapse_sub_btn { display: inline-flex !important; align-items: center !important; justify-content: center !important; width: 26px !important; background: transparent !important; color: #b3b3b3 !important; border: none !important; font-size: 11px !important; font-weight: 600 !important; cursor: pointer !important; border-radius: 4px !important; transition: background 0.2s, color 0.2s !important; user-select: none !important; padding: 0 !important; margin: 0 !important; box-sizing: border-box !important; }
     div#pp_float_collapse .pp_collapse_main_btn { height: 28px !important; color: #ffffff !important; font-size: 9px !important; font-weight: 700 !important; }
     div#pp_float_collapse .pp_collapse_sub_btn { height: 26px !important; }
@@ -491,19 +509,56 @@
     <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">↓</button>
   `;
 
+  /** Gap between the bar and the screen edge. Wider on touch so the grab area clears Android's edge back-gesture zone. */
+  function collapseGap() {
+    return window.matchMedia?.("(pointer: coarse)").matches ? 12 : 8;
+  }
+
+  /** Anchor the bar to the left or right edge with CSS, so it stays on that edge across resizes/rotation. */
+  function anchorCollapseBar(side) {
+    const gap = collapseGap();
+    const s = collapseBtn.style;
+    s.transition = "none";
+    if (side === "right") {
+      s.left = "auto";
+      s.right = `${gap}px`;
+    } else {
+      s.right = "auto";
+      s.left = `${gap}px`;
+    }
+  }
+
+  /** Keep a px-positioned bar fully on screen after rotate/resize/show. */
+  function clampCollapseBar() {
+    const top = parseInt(collapseBtn.style.top, 10);
+    const h = collapseBtn.offsetHeight;
+    if (!Number.isFinite(top) || !h) return;
+    const gap = collapseGap();
+    const maxTop = Math.max(gap, window.innerHeight - h - gap);
+    collapseBtn.style.top = `${Math.min(Math.max(gap, top), maxTop)}px`;
+  }
+
   const _savedPos = lsGet("pp_collapse_pos", null);
-  Object.assign(collapseBtn.style, {
-    top: _savedPos ? _savedPos.top + "px" : "auto",
-    right: _savedPos ? _savedPos.right + "px" : "auto",
-    bottom: _savedPos ? "auto" : "24px",
-    left: _savedPos ? "auto" : "24px",
-  });
+  const _hasSavedPos = Number.isFinite(_savedPos?.top);
+  // Older versions saved { top, right }; derive the side from that.
+  const _collapseSide =
+    _savedPos?.side === "left" || _savedPos?.side === "right"
+      ? _savedPos.side
+      : Number(_savedPos?.right) < window.innerWidth / 2
+        ? "right"
+        : "left";
+  collapseBtn.style.top = _hasSavedPos ? `${_savedPos.top}px` : "auto";
+  collapseBtn.style.bottom = _hasSavedPos ? "auto" : "24px";
+  anchorCollapseBar(_collapseSide);
 
   // =========================================================
   // LIGHTBOX & GALLERY
   // =========================================================
 
   const lightbox = createElement("div", { id: "pp_lightbox" });
+  let _lbSwipeAt = 0; // timestamp of the last swipe, used to swallow a trailing click
+  let _lbSyncRaf = 0;
+
   const closeLightbox = () => {
     lightbox.style.display = "none";
     if (location.hash === "#lightbox") {
@@ -515,14 +570,54 @@
     }
   };
 
+  /**
+   * Fit the lightbox to the *visual* viewport.
+   *
+   * position:fixed + inset:0 tracks the layout viewport. On mobile that is
+   * taller/wider than what's actually on screen when the URL bar is showing,
+   * the page is pinch-zoomed, or "Desktop site" is on, which pushes the close
+   * button and filmstrip off-screen. Sizing from window.visualViewport (and
+   * counter-scaling when zoomed) keeps the whole viewer on screen.
+   * Desktop with no pinch-zoom keeps the plain CSS sizing.
+   */
+  function syncLightboxViewport() {
+    _lbSyncRaf = 0;
+    if (lightbox.style.display !== "flex") return;
+    const vv = window.visualViewport;
+    const st = lightbox.style;
+    const scale = vv?.scale || 1;
+    const unzoomed = Math.abs(scale - 1) < 0.001;
+    const touch = window.matchMedia?.("(pointer: coarse)").matches;
+    if (!vv || (!touch && unzoomed)) {
+      ["top", "left", "right", "bottom", "width", "height", "transform"].forEach(
+        (p) => st.removeProperty(p),
+      );
+      return;
+    }
+    st.top = "0";
+    st.left = "0";
+    st.right = "auto";
+    st.bottom = "auto";
+    st.width = `${vv.width * scale}px`;
+    st.height = `${vv.height * scale}px`;
+    st.transform =
+      unzoomed && !vv.offsetLeft && !vv.offsetTop
+        ? ""
+        : `translate(${vv.offsetLeft}px, ${vv.offsetTop}px) scale(${1 / scale})`;
+  }
+
+  const queueLightboxSync = () => {
+    if (!_lbSyncRaf) _lbSyncRaf = requestAnimationFrame(syncLightboxViewport);
+  };
+
   function attachLightbox() {
     if (document.documentElement.contains(lightbox)) return;
     document.documentElement.appendChild(lightbox);
 
     lightbox.innerHTML = `
-      <div id="pp_lightbox_close" style="position:absolute;top:20px;right:20px;color:white;font-size:32px;cursor:pointer;z-index:1000001;line-height:1;" title="Close [Esc]">&times;</div>
+      <div id="pp_lightbox_close" title="Close [Esc]">&times;</div>
       <div id="pp_nav_prev" class="pp_nav_btn" title="Previous [A]">&#10094;</div>
-      <img id="pp_lightbox_img" src="" alt="Enlarged View">
+      <div id="pp_stage"><img id="pp_lightbox_img" src="" alt="Enlarged View"></div>
       <div id="pp_nav_next" class="pp_nav_btn" title="Next [D]">&#10095;</div>
       <div id="pp_gallery_counter">1 / 1</div>
       <div id="pp_filmstrip"></div>
@@ -537,16 +632,86 @@
       navigateGallery(1),
     );
     lightbox.onclick = (e) => {
-      if (e.target === lightbox || e.target.id === "pp_lightbox_img")
+      if (Date.now() - _lbSwipeAt < 400) return;
+      if (
+        e.target === lightbox ||
+        e.target.id === "pp_stage" ||
+        e.target.id === "pp_lightbox_img"
+      )
         closeLightbox();
     };
+
+    // Keep the viewer fitted when the URL bar shows/hides, on rotate, or on pinch-zoom.
+    window.visualViewport?.addEventListener("resize", queueLightboxSync);
+    window.visualViewport?.addEventListener("scroll", queueLightboxSync);
+    window.addEventListener("resize", queueLightboxSync);
+    window.addEventListener("orientationchange", queueLightboxSync);
+
+    // Touch gestures: swipe left/right = prev/next, swipe down = close.
+    const stage = lightbox.querySelector("#pp_stage");
+    let g = null;
+    lightbox.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" || !e.isPrimary) return;
+      if (e.target.closest?.("#pp_filmstrip, #pp_lightbox_close, .pp_nav_btn"))
+        return;
+      g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), axis: null, dx: 0, dy: 0 };
+      stage.classList.remove("pp_snap");
+    });
+    lightbox.addEventListener("pointermove", (e) => {
+      if (!g || e.pointerId !== g.id) return;
+      g.dx = e.clientX - g.x;
+      g.dy = e.clientY - g.y;
+      if (!g.axis) {
+        if (Math.max(Math.abs(g.dx), Math.abs(g.dy)) < 10) return;
+        g.axis = Math.abs(g.dx) > Math.abs(g.dy) ? "x" : "y";
+      }
+      if (g.axis === "x" && gallery.images.length > 1) {
+        stage.style.transform = `translateX(${g.dx}px)`;
+      } else if (g.axis === "y" && g.dy > 0) {
+        stage.style.transform = `translateY(${g.dy}px)`;
+        stage.style.opacity = String(Math.max(0.3, 1 - g.dy / 400));
+      }
+    });
+    const endGesture = (e) => {
+      if (!g || e.pointerId !== g.id) return;
+      const { axis, dx, dy, t } = g;
+      g = null;
+      const resetStage = (animate) => {
+        if (animate) stage.classList.add("pp_snap");
+        stage.style.transform = "";
+        stage.style.opacity = "";
+      };
+      if (e.type === "pointercancel" || !axis) {
+        resetStage(false); // plain tap: the click handler closes the viewer
+        return;
+      }
+      _lbSwipeAt = Date.now();
+      const fast = Date.now() - t < 300;
+      if (
+        axis === "x" &&
+        gallery.images.length > 1 &&
+        (Math.abs(dx) > 60 || (fast && Math.abs(dx) > 30))
+      ) {
+        resetStage(false);
+        navigateGallery(dx < 0 ? 1 : -1);
+      } else if (axis === "y" && dy > 90) {
+        resetStage(false);
+        closeLightbox();
+      } else {
+        resetStage(true);
+      }
+    };
+    lightbox.addEventListener("pointerup", endGesture);
+    lightbox.addEventListener("pointercancel", endGesture);
   }
 
   function openLightbox(images, startIndex) {
     attachLightbox();
     gallery = { images, index: startIndex };
-    updateLightboxImage();
+    // Show + size first so the filmstrip can measure itself when it centers the active thumb.
     lightbox.style.display = "flex";
+    syncLightboxViewport();
+    updateLightboxImage();
     // Prevent Reddit's #lightbox hash from triggering its native viewer
     if (location.hash === "#lightbox") {
       history.replaceState(
@@ -581,13 +746,17 @@
       // image URL), not just when the image count changes — that would fail if
       // two different galleries happen to have the same number of images.
       const galleryKey = gallery.images[0] ?? "";
+      let rebuilt = false;
       if (filmstrip.dataset.galleryKey !== galleryKey) {
+        rebuilt = true;
         filmstrip.dataset.galleryKey = galleryKey;
         filmstrip.innerHTML = "";
         gallery.images.forEach((src, i) => {
           const thumb = createElement("img", {
             className: "pp_film_thumb",
             src: decodeAmp(src),
+            loading: "lazy",
+            decoding: "async",
           });
           thumb.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -600,11 +769,17 @@
       Array.from(filmstrip.children).forEach((t, i) =>
         t.classList.toggle("pp_film_active", i === gallery.index),
       );
-      filmstrip.children[gallery.index]?.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "center",
-      });
+      // Scroll only the filmstrip. scrollIntoView() also scrolls every ancestor
+      // (including the page) and was dragging the viewport around on mobile.
+      const active = filmstrip.children[gallery.index];
+      if (active) {
+        const left =
+          active.offsetLeft - (filmstrip.clientWidth - active.offsetWidth) / 2;
+        filmstrip.scrollTo({
+          left: Math.max(0, left),
+          behavior: rebuilt ? "auto" : "smooth",
+        });
+      }
     }
   }
 
@@ -1402,6 +1577,7 @@
     collapseBtn.style.display = window.location.href.includes("/comments/")
       ? "flex"
       : "none";
+    clampCollapseBar();
     const pageCtx = getPageContext();
     if (pageCtx.type === "user") {
       document.documentElement.setAttribute("data-pp-page", "user");
@@ -1543,6 +1719,25 @@
         el.style.display = "none";
         el.setAttribute("pp-award-hidden", "true");
       });
+    },
+    /**
+     * Hide the "This account has been permanently banned" banner.
+     * It is a shadow-DOM component, so match the inner banner by its text
+     * (checked in the shadow DOM and in the host's light DOM) and hide the host.
+     */
+    nukeBanBanner() {
+      deepQueryAll(document, 'div[role="banner"].banner.error').forEach(
+        (inner) => {
+          const host = inner.getRootNode()?.host;
+          const text = `${inner.textContent} ${host?.textContent ?? ""}`;
+          if (!/account has been (permanently )?(banned|suspended)/i.test(text))
+            return;
+          const target = host ?? inner;
+          if (target.hasAttribute("pp-ban-hidden")) return;
+          target.style.setProperty("display", "none", "important");
+          target.setAttribute("pp-ban-hidden", "true");
+        },
+      );
     },
     injectAccountBadge,
     injectFilterMenuEntry,
@@ -1732,49 +1927,101 @@
   // EVENT LISTENERS
   // =========================================================
 
-  collapseBtn.addEventListener("mousedown", (e) => {
-    if (e.target.tagName === "BUTTON" || e.target.id === "pp_collapse_text")
-      return;
-    e.preventDefault();
-    drag.active = true;
-    drag.moved = false;
+  // Drag + edge-snap for the floating toolbar (mouse, touch and pen).
+  // Drag from anywhere on the bar: a tap still hits the button, movement past
+  // the threshold starts a drag and swallows the click that would follow.
+  // On release the bar snaps to the nearest left/right edge; vertical position is free.
+  const DRAG_THRESHOLD = 6;
+  let _collapseClickGuard = 0;
+  let _collapseSettleTimer = 0;
+
+  collapseBtn.addEventListener("pointerdown", (e) => {
+    if (!e.isPrimary || (e.pointerType === "mouse" && e.button !== 0)) return;
     const rect = collapseBtn.getBoundingClientRect();
-    drag.offsetX = e.clientX - rect.left;
-    drag.offsetY = e.clientY - rect.top;
+    drag = {
+      active: true,
+      moved: false,
+      id: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top,
+    };
   });
 
-  document.addEventListener("mousemove", (e) => {
-    if (!drag.active) return;
-    drag.moved = true;
-    collapseBtn.style.left = collapseBtn.style.bottom = "auto";
-    collapseBtn.style.right =
-      Math.max(
-        0,
-        window.innerWidth -
-          (e.clientX - drag.offsetX) -
-          collapseBtn.offsetWidth,
-      ) + "px";
-    collapseBtn.style.top = Math.max(0, e.clientY - drag.offsetY) + "px";
+  collapseBtn.addEventListener("pointermove", (e) => {
+    if (!drag.active || e.pointerId !== drag.id) return;
+    if (!drag.moved) {
+      if (
+        Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) <
+        DRAG_THRESHOLD
+      )
+        return;
+      drag.moved = true;
+      collapseBtn.classList.add("pp_dragging");
+      try {
+        collapseBtn.setPointerCapture(e.pointerId);
+      } catch {}
+    }
+    const maxLeft = Math.max(
+      0,
+      document.documentElement.clientWidth - collapseBtn.offsetWidth,
+    );
+    const maxTop = Math.max(0, window.innerHeight - collapseBtn.offsetHeight);
+    const s = collapseBtn.style;
+    s.transition = "none";
+    s.right = s.bottom = "auto";
+    s.left = `${Math.min(Math.max(0, e.clientX - drag.offsetX), maxLeft)}px`;
+    s.top = `${Math.min(Math.max(0, e.clientY - drag.offsetY), maxTop)}px`;
   });
 
-  const saveCollapsePos = () =>
-    lsSet("pp_collapse_pos", {
-      top: parseInt(collapseBtn.style.top, 10),
-      right: parseInt(collapseBtn.style.right, 10),
-    });
+  function snapCollapseBar() {
+    const gap = collapseGap();
+    const rect = collapseBtn.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const side = rect.left + rect.width / 2 < vw / 2 ? "left" : "right";
+    const maxTop = Math.max(gap, window.innerHeight - rect.height - gap);
+    const top = Math.min(Math.max(gap, rect.top), maxTop);
+    const s = collapseBtn.style;
+    s.transition = "left 0.18s ease-out, top 0.18s ease-out";
+    s.left = `${side === "left" ? gap : vw - rect.width - gap}px`;
+    s.top = `${top}px`;
+    lsSet("pp_collapse_pos", { side, top: Math.round(top) });
+    // After the slide, swap the px position for CSS edge anchoring (resize-proof).
+    clearTimeout(_collapseSettleTimer);
+    _collapseSettleTimer = setTimeout(() => {
+      if (drag.active && drag.moved) return; // grabbed again mid-slide; its own release re-snaps
+      anchorCollapseBar(side);
+    }, 220);
+  }
 
-  document.addEventListener("mouseup", () => {
-    if (!drag.active) return;
+  const endCollapseDrag = (e) => {
+    if (!drag.active || e.pointerId !== drag.id) return;
     drag.active = false;
-    if (drag.moved) saveCollapsePos();
-    drag.moved = false;
-  });
+    collapseBtn.classList.remove("pp_dragging");
+    try {
+      collapseBtn.releasePointerCapture(e.pointerId);
+    } catch {}
+    if (!drag.moved) return; // plain tap: let the button's click run
+    _collapseClickGuard = Date.now() + 350;
+    snapCollapseBar();
+  };
+  collapseBtn.addEventListener("pointerup", endCollapseDrag);
+  collapseBtn.addEventListener("pointercancel", endCollapseDrag);
 
-  // Persist position even if the tab is closed while a drag is technically
-  // still in progress (e.g. user releases mouse outside the window first).
-  window.addEventListener("beforeunload", () => {
-    if (drag.moved && collapseBtn.style.top) saveCollapsePos();
-  });
+  // Swallow the click that can trail a drag so it doesn't fire a button.
+  collapseBtn.addEventListener(
+    "click",
+    (e) => {
+      if (Date.now() < _collapseClickGuard) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    },
+    true,
+  );
+
+  window.addEventListener("resize", clampCollapseBar);
 
   // Collapse toolbar button wiring
   const collapseActions = [
@@ -2032,6 +2279,7 @@
     debounceTimer = setTimeout(() => {
       Actions.nuke();
       Actions.nukeAwardButtons();
+      Actions.nukeBanBanner();
       Actions.injectAccountBadge();
       Actions.initSidebar();
       Actions.processComments();
@@ -2056,6 +2304,7 @@
     document.documentElement.appendChild(collapseBtn);
     syncCollapseButtonVisibility();
     Actions.processDecoders();
+    Actions.nukeBanBanner();
     Actions.injectAccountBadge();
   }
   document.readyState === "loading"
