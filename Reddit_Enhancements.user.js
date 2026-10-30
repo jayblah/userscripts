@@ -1733,14 +1733,16 @@ function updateLightboxImage() {
         }
 
         if (src) {
-          embedEl.style.cursor = "zoom-in";
-          // Use capture phase directly on the embed element
-          embedEl.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            e.stopPropagation();
-            openLightbox([src], 0);
-          }, true);
+          const mediaContainer = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
+          if (mediaContainer) {
+            mediaContainer.style.cursor = "zoom-in";
+            mediaContainer.addEventListener("click", (e) => {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              e.stopPropagation();
+              openLightbox([src], 0);
+            }, true);
+          }
         }
         return;
       }
@@ -1752,7 +1754,7 @@ function updateLightboxImage() {
         post.setAttribute("pp-images-handled", "true");
         const galleryPromise = fetchGalleryImages(permalink);
 
-        post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
+        post.querySelectorAll("faceplate-img, img, [data-testid='post-thumbnail']").forEach((imgEl) => {
           imgEl.classList.add("pp_imageViewable");
           imgEl.addEventListener(
             "click",
