@@ -492,7 +492,7 @@
     .pp_scope_name_input { flex: 1; min-width: 0; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; color: #fff; font-size: 12px; font-weight: 600; font-family: ui-monospace, SFMono-Regular, monospace; padding: 0 8px; height: 32px; outline: none; box-sizing: border-box; }
 
     #pp_sidebar_wrap { position: fixed; top: 0; right: 0; height: 100%; z-index: 9000; display: flex; align-items: center; pointer-events: none; transition: transform 0.25s ease; }
-    #pp_sidebar_wrap.pp_sb_collapsed { transform: translateX(312px); }
+    #pp_sidebar_wrap.pp_sb_collapsed { transform: translateX(calc(100% - 22px)); }
     #pp_sidebar_tab { pointer-events: all; flex-shrink: 0; width: 22px; height: 56px; background: #000; border-radius: 6px 0 0 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #eeefef; font-size: 13px; user-select: none; transition: background 0.15s; box-shadow: -2px 0 6px rgba(0,0,0,0.5); }
     #pp_sidebar_tab:hover { background: #1a1a1b; }
     #pp_sidebar_inner { pointer-events: all; width: 312px; height: 100%; overflow-y: auto; background: var(--color-neutral-background, #1a1a1b); box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
