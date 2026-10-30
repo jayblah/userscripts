@@ -1733,17 +1733,14 @@ function updateLightboxImage() {
         }
 
         if (src) {
-          const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
-          if (container) {
-            container.style.cursor = "zoom-in";
-            // Intercept clicks directly on the container via capture phase
-            container.addEventListener("click", (e) => {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              e.stopPropagation();
-              openLightbox([src], 0);
-            }, true);
-          }
+          embedEl.style.cursor = "zoom-in";
+          // Use capture phase directly on the embed element
+          embedEl.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            e.stopPropagation();
+            openLightbox([src], 0);
+          }, true);
         }
         return;
       }
@@ -1762,6 +1759,7 @@ function updateLightboxImage() {
             async (e) => {
               e.preventDefault();
               e.stopImmediatePropagation();
+              e.stopPropagation();
               document
                 .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
                 .forEach((el) => el.remove());
@@ -1798,6 +1796,7 @@ function updateLightboxImage() {
             if (!clickedSrc) return;
             e.preventDefault();
             e.stopImmediatePropagation();
+            e.stopPropagation();
             document
               .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
               .forEach((el) => el.remove());
