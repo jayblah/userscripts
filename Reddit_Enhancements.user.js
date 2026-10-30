@@ -613,12 +613,113 @@
     if (!_lbSyncRaf) _lbSyncRaf = requestAnimationFrame(syncLightboxViewport);
   };
 
+  // function attachLightbox() {
+  //   if (document.documentElement.contains(lightbox)) return;
+  //   document.documentElement.appendChild(lightbox);
+
+  //   lightbox.innerHTML = `
+  //     <div id="pp_lightbox_close" title="Close [Esc]">&times;</div>
+  //     <div id="pp_nav_prev" class="pp_nav_btn" title="Previous [A]">&#10094;</div>
+  //     <div id="pp_stage"></div>
+  //     <div id="pp_nav_next" class="pp_nav_btn" title="Next [D]">&#10095;</div>
+  //     <div id="pp_gallery_counter">1 / 1</div>
+  //     <div id="pp_filmstrip"></div>
+  //   `;
+
+  //   lightbox.querySelector("#pp_lightbox_close").onclick =
+  //     withStop(closeLightbox);
+  //   lightbox.querySelector("#pp_nav_prev").onclick = withStop(() =>
+  //     navigateGallery(-1),
+  //   );
+  //   lightbox.querySelector("#pp_nav_next").onclick = withStop(() =>
+  //     navigateGallery(1),
+  //   );
+  //   lightbox.onclick = (e) => {
+  //     if (Date.now() - _lbSwipeAt < 400) return;
+  //     if (
+  //       e.target === lightbox ||
+  //       e.target.id === "pp_stage" ||
+  //       e.target.id === "pp_lightbox_img"
+  //     )
+  //       closeLightbox();
+  //   };
+
+  //   window.visualViewport?.addEventListener("resize", queueLightboxSync);
+  //   window.visualViewport?.addEventListener("scroll", queueLightboxSync);
+  //   window.addEventListener("resize", queueLightboxSync);
+  //   window.addEventListener("orientationchange", queueLightboxSync);
+
+  //   const stage = lightbox.querySelector("#pp_stage");
+  //   let g = null;
+  //   lightbox.addEventListener("pointerdown", (e) => {
+  //     if (e.pointerType === "mouse" || !e.isPrimary) return;
+  //     if (e.target.closest?.("#pp_filmstrip, #pp_lightbox_close, .pp_nav_btn"))
+  //       return;
+  //     g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), axis: null, dx: 0, dy: 0 };
+  //     stage.classList.remove("pp_snap");
+  //   });
+  //   lightbox.addEventListener("pointermove", (e) => {
+  //     if (!g || e.pointerId !== g.id) return;
+  //     g.dx = e.clientX - g.x;
+  //     g.dy = e.clientY - g.y;
+  //     if (!g.axis) {
+  //       if (Math.max(Math.abs(g.dx), Math.abs(g.dy)) < 10) return;
+  //       g.axis = Math.abs(g.dx) > Math.abs(g.dy) ? "x" : "y";
+  //     }
+  //     if (g.axis === "x" && gallery.images.length > 1) {
+  //       stage.style.transform = `translateX(${g.dx}px)`;
+  //     } else if (g.axis === "y") {
+  //       // =========================================================
+  //       // MODIFICATION: Support vertical dragging (up or down) for dismissal
+  //       // =========================================================
+  //       stage.style.transform = `translateY(${g.dy}px)`;
+  //       stage.style.opacity = String(Math.max(0.3, 1 - Math.abs(g.dy) / 400));
+  //     }
+  //   });
+  //   const endGesture = (e) => {
+  //     if (!g || e.pointerId !== g.id) return;
+  //     const { axis, dx, dy, t } = g;
+  //     g = null;
+  //     const resetStage = (animate) => {
+  //       if (animate) stage.classList.add("pp_snap");
+  //       stage.style.transform = "";
+  //       stage.style.opacity = "";
+  //     };
+  //     if (e.type === "pointercancel" || !axis) {
+  //       resetStage(false);
+  //       return;
+  //     }
+  //     _lbSwipeAt = Date.now();
+  //     const fast = Date.now() - t < 300;
+  //     if (
+  //       axis === "x" &&
+  //       gallery.images.length > 1 &&
+  //       (Math.abs(dx) > 60 || (fast && Math.abs(dx) > 30))
+  //     ) {
+  //       resetStage(false);
+  //       navigateGallery(dx < 0 ? 1 : -1);
+  //     } else if (
+  //       axis === "y" &&
+  //       // =========================================================
+  //       // MODIFICATION: Trigger close on swipe up or swipe down
+  //       // =========================================================
+  //       (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 40))
+  //     ) {
+  //       resetStage(false);
+  //       closeLightbox();
+  //     } else {
+  //       resetStage(true);
+  //     }
+  //   };
+  //   lightbox.addEventListener("pointerup", endGesture);
+  //   lightbox.addEventListener("pointercancel", endGesture);
+  // }
   function attachLightbox() {
     if (document.documentElement.contains(lightbox)) return;
     document.documentElement.appendChild(lightbox);
 
+    // Lightbox HTML without the redundant close button
     lightbox.innerHTML = `
-      <div id="pp_lightbox_close" title="Close [Esc]">&times;</div>
       <div id="pp_nav_prev" class="pp_nav_btn" title="Previous [A]">&#10094;</div>
       <div id="pp_stage"></div>
       <div id="pp_nav_next" class="pp_nav_btn" title="Next [D]">&#10095;</div>
@@ -626,8 +727,6 @@
       <div id="pp_filmstrip"></div>
     `;
 
-    lightbox.querySelector("#pp_lightbox_close").onclick =
-      withStop(closeLightbox);
     lightbox.querySelector("#pp_nav_prev").onclick = withStop(() =>
       navigateGallery(-1),
     );
@@ -651,13 +750,16 @@
 
     const stage = lightbox.querySelector("#pp_stage");
     let g = null;
+
     lightbox.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "mouse" || !e.isPrimary) return;
-      if (e.target.closest?.("#pp_filmstrip, #pp_lightbox_close, .pp_nav_btn"))
+      if (e.target.closest?.("#pp_filmstrip, .pp_nav_btn"))
         return;
+
       g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), axis: null, dx: 0, dy: 0 };
       stage.classList.remove("pp_snap");
-    });
+    }, true);
+
     lightbox.addEventListener("pointermove", (e) => {
       if (!g || e.pointerId !== g.id) return;
       g.dx = e.clientX - g.x;
@@ -669,17 +771,16 @@
       if (g.axis === "x" && gallery.images.length > 1) {
         stage.style.transform = `translateX(${g.dx}px)`;
       } else if (g.axis === "y") {
-        // =========================================================
-        // MODIFICATION: Support vertical dragging (up or down) for dismissal
-        // =========================================================
         stage.style.transform = `translateY(${g.dy}px)`;
         stage.style.opacity = String(Math.max(0.3, 1 - Math.abs(g.dy) / 400));
       }
-    });
+    }, true);
+
     const endGesture = (e) => {
       if (!g || e.pointerId !== g.id) return;
       const { axis, dx, dy, t } = g;
       g = null;
+
       const resetStage = (animate) => {
         if (animate) stage.classList.add("pp_snap");
         stage.style.transform = "";
@@ -700,9 +801,6 @@
         navigateGallery(dx < 0 ? 1 : -1);
       } else if (
         axis === "y" &&
-        // =========================================================
-        // MODIFICATION: Trigger close on swipe up or swipe down
-        // =========================================================
         (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 40))
       ) {
         resetStage(false);
@@ -711,8 +809,8 @@
         resetStage(true);
       }
     };
-    lightbox.addEventListener("pointerup", endGesture);
-    lightbox.addEventListener("pointercancel", endGesture);
+    lightbox.addEventListener("pointerup", endGesture, true);
+    lightbox.addEventListener("pointercancel", endGesture, true);
   }
 
   function openLightbox(images, startIndex) {
@@ -749,15 +847,17 @@
       currentUrl.includes("format=mp4");
 
     // Render stage content: Iframe, Video file (with touch shield for swipe-to-close), or Image
+    JavaScript
+
     if (isIframe) {
       stage.innerHTML = `
         <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
-        <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
+        <div style="position:absolute; top:0; left:0; right:48px; bottom:48px; z-index:10; background:transparent; touch-action:none;"></div>
       `;
     } else if (isVideoFile) {
       stage.innerHTML = `
         <video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>
-        <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
+        <div style="position:absolute; top:0; left:0; right:48px; bottom:48px; z-index:10; background:transparent; touch-action:none;"></div>
       `;
     } else {
       stage.innerHTML = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
@@ -1767,7 +1867,7 @@
             container.style.cursor = "zoom-in";
             const blocker = createElement("div", {
               className: "pp-embed-blocker",
-              style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
+              style: "position: absolute; top: 0; left: 0; right: 48px; bottom: 48px; z-index: 10; cursor: zoom-in; background: transparent;"
             });
             blocker.addEventListener("click", (e) => {
               e.preventDefault();
