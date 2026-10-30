@@ -620,9 +620,7 @@
     lightbox.innerHTML = `
       <div id="pp_lightbox_close" title="Close [Esc]">&times;</div>
       <div id="pp_nav_prev" class="pp_nav_btn" title="Previous [A]">&#10094;</div>
-      <div id="pp_stage" style="position:relative;">
-        <div id="pp_gesture_shield" style="position:absolute; inset:0; z-index:10; display:none;"></div>
-      </div>
+      <div id="pp_stage"></div>
       <div id="pp_nav_next" class="pp_nav_btn" title="Next [D]">&#10095;</div>
       <div id="pp_gallery_counter">1 / 1</div>
       <div id="pp_filmstrip"></div>
@@ -652,9 +650,9 @@
     window.addEventListener("orientationchange", queueLightboxSync);
 
     const stage = lightbox.querySelector("#pp_stage");
-    const shield = lightbox.querySelector("#pp_gesture_shield");
     let g = null;
 
+    // Use capture phase on the lightbox root so we catch touches before the iframe swallows them
     lightbox.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "mouse" || !e.isPrimary) return;
       if (e.target.closest?.("#pp_filmstrip, #pp_lightbox_close, .pp_nav_btn"))
@@ -662,10 +660,7 @@
 
       g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), axis: null, dx: 0, dy: 0 };
       stage.classList.remove("pp_snap");
-
-      // Activate the shield over the iframe so touch moves are registered by the lightbox instead of swallowed by the iframe
-      if (shield) shield.style.display = "block";
-    });
+    }, true);
 
     lightbox.addEventListener("pointermove", (e) => {
       if (!g || e.pointerId !== g.id) return;
@@ -681,15 +676,12 @@
         stage.style.transform = `translateY(${g.dy}px)`;
         stage.style.opacity = String(Math.max(0.3, 1 - Math.abs(g.dy) / 400));
       }
-    });
+    }, true);
 
     const endGesture = (e) => {
       if (!g || e.pointerId !== g.id) return;
       const { axis, dx, dy, t } = g;
       g = null;
-
-      // Hide shield again so interaction with the video controls/iframe resumes when not swiping
-      if (shield) shield.style.display = "none";
 
       const resetStage = (animate) => {
         if (animate) stage.classList.add("pp_snap");
@@ -719,23 +711,8 @@
         resetStage(true);
       }
     };
-    lightbox.addEventListener("pointerup", endGesture);
-    lightbox.addEventListener("pointercancel", endGesture);
-  }
-
-  function openLightbox(images, startIndex) {
-    attachLightbox();
-    gallery = { images, index: startIndex };
-    lightbox.style.display = "flex";
-    syncLightboxViewport();
-    updateLightboxImage();
-    if (location.hash === "#lightbox") {
-      history.replaceState(
-        history.state,
-        "",
-        location.href.replace("#lightbox", ""),
-      );
-    }
+    lightbox.addEventListener("pointerup", endGesture, true);
+    lightbox.addEventListener("pointercancel", endGesture, true);
   }
 
   function updateLightboxImage() {
