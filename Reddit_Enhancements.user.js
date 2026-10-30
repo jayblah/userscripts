@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, social search helpers, and mobile media/font optimizations.
 // @author          JR
-// @version         2.7.0
+// @version         2.8.2
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -113,7 +113,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.7.0";
+  const VERSION = "2.8.2";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -201,6 +201,12 @@
   const decodeAmp = (s) => s.replaceAll("&amp;", "&");
   const buildSocialURL = (q) =>
     `https://www.google.com/search?q=${encodeURIComponent(`${q} (${SOCIAL_SITE_CLAUSE})`)}`;
+
+  // XenForo re-runs the query from q= when the search ID in the path isn't one
+  // it has stored for you, so a dummy ID works. If SimpCity changes behavior,
+  // this is the only place to fix.
+  const buildSimpCityUrl = (q, titleOnly = false) =>
+    `https://simpcity.cr/search/1/?q=${encodeURIComponent(q)}${titleOnly ? "&c[title_only]=1" : ""}&o=relevance`;
 
   const buildRedditSearchUrl = (q, sub) =>
     sub
@@ -386,20 +392,20 @@
       shreddit-post h1,
       shreddit-post h2,
       shreddit-post a[id^="post-title"] {
-        font-size: 1.15rem !important;
+        font-size: 1.3rem !important;
         line-height: 1.35 !important;
       }
       shreddit-post [slot="text-body"],
       shreddit-post .md,
       shreddit-post p {
-        font-size: 1.05rem !important;
+        font-size: 1.2rem !important;
         line-height: 1.5 !important;
       }
       shreddit-comment [slot="comment"],
       shreddit-comment [id$="-comment-rt"],
       shreddit-comment .md,
       shreddit-comment p {
-        font-size: 1.05rem !important;
+        font-size: 1.2rem !important;
         line-height: 1.45 !important;
       }
       shreddit-comment [slot="commentHeader"] {
@@ -409,9 +415,13 @@
 
     .pp_imageViewable { cursor: zoom-in !important; }
 
+    /* AutoModerator fallback stub (used when Reddit's native collapse fails) */
+    shreddit-comment[pp-am-stub]:not([pp-am-open]) { display: none !important; }
+    .pp_am_stub { margin: 4px 0; padding: 8px 12px; background: ${DC.bg}; border: 1px solid ${DC.border}; border-radius: 6px; color: rgba(255,255,255,0.55); font: 600 13px sans-serif; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+
     #pp_lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 999999; display: none; flex-direction: column; align-items: center; cursor: zoom-out; user-select: none; -webkit-user-select: none; box-sizing: border-box; padding: 56px 0 0; overflow: hidden; overscroll-behavior: contain; touch-action: none; -webkit-tap-highlight-color: transparent; transform-origin: 0 0; }
     @supports (height: 100dvh) { #pp_lightbox { height: 100dvh; } }
-    #pp_stage { position: relative; flex: 1 1 0; min-height: 0; width: 90%; }
+    #pp_stage { position: relative; flex: 1 1 0; min-height: 0; width: 90%; overflow: hidden; }
     #pp_stage.pp_snap { transition: transform 0.18s ease-out, opacity 0.18s ease-out; }
     #pp_lightbox img#pp_lightbox_img { position: absolute; inset: 0; margin: auto; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; pointer-events: none; }
     #pp_filmstrip { position: relative; flex-shrink: 0; display: flex; gap: 6px; padding: 10px 12px; box-sizing: border-box; max-width: 90%; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; overscroll-behavior: contain; cursor: default; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
@@ -426,6 +436,9 @@
     .pp_nav_btn:hover { background: rgba(255,255,255,0.25); }
     #pp_nav_prev { left: 20px; } #pp_nav_next { right: 20px; }
     #pp_gallery_counter { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-family: sans-serif; font-size: 14px; background: rgba(0,0,0,0.6); padding: 6px 16px; border-radius: 20px; display: none; z-index: 1000001; }
+
+    /* Videos/embeds use the full screen; the top strip was reserved for a close button that no longer exists. */
+    #pp_lightbox.pp_lb_media { padding-top: env(safe-area-inset-top, 0px) !important; }
 
     @media (pointer: coarse) {
       #pp_lightbox { padding-top: calc(52px + env(safe-area-inset-top, 0px)); }
@@ -572,7 +585,41 @@
   let _lbSwipeAt = 0;
   let _lbSyncRaf = 0;
 
+  // Pinch-zoom state. Applied as a transform on #pp_zoom (inside the stage),
+  // so it never fights with the stage's own swipe transform.
+  const ZOOM_MAX = 6;
+  let _zoom = { s: 1, x: 0, y: 0 };
+
+  function applyZoom(animate) {
+    const el = lightbox.querySelector("#pp_zoom");
+    if (!el) return;
+    el.style.transition = animate ? "transform 0.18s ease-out" : "none";
+    el.style.transform =
+      _zoom.s === 1 && !_zoom.x && !_zoom.y
+        ? ""
+        : `translate(${_zoom.x}px, ${_zoom.y}px) scale(${_zoom.s})`;
+  }
+
+  function clampZoom() {
+    const stage = lightbox.querySelector("#pp_stage");
+    if (!stage || _zoom.s <= 1) {
+      _zoom = { s: 1, x: 0, y: 0 };
+      return;
+    }
+    const W = stage.clientWidth;
+    const H = stage.clientHeight;
+    _zoom.s = Math.min(_zoom.s, ZOOM_MAX);
+    _zoom.x = Math.min(0, Math.max(W - W * _zoom.s, _zoom.x));
+    _zoom.y = Math.min(0, Math.max(H - H * _zoom.s, _zoom.y));
+  }
+
+  function resetZoom(animate) {
+    _zoom = { s: 1, x: 0, y: 0 };
+    applyZoom(animate);
+  }
+
   const closeLightbox = () => {
+    _zoom = { s: 1, x: 0, y: 0 };
     lightbox.style.display = "none";
     if (location.hash === "#lightbox") {
       history.replaceState(
@@ -735,9 +782,15 @@
     );
     lightbox.onclick = (e) => {
       if (Date.now() - _lbSwipeAt < 400) return;
+      // While zoomed in, a plain tap resets zoom instead of closing.
+      if (_zoom.s > 1.001) {
+        resetZoom(true);
+        return;
+      }
       if (
         e.target === lightbox ||
         e.target.id === "pp_stage" ||
+        e.target.id === "pp_zoom" ||
         e.target.id === "pp_lightbox_img"
       )
         closeLightbox();
@@ -751,16 +804,115 @@
     const stage = lightbox.querySelector("#pp_stage");
     let g = null;
 
+    // ---- Pinch zoom / pan (touch only) ----
+    const pointers = new Map();
+    let pinch = null;
+    let pan = null;
+
+    const toStageLocal = (x, y) => {
+      const r = stage.getBoundingClientRect();
+      return { x: x - r.left, y: y - r.top };
+    };
+    const pinchMetrics = () => {
+      const [a, b] = [...pointers.values()];
+      return {
+        d: Math.hypot(a.x - b.x, a.y - b.y),
+        mx: (a.x + b.x) / 2,
+        my: (a.y + b.y) / 2,
+      };
+    };
+    const beginPinch = () => {
+      // Cancel any swipe in progress.
+      g = null;
+      pan = null;
+      stage.classList.remove("pp_snap");
+      stage.style.transform = "";
+      stage.style.opacity = "";
+      const m = pinchMetrics();
+      const l = toStageLocal(m.mx, m.my);
+      pinch = {
+        d0: Math.max(m.d, 1),
+        s0: _zoom.s,
+        cx: (l.x - _zoom.x) / _zoom.s,
+        cy: (l.y - _zoom.y) / _zoom.s,
+      };
+    };
+    const movePinch = () => {
+      const m = pinchMetrics();
+      const l = toStageLocal(m.mx, m.my);
+      const s1 = Math.min(ZOOM_MAX, Math.max(0.5, (pinch.s0 * m.d) / pinch.d0));
+      _zoom.s = s1;
+      _zoom.x = l.x - pinch.cx * s1;
+      _zoom.y = l.y - pinch.cy * s1;
+      applyZoom(false);
+    };
+    const beginPan = (id, x, y) => {
+      pan = { id, x, y, zx: _zoom.x, zy: _zoom.y, moved: false };
+    };
+    const movePan = (e) => {
+      const dx = e.clientX - pan.x;
+      const dy = e.clientY - pan.y;
+      if (!pan.moved && Math.hypot(dx, dy) < 6) return;
+      pan.moved = true;
+      _zoom.x = pan.zx + dx;
+      _zoom.y = pan.zy + dy;
+      clampZoom();
+      applyZoom(false);
+    };
+    const endZoomPointer = (e) => {
+      pointers.delete(e.pointerId);
+      if (pinch && pointers.size < 2) {
+        pinch = null;
+        _lbSwipeAt = Date.now();
+        clampZoom(); // snaps back to 1x if pinched below it
+        applyZoom(true);
+        // One finger still down while zoomed in: keep going as a pan.
+        const rest = pointers.entries().next().value;
+        if (rest && _zoom.s > 1.001) beginPan(rest[0], rest[1].x, rest[1].y);
+      } else if (pan && e.pointerId === pan.id) {
+        if (pan.moved) _lbSwipeAt = Date.now();
+        pan = null;
+      }
+    };
+
     lightbox.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "mouse" || !e.isPrimary) return;
-      if (e.target.closest?.("#pp_filmstrip, .pp_nav_btn"))
+      if (e.pointerType === "mouse") return;
+      if (e.target.closest?.("#pp_filmstrip, .pp_nav_btn")) return;
+      if (e.isPrimary) {
+        // First finger of a new gesture: drop any stale state.
+        pointers.clear();
+        pinch = null;
+        pan = null;
+      }
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) {
+        beginPinch();
         return;
+      }
+      if (pointers.size > 2 || !e.isPrimary) return;
+      if (_zoom.s > 1.001) {
+        beginPan(e.pointerId, e.clientX, e.clientY);
+        return;
+      }
 
       g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), axis: null, dx: 0, dy: 0 };
       stage.classList.remove("pp_snap");
     }, true);
 
     lightbox.addEventListener("pointermove", (e) => {
+      const tracked = pointers.get(e.pointerId);
+      if (tracked) {
+        tracked.x = e.clientX;
+        tracked.y = e.clientY;
+      }
+      if (pinch && pointers.size >= 2) {
+        movePinch();
+        return;
+      }
+      if (pan && e.pointerId === pan.id) {
+        movePan(e);
+        return;
+      }
       if (!g || e.pointerId !== g.id) return;
       g.dx = e.clientX - g.x;
       g.dy = e.clientY - g.y;
@@ -777,6 +929,7 @@
     }, true);
 
     const endGesture = (e) => {
+      endZoomPointer(e);
       if (!g || e.pointerId !== g.id) return;
       const { axis, dx, dy, t } = g;
       g = null;
@@ -845,20 +998,25 @@
       currentUrl.includes(".mov") ||
       currentUrl.includes("format=mp4");
 
-    // Render stage content: Iframe, Video file, or Image
+    lightbox.classList.toggle("pp_lb_media", isIframe || isVideoFile);
+
+    // Render stage content: Iframe, Video file, or Image.
+    // Media goes inside #pp_zoom (the pinch-zoom target). The touch-catching
+    // overlay for iframes/videos stays outside it so it never moves or scales.
+    let media;
+    let overlay = "";
+    const overlayHtml = `<div style="position:absolute; top:0; left:0; right:48px; bottom:48px; z-index:10; background:transparent; touch-action:none;"></div>`;
     if (isIframe) {
-      stage.innerHTML = `
-        <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
-        <div style="position:absolute; top:0; left:0; right:48px; bottom:48px; z-index:10; background:transparent; touch-action:none;"></div>
-      `;
+      media = `<iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>`;
+      overlay = overlayHtml;
     } else if (isVideoFile) {
-      stage.innerHTML = `
-        <video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>
-        <div style="position:absolute; top:0; left:0; right:48px; bottom:48px; z-index:10; background:transparent; touch-action:none;"></div>
-      `;
+      media = `<video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>`;
+      overlay = overlayHtml;
     } else {
-      stage.innerHTML = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+      media = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
     }
+    stage.innerHTML = `<div id="pp_zoom" style="position:absolute; inset:0; transform-origin:0 0;">${media}</div>${overlay}`;
+    _zoom = { s: 1, x: 0, y: 0 };
 
     const multi = gallery.images.length > 1 && !isIframe && !isVideoFile;
 
@@ -1728,20 +1886,41 @@
 
   function createTranslationComponent(type, translatedText) {
     const container = createElement("div", { className: "pp_decoder_box" });
+    const SEARCH_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" style="display:block"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>`;
+    const COPY_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" style="display:block"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>`;
     const copyBtn = createElement("button", {
       className: "pp_decoder_btn",
-      textContent: "COPY",
+      title: "Copy",
       style: `background:${DC.border};color:${DC.text}`,
     });
+    copyBtn.innerHTML = COPY_ICON;
     copyBtn.onclick = () => {
       navigator.clipboard.writeText(translatedText).then(() => {
-        copyBtn.textContent = "DONE";
+        copyBtn.innerHTML = `<span style="font-size:14px">✓</span>`;
         copyBtn.style.background = DC.success;
         setTimeout(() => {
-          copyBtn.textContent = "COPY";
+          copyBtn.innerHTML = COPY_ICON;
           copyBtn.style.background = DC.border;
         }, 1000);
       });
+    };
+
+    // Two-stage SimpCity search: 1st tap = title-only, later taps = whole site.
+    // Stage lives in this closure, so it resets whenever the box is rebuilt
+    // (page reload / navigation).
+    let scStage = 0;
+    // ◎ bullseye = title search (stage 0), ◉ fisheye = whole site (stage 1).
+    const scBtn = createElement("button", {
+      className: "pp_decoder_btn",
+      textContent: "◎",
+      style: `background:#1E88DB;color:white;font-size:15px`,
+    });
+    scBtn.onclick = () => {
+      window.open(buildSimpCityUrl(translatedText, scStage === 0), "_blank");
+      if (scStage === 0) {
+        scStage = 1;
+        scBtn.textContent = "◉";
+      }
     };
 
     container.append(
@@ -1754,9 +1933,10 @@
         textContent: translatedText,
       }),
       copyBtn,
+      scBtn,
       createElement("button", {
         className: "pp_decoder_btn",
-        textContent: "SEARCH",
+        innerHTML: SEARCH_ICON,
         style: `background:${DC.accent};color:white`,
         onclick: () => window.open(buildSocialURL(translatedText), "_blank"),
       }),
@@ -1807,6 +1987,50 @@
   // =========================================================
   // ACTIONS PIPELINE
   // =========================================================
+
+  // =========================================================
+  // AUTOMODERATOR AUTO-COLLAPSE
+  // =========================================================
+
+  const isAutoMod = (c) =>
+    (c.getAttribute("author") || "").toLowerCase() === "automoderator";
+
+  // Fallback: hide the comment behind our own tap-to-expand bar. Doesn't
+  // depend on any Reddit internals.
+  function stubAutoMod(comment) {
+    if (comment.hasAttribute("pp-am-stub") || !comment.parentNode) return;
+    comment.setAttribute("pp-am-stub", "true");
+    const label = (open) =>
+      open ? "▾ AutoModerator — tap to collapse" : "▸ AutoModerator — tap to expand";
+    const bar = createElement("div", {
+      className: "pp_am_stub",
+      textContent: label(false),
+      onclick: () => {
+        bar.textContent = label(comment.toggleAttribute("pp-am-open"));
+      },
+    });
+    if (comment.slot) bar.slot = comment.slot;
+    comment.parentNode.insertBefore(bar, comment);
+  }
+
+  // Try Reddit's native collapse first; if the comment doesn't actually get
+  // shorter, fall back to the stub.
+  function collapseAutoMod(comment) {
+    comment.setAttribute("pp-am-collapsed", "true");
+    const before = comment.offsetHeight;
+    let tried = false;
+    if (typeof comment.handleCollapse === "function") {
+      try {
+        comment.handleCollapse(true);
+        tried = true;
+      } catch {}
+    }
+    setTimeout(() => {
+      if (!comment.isConnected) return;
+      if (tried && before > 0 && comment.offsetHeight < before - 20) return;
+      stubAutoMod(comment);
+    }, 800);
+  }
 
   const Actions = {
     nuke() {
@@ -1987,16 +2211,10 @@
       document
         .querySelectorAll("shreddit-comment:not([pp-checked])")
         .forEach((comment) => {
-          if (
-            comment.getAttribute("author") === "AutoModerator" &&
-            !comment.hasAttribute("pp-am-collapsed")
-          ) {
-            if (typeof comment.handleCollapse === "function") {
-              comment.handleCollapse(true);
-              comment.setAttribute("pp-am-collapsed", "true");
-            } else {
-              return;
-            }
+          if (isAutoMod(comment) && !comment.hasAttribute("pp-am-collapsed")) {
+            // Element not upgraded yet: skip, retried on the next pass.
+            if (!customElements.get("shreddit-comment")) return;
+            collapseAutoMod(comment);
           }
           if (comment.shadowRoot && !comment.hasAttribute("pp-shadow-styled")) {
             const color =
@@ -2386,6 +2604,7 @@
     document.documentElement.appendChild(collapseBtn);
     syncCollapseButtonVisibility();
     Actions.processDecoders();
+    Actions.processComments();
     Actions.nukeBanBanner();
     Actions.injectAccountBadge();
   }
