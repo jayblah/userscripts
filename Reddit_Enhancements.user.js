@@ -740,17 +740,24 @@
 
   //   const currentUrl = decodeAmp(gallery.images[gallery.index]);
   //   const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
+  //   const isVideoFile = currentUrl.includes(".mp4") || currentUrl.includes(".webm") || currentUrl.includes(".mov");
 
-  //   // Render stage content (iframe with touch shield vs standard image)
-  //   stage.innerHTML = isIframe
-  //     ? `
+  //   // Render stage content: Iframe, Video file (with touch shield), or Standard Image
+  //   if (isIframe) {
+  //     stage.innerHTML = `
   //       <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
   //       <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
-  //     `
-  //     : `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+  //     `;
+  //   } else if (isVideoFile) {
+  //     stage.innerHTML = `
+  //       <video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>
+  //       <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
+  //     `;
+  //   } else {
+  //     stage.innerHTML = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+  //   }
 
-  //   // Multi applies to galleries (more than 1 image and NOT an iframe)
-  //   const multi = gallery.images.length > 1 && !isIframe;
+  //   const multi = gallery.images.length > 1 && !isIframe && !isVideoFile;
 
   //   if (prevEl) prevEl.style.display = multi ? "flex" : "none";
   //   if (nextEl) nextEl.style.display = multi ? "flex" : "none";
@@ -760,9 +767,8 @@
   //       counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
   //   }
 
-  //   // Filmstrip should only hide for single items or iframes; standard galleries keep it
   //   if (filmstrip) {
-  //     if (isIframe || gallery.images.length <= 1) {
+  //     if (isIframe || isVideoFile || gallery.images.length <= 1) {
   //       filmstrip.style.display = "none";
   //       filmstrip.innerHTML = "";
   //       filmstrip.dataset.galleryKey = "";
@@ -804,7 +810,7 @@
   //     }
   //   }
   // }
-  function updateLightboxImage() {
+function updateLightboxImage() {
     if (!gallery.images.length) return;
     const stage = lightbox.querySelector("#pp_stage");
     const counterEl = lightbox.querySelector("#pp_gallery_counter");
@@ -816,7 +822,7 @@
     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
     const isVideoFile = currentUrl.includes(".mp4") || currentUrl.includes(".webm") || currentUrl.includes(".mov");
 
-    // Render stage content: Iframe, Video file (with touch shield), or Standard Image
+    // Render stage content: Iframe, Video file (with touch shield for swipe-to-close), or Image
     if (isIframe) {
       stage.innerHTML = `
         <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
@@ -841,6 +847,7 @@
         counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
     }
 
+    // Filmstrip is hidden for iframes/videos, but works normally for multi-image galleries
     if (filmstrip) {
       if (isIframe || isVideoFile || gallery.images.length <= 1) {
         filmstrip.style.display = "none";
@@ -1936,58 +1943,71 @@
     // },
 handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
-      post.setAttribute("pp-images-handled", "true");
 
-      // --- HANDLE REDGIFS, SHREDDIT PLAYERS & EMBEDS ---
+      // --- 1. HANDLE REDGIFS / EMBEDS ---
       const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
-      const shredditPlayer = post.querySelector('shreddit-player');
-      const videoEl = post.querySelector('video');
-
-      if (embedEl || shredditPlayer || videoEl) {
-        let src = "";
-        if (embedEl) {
-          src = embedEl.getAttribute("src") || "";
-          if (!src && embedEl.hasAttribute("html")) {
-            const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
-            if (match) src = match[1];
-          }
-        } else if (shredditPlayer) {
-          src = shredditPlayer.querySelector('source')?.getAttribute("src") ||
-                shredditPlayer.getAttribute("src") || "";
-        } else if (videoEl) {
-          src = videoEl.getAttribute("src") || videoEl.querySelector("source")?.getAttribute("src") || "";
+      if (embedEl) {
+        post.setAttribute("pp-images-handled", "true");
+        let src = embedEl.getAttribute("src") || "";
+        if (!src && embedEl.hasAttribute("html")) {
+          const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
+          if (match) src = match[1];
         }
 
         if (src) {
-          const targetEl = embedEl || shredditPlayer || videoEl;
-          const container = targetEl.closest('[slot="post-media-container"]') || targetEl.parentElement;
+          const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
           if (container && !container.querySelector(".pp-embed-blocker")) {
             container.style.position = "relative";
             container.style.cursor = "zoom-in";
-
-            // Create a physical DOM overlay directly over the custom player to intercept clicks
             const blocker = createElement("div", {
               className: "pp-embed-blocker",
               style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
             });
-
             blocker.addEventListener("click", (e) => {
               e.preventDefault();
               e.stopImmediatePropagation();
               e.stopPropagation();
               openLightbox([src], 0);
             }, true);
-
             container.appendChild(blocker);
           }
         }
         return;
       }
 
-      // --- EXISTING GALLERY & IMAGE HANDLING ---
+      // --- 2. HANDLE SHREDDIT PLAYERS (NATIVE VIDEOS / GIFS) ---
+      const shredditPlayer = post.querySelector('shreddit-player');
+      if (shredditPlayer) {
+        post.setAttribute("pp-images-handled", "true");
+        const src = shredditPlayer.querySelector('source')?.getAttribute("src") ||
+                    shredditPlayer.getAttribute("src") || "";
+
+        if (src) {
+          const container = shredditPlayer.closest('[slot="post-media-container"]') || shredditPlayer.parentElement;
+          if (container && !container.querySelector(".pp-embed-blocker")) {
+            container.style.position = "relative";
+            container.style.cursor = "zoom-in";
+            const blocker = createElement("div", {
+              className: "pp-embed-blocker",
+              style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
+            });
+            blocker.addEventListener("click", (e) => {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              e.stopPropagation();
+              openLightbox([src], 0);
+            }, true);
+            container.appendChild(blocker);
+          }
+        }
+        return;
+      }
+
+      // --- 3. HANDLE GALLERIES ---
       const isGallery = post.hasAttribute("gallery");
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
+        post.setAttribute("pp-images-handled", "true");
         const galleryPromise = fetchGalleryImages(permalink);
 
         post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
@@ -2019,12 +2039,13 @@ handleImages(post) {
         return;
       }
 
+      // --- 4. HANDLE SINGLE IMAGES ---
       const images = post.querySelectorAll(
         "faceplate-img:not([pp-img-handled]), img:not(.pp_imageViewable)",
       );
       if (!images.length) return;
       images.forEach((imgEl) => {
-        imgEl.classList.add: imgEl.classList.add("pp_imageViewable");
+        imgEl.classList.add("pp_imageViewable");
         if (imgEl.tagName !== "IMG")
           imgEl.setAttribute("pp-img-handled", "true");
         imgEl.addEventListener(
@@ -2056,6 +2077,7 @@ handleImages(post) {
           true,
         );
       });
+      post.setAttribute("pp-images-handled", "true");
     },
 
     processComments() {
