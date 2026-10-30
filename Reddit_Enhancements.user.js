@@ -731,86 +731,87 @@
   }
 
   // function updateLightboxImage() {
-  //   if (!gallery.images.length) return;
-  //   const stage = lightbox.querySelector("#pp_stage");
-  //   const counterEl = lightbox.querySelector("#pp_gallery_counter");
-  //   const prevEl = lightbox.querySelector("#pp_nav_prev");
-  //   const nextEl = lightbox.querySelector("#pp_nav_next");
-  //   const filmstrip = lightbox.querySelector("#pp_filmstrip");
+  //     if (!gallery.images.length) return;
+  //     const stage = lightbox.querySelector("#pp_stage");
+  //     const counterEl = lightbox.querySelector("#pp_gallery_counter");
+  //     const prevEl = lightbox.querySelector("#pp_nav_prev");
+  //     const nextEl = lightbox.querySelector("#pp_nav_next");
+  //     const filmstrip = lightbox.querySelector("#pp_filmstrip");
 
-  //   const currentUrl = decodeAmp(gallery.images[gallery.index]);
-  //   const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
-  //   const isVideoFile = currentUrl.includes(".mp4") || currentUrl.includes(".webm") || currentUrl.includes(".mov");
+  //     const currentUrl = decodeAmp(gallery.images[gallery.index]);
+  //     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
+  //     const isVideoFile = currentUrl.includes(".mp4") || currentUrl.includes(".webm") || currentUrl.includes(".mov");
 
-  //   // Render stage content: Iframe, Video file (with touch shield), or Standard Image
-  //   if (isIframe) {
-  //     stage.innerHTML = `
-  //       <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
-  //       <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
-  //     `;
-  //   } else if (isVideoFile) {
-  //     stage.innerHTML = `
-  //       <video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>
-  //       <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
-  //     `;
-  //   } else {
-  //     stage.innerHTML = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
-  //   }
-
-  //   const multi = gallery.images.length > 1 && !isIframe && !isVideoFile;
-
-  //   if (prevEl) prevEl.style.display = multi ? "flex" : "none";
-  //   if (nextEl) nextEl.style.display = multi ? "flex" : "none";
-  //   if (counterEl) {
-  //     counterEl.style.display = multi ? "block" : "none";
-  //     if (multi)
-  //       counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
-  //   }
-
-  //   if (filmstrip) {
-  //     if (isIframe || isVideoFile || gallery.images.length <= 1) {
-  //       filmstrip.style.display = "none";
-  //       filmstrip.innerHTML = "";
-  //       filmstrip.dataset.galleryKey = "";
+  //     // Render stage content: Iframe, Video file (with touch shield for swipe-to-close), or Image
+  //     if (isIframe) {
+  //       stage.innerHTML = `
+  //         <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
+  //         <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
+  //       `;
+  //     } else if (isVideoFile) {
+  //       stage.innerHTML = `
+  //         <video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>
+  //         <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
+  //       `;
   //     } else {
-  //       filmstrip.style.display = "flex";
-  //       const galleryKey = gallery.images[0] ?? "";
-  //       let rebuilt = false;
-  //       if (filmstrip.dataset.galleryKey !== galleryKey) {
-  //         rebuilt = true;
-  //         filmstrip.dataset.galleryKey = galleryKey;
+  //       stage.innerHTML = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+  //     }
+
+  //     const multi = gallery.images.length > 1 && !isIframe && !isVideoFile;
+
+  //     if (prevEl) prevEl.style.display = multi ? "flex" : "none";
+  //     if (nextEl) nextEl.style.display = multi ? "flex" : "none";
+  //     if (counterEl) {
+  //       counterEl.style.display = multi ? "block" : "none";
+  //       if (multi)
+  //         counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
+  //     }
+
+  //     // Filmstrip is hidden for iframes/videos, but works normally for multi-image galleries
+  //     if (filmstrip) {
+  //       if (isIframe || isVideoFile || gallery.images.length <= 1) {
+  //         filmstrip.style.display = "none";
   //         filmstrip.innerHTML = "";
-  //         gallery.images.forEach((src, i) => {
-  //           const thumb = createElement("img", {
-  //             className: "pp_film_thumb",
-  //             src: decodeAmp(src),
-  //             loading: "lazy",
-  //             decoding: "async",
+  //         filmstrip.dataset.galleryKey = "";
+  //       } else {
+  //         filmstrip.style.display = "flex";
+  //         const galleryKey = gallery.images[0] ?? "";
+  //         let rebuilt = false;
+  //         if (filmstrip.dataset.galleryKey !== galleryKey) {
+  //           rebuilt = true;
+  //           filmstrip.dataset.galleryKey = galleryKey;
+  //           filmstrip.innerHTML = "";
+  //           gallery.images.forEach((src, i) => {
+  //             const thumb = createElement("img", {
+  //               className: "pp_film_thumb",
+  //               src: decodeAmp(src),
+  //               loading: "lazy",
+  //               decoding: "async",
+  //             });
+  //             thumb.addEventListener("click", (e) => {
+  //               e.stopPropagation();
+  //               gallery.index = i;
+  //               updateLightboxImage();
+  //             });
+  //             filmstrip.appendChild(thumb);
   //           });
-  //           thumb.addEventListener("click", (e) => {
-  //             e.stopPropagation();
-  //             gallery.index = i;
-  //             updateLightboxImage();
+  //         }
+  //         Array.from(filmstrip.children).forEach((t, i) =>
+  //           t.classList.toggle("pp_film_active", i === gallery.index),
+  //         );
+  //         const active = filmstrip.children[gallery.index];
+  //         if (active) {
+  //           const left =
+  //             active.offsetLeft - (filmstrip.clientWidth - active.offsetWidth) / 2;
+  //           filmstrip.scrollTo({
+  //             left: Math.max(0, left),
+  //             behavior: rebuilt ? "auto" : "smooth",
   //           });
-  //           filmstrip.appendChild(thumb);
-  //         });
-  //       }
-  //       Array.from(filmstrip.children).forEach((t, i) =>
-  //         t.classList.toggle("pp_film_active", i === gallery.index),
-  //       );
-  //       const active = filmstrip.children[gallery.index];
-  //       if (active) {
-  //         const left =
-  //           active.offsetLeft - (filmstrip.clientWidth - active.offsetWidth) / 2;
-  //         filmstrip.scrollTo({
-  //           left: Math.max(0, left),
-  //           behavior: rebuilt ? "auto" : "smooth",
-  //         });
+  //         }
   //       }
   //     }
   //   }
-  // }
-function updateLightboxImage() {
+  function updateLightboxImage() {
     if (!gallery.images.length) return;
     const stage = lightbox.querySelector("#pp_stage");
     const counterEl = lightbox.querySelector("#pp_gallery_counter");
@@ -820,7 +821,13 @@ function updateLightboxImage() {
 
     const currentUrl = decodeAmp(gallery.images[gallery.index]);
     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
-    const isVideoFile = currentUrl.includes(".mp4") || currentUrl.includes(".webm") || currentUrl.includes(".mov");
+
+    // Updated check: catch standard extensions OR Reddit/query-string video formats
+    const isVideoFile =
+      currentUrl.includes(".mp4") ||
+      currentUrl.includes(".webm") ||
+      currentUrl.includes(".mov") ||
+      currentUrl.includes("format=mp4");
 
     // Render stage content: Iframe, Video file (with touch shield for swipe-to-close), or Image
     if (isIframe) {
@@ -847,7 +854,6 @@ function updateLightboxImage() {
         counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
     }
 
-    // Filmstrip is hidden for iframes/videos, but works normally for multi-image galleries
     if (filmstrip) {
       if (isIframe || isVideoFile || gallery.images.length <= 1) {
         filmstrip.style.display = "none";
@@ -947,7 +953,7 @@ function updateLightboxImage() {
           applyKeywordFilters();
         }
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         _badgeFetchPromise = null;
       });
@@ -1055,8 +1061,8 @@ function updateLightboxImage() {
     const pageData = isAggregate
       ? null
       : getScopesForSub(ctx.sub, Object.keys(allData)).flatMap(
-          (s) => allData[s] || [],
-        );
+        (s) => allData[s] || [],
+      );
 
     document.querySelectorAll("shreddit-post").forEach((post) => {
       const title = getPostTitle(post);
@@ -1329,9 +1335,9 @@ function updateLightboxImage() {
           all[scope][index] = isFilter
             ? val
             : {
-                keywords: splitKeywords(val),
-                color: colorPicker?.value ?? entry.color,
-              };
+              keywords: splitKeywords(val),
+              color: colorPicker?.value ?? entry.color,
+            };
       });
       applyRulesForMode(mode);
       onDone();
@@ -1427,9 +1433,9 @@ function updateLightboxImage() {
         oldScope === "global"
           ? "global"
           : oldScope
-              .split(",")
-              .map((s) => `r/${s.trim()}`)
-              .join(", "),
+            .split(",")
+            .map((s) => `r/${s.trim()}`)
+            .join(", "),
     });
 
     const btnStyle = `height:32px;font-size:11px;line-height:1;display:inline-flex;align-items:center;justify-content:center;`;
@@ -1448,11 +1454,11 @@ function updateLightboxImage() {
         input.value.trim() === "global"
           ? "global"
           : input.value
-              .trim()
-              .split(",")
-              .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
-              .filter(Boolean)
-              .join(",");
+            .trim()
+            .split(",")
+            .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
+            .filter(Boolean)
+            .join(",");
       if (!newScope) return;
       renameScopeInStorage(oldScope, newScope);
       applyAllKeywordRules();
@@ -1941,7 +1947,7 @@ function updateLightboxImage() {
     //     );
     //   });
     // },
-handleImages(post) {
+    handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
 
       // --- 1. HANDLE REDGIFS / EMBEDS ---
@@ -1980,7 +1986,7 @@ handleImages(post) {
       if (shredditPlayer) {
         post.setAttribute("pp-images-handled", "true");
         const src = shredditPlayer.querySelector('source')?.getAttribute("src") ||
-                    shredditPlayer.getAttribute("src") || "";
+          shredditPlayer.getAttribute("src") || "";
 
         if (src) {
           const container = shredditPlayer.closest('[slot="post-media-container"]') || shredditPlayer.parentElement;
@@ -2063,14 +2069,14 @@ handleImages(post) {
               imgEl.closest("gallery-carousel") || imgEl.closest("ul");
             const imgs = galleryContainer
               ? [
-                  ...new Set(
-                    Array.from(
-                      galleryContainer.querySelectorAll("faceplate-img, img"),
-                    )
-                      .map(getImgSrc)
-                      .filter(Boolean),
-                  ),
-                ]
+                ...new Set(
+                  Array.from(
+                    galleryContainer.querySelectorAll("faceplate-img, img"),
+                  )
+                    .map(getImgSrc)
+                    .filter(Boolean),
+                ),
+              ]
               : [clickedSrc];
             openLightbox(imgs, Math.max(0, imgs.indexOf(clickedSrc)));
           },
@@ -2223,7 +2229,7 @@ handleImages(post) {
       collapseBtn.classList.add("pp_dragging");
       try {
         collapseBtn.setPointerCapture(e.pointerId);
-      } catch {}
+      } catch { }
     }
     const maxLeft = Math.max(
       0,
@@ -2262,7 +2268,7 @@ handleImages(post) {
     collapseBtn.classList.remove("pp_dragging");
     try {
       collapseBtn.releasePointerCapture(e.pointerId);
-    } catch {}
+    } catch { }
     if (!drag.moved) return;
     _collapseClickGuard = Date.now() + 350;
     snapCollapseBar();
@@ -2304,39 +2310,39 @@ handleImages(post) {
 
   const _patchHistory =
     (original) =>
-    (...args) => {
-      original(...args);
-      syncCollapseButtonVisibility();
+      (...args) => {
+        original(...args);
+        syncCollapseButtonVisibility();
 
-      const rawUrl = args[2];
-      if (!rawUrl) return;
-      try {
-        const u = new URL(rawUrl, location.origin);
-        const q = u.searchParams.get("q");
-        if (!q) return;
+        const rawUrl = args[2];
+        if (!rawUrl) return;
+        try {
+          const u = new URL(rawUrl, location.origin);
+          const q = u.searchParams.get("q");
+          if (!q) return;
 
-        if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
-          return;
+          if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
+            return;
 
-        const corrected = buildRedditSearchUrl(
-          q,
-          extractSubFromPathname(u.pathname),
-        );
+          const corrected = buildRedditSearchUrl(
+            q,
+            extractSubFromPathname(u.pathname),
+          );
 
-        const correctedU = new URL(corrected, location.origin);
+          const correctedU = new URL(corrected, location.origin);
 
-        for (const [k, v] of u.searchParams) {
-          if (!correctedU.searchParams.has(k))
-            correctedU.searchParams.set(k, v);
-        }
+          for (const [k, v] of u.searchParams) {
+            if (!correctedU.searchParams.has(k))
+              correctedU.searchParams.set(k, v);
+          }
 
-        if (
-          u.searchParams.get("q") !== correctedU.searchParams.get("q") ||
-          u.pathname !== correctedU.pathname
-        )
-          _origReplaceState(args[0], args[1], correctedU.toString());
-      } catch {}
-    };
+          if (
+            u.searchParams.get("q") !== correctedU.searchParams.get("q") ||
+            u.pathname !== correctedU.pathname
+          )
+            _origReplaceState(args[0], args[1], correctedU.toString());
+        } catch { }
+      };
   history.pushState = _patchHistory(_origPushState);
   history.replaceState = _patchHistory(_origReplaceState);
   window.addEventListener("popstate", syncCollapseButtonVisibility);
