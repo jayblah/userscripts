@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name            Reddit Enhancements
-// @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
+// @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, social search helpers, and mobile swipe-to-dismiss.
 // @author          JR
-// @version         2.5.31
+// @version         2.6.1
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -48,10 +48,6 @@
   ];
 
   // Selectors used to detect whether a mouseup occurred inside any comment area.
-  // The old-Reddit selectors (.md, .comment, .Comment, .usertext-body) are kept
-  // for safety but are effectively dead on new Reddit — shreddit-comment is the
-  // only one that matches in practice (and e.target.closest works on the host
-  // element even when the click originated inside the shadow DOM).
   const COMMENT_SELECTORS = [
     "shreddit-comment",
     '[data-testid="comment"]',
@@ -114,7 +110,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.5.22";
+  const VERSION = "2.6.1";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -172,10 +168,6 @@
     " ": " ",
   };
 
-  // The /g flag is safe here because this regex is only ever used with
-  // String.prototype.match(), which always resets lastIndex and returns all
-  // matches. It is never used with exec() or test(), so there is no shared-
-  // state lastIndex footgun.
   const BINARY_RE = /\b(?:[01]{8} ?){2,}\b/g;
   const SOCIAL_SITE_CLAUSE = SOCIAL_SITES.map((s) => `site:${s}`).join(" OR ");
 
@@ -189,9 +181,6 @@
   let selectionPopup = null;
   let currentSelText = "";
   let lastScrollY = 0;
-  // true  = filtered posts are shown at reduced opacity (user toggled them on)
-  // false = filtered posts are hidden entirely (default)
-  // Persisted across sessions so the ON/OFF state survives page reloads.
   let _filteredVisible = JSON.parse(
     localStorage.getItem(FILTER_VISIBLE_KEY) || "false",
   );
@@ -210,25 +199,21 @@
   const buildSocialURL = (q) =>
     `https://www.google.com/search?q=${encodeURIComponent(`${q} (${SOCIAL_SITE_CLAUSE})`)}`;
 
-  /** Build a Reddit search URL with a properly encoded query, optionally scoped to a subreddit. */
   const buildRedditSearchUrl = (q, sub) =>
     sub
       ? `/r/${sub}/search/?q=${encodeURIComponent(q)}&restrict_sr=1`
       : `/search/?q=${encodeURIComponent(q)}`;
 
-  /** Extract the subreddit name from a URL pathname ("/r/sub/…" → "sub", else null). */
   const extractSubFromPathname = (pathname) => {
     const parts = pathname.split("/").filter(Boolean);
     return parts[0] === "r" && parts[1] ? parts[1] : null;
   };
 
-  /** Prevent default and stop propagation on an event. */
   const stopEvent = (e) => {
     e.preventDefault();
     e.stopPropagation();
   };
 
-  /** Wrap a handler so it always calls stopEvent first. */
   const withStop = (fn) => (e) => {
     stopEvent(e);
     fn(e);
@@ -255,9 +240,6 @@
 
   function deepQueryAll(root, selector, results = []) {
     root.querySelectorAll(selector).forEach((el) => results.push(el));
-    // Walk every element to find shadow roots, then recurse only into those.
-    // This is still O(n) over the DOM, but shadow-root recursion is bounded by
-    // the number of custom elements rather than total DOM size.
     root.querySelectorAll("*").forEach((el) => {
       if (el.shadowRoot) deepQueryAll(el.shadowRoot, selector, results);
     });
@@ -280,7 +262,6 @@
     null;
   const getPostAuthor = (post) => post.getAttribute("author") || null;
 
-  /** True when a post was authored by the logged-in user (username known via _cachedUsername). */
   const isOwnPost = (post) => {
     const author = getPostAuthor(post);
     return (
@@ -290,7 +271,6 @@
     );
   };
 
-  /** Get the src from an img-like element (faceplate-img or img). */
   const getImgSrc = (imgEl) =>
     imgEl.getAttribute("src") ||
     imgEl.querySelector("img")?.getAttribute("src") ||
@@ -344,8 +324,6 @@
     const renameLogic = (all) => {
       if (all[oldScope] !== undefined) {
         const merged = [...(all[newScope] || []), ...all[oldScope]];
-        // Deduplicate only plain string entries (filter mode); highlight entries
-        // are objects and intentional duplicates are allowed.
         all[newScope] =
           merged.length > 0 && typeof merged[0] === "string"
             ? [...new Set(merged)]
@@ -361,18 +339,14 @@
   // KEYWORD MODE HELPERS
   // =========================================================
 
-  /** True when mode is the filter mode (accepts both the string and legacy bool). */
   const isFilterMode = (mode) => mode === "filter" || mode === true;
 
-  /** Return the storage key for a given mode string or isFilter bool. */
   const storageKeyFor = (mode) =>
     isFilterMode(mode) ? FILTER_STORAGE_KEY : HIGHLIGHT_STORAGE_KEY;
 
-  /** Return the entries array for a scope (never mutate the result). */
   const getScopeEntries = (mode, scope) =>
     getStorage(storageKeyFor(mode))[scope] || [];
 
-  /** Apply keyword rules after a storage mutation. */
   const applyRulesForMode = (mode) =>
     isFilterMode(mode) ? applyKeywordFilters() : applyKeywordHighlights();
 
@@ -388,6 +362,38 @@
     #user-drawer-content hr.bg-neutral-border-weak, #left-sidebar-container hr.border-neutral-border-weak, flex-left-nav-container hr.border-neutral-border-weak { display: none !important; }
     a[href*="reddit.com/news"], a[href*="/news/"] { display: none !important; }
     a[href*="reddit.com/explore"], a[href*="/explore/"] { display: none !important; }
+
+    /* =========================================================
+       MOBILE FONT SCALING (TARGETS MOBILE VIEWPORTS / TOUCH)
+       ========================================================= */
+    @media (max-width: 768px), (pointer: coarse) {
+      html, body {
+        font-size: 17px !important;
+      }
+      shreddit-post [slot="title"],
+      shreddit-post h1,
+      shreddit-post h2,
+      shreddit-post a[id^="post-title"] {
+        font-size: 1.15rem !important;
+        line-height: 1.35 !important;
+      }
+      shreddit-post [slot="text-body"],
+      shreddit-post .md,
+      shreddit-post p {
+        font-size: 1.05rem !important;
+        line-height: 1.5 !important;
+      }
+      shreddit-comment [slot="comment"],
+      shreddit-comment [id$="-comment-rt"],
+      shreddit-comment .md,
+      shreddit-comment p {
+        font-size: 1.05rem !important;
+        line-height: 1.45 !important;
+      }
+      shreddit-comment [slot="commentHeader"] {
+        font-size: 0.9rem !important;
+      }
+    }
 
     .pp_imageViewable { cursor: zoom-in !important; }
 
@@ -409,7 +415,6 @@
     #pp_nav_prev { left: 20px; } #pp_nav_next { right: 20px; }
     #pp_gallery_counter { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-family: sans-serif; font-size: 14px; background: rgba(0,0,0,0.6); padding: 6px 16px; border-radius: 20px; display: none; z-index: 1000001; }
 
-    /* Touch devices: edge-to-edge image, compact top bar + filmstrip, swipe instead of arrow buttons. */
     @media (pointer: coarse) {
       #pp_lightbox { padding-top: calc(52px + env(safe-area-inset-top, 0px)); }
       #pp_stage { width: 100%; }
@@ -509,12 +514,10 @@
     <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">↓</button>
   `;
 
-  /** Gap between the bar and the screen edge. Wider on touch so the grab area clears Android's edge back-gesture zone. */
   function collapseGap() {
     return window.matchMedia?.("(pointer: coarse)").matches ? 12 : 8;
   }
 
-  /** Anchor the bar to the left or right edge with CSS, so it stays on that edge across resizes/rotation. */
   function anchorCollapseBar(side) {
     const gap = collapseGap();
     const s = collapseBtn.style;
@@ -528,7 +531,6 @@
     }
   }
 
-  /** Keep a px-positioned bar fully on screen after rotate/resize/show. */
   function clampCollapseBar() {
     const top = parseInt(collapseBtn.style.top, 10);
     const h = collapseBtn.offsetHeight;
@@ -540,7 +542,6 @@
 
   const _savedPos = lsGet("pp_collapse_pos", null);
   const _hasSavedPos = Number.isFinite(_savedPos?.top);
-  // Older versions saved { top, right }; derive the side from that.
   const _collapseSide =
     _savedPos?.side === "left" || _savedPos?.side === "right"
       ? _savedPos.side
@@ -556,7 +557,7 @@
   // =========================================================
 
   const lightbox = createElement("div", { id: "pp_lightbox" });
-  let _lbSwipeAt = 0; // timestamp of the last swipe, used to swallow a trailing click
+  let _lbSwipeAt = 0;
   let _lbSyncRaf = 0;
 
   const closeLightbox = () => {
@@ -570,16 +571,6 @@
     }
   };
 
-  /**
-   * Fit the lightbox to the *visual* viewport.
-   *
-   * position:fixed + inset:0 tracks the layout viewport. On mobile that is
-   * taller/wider than what's actually on screen when the URL bar is showing,
-   * the page is pinch-zoomed, or "Desktop site" is on, which pushes the close
-   * button and filmstrip off-screen. Sizing from window.visualViewport (and
-   * counter-scaling when zoomed) keeps the whole viewer on screen.
-   * Desktop with no pinch-zoom keeps the plain CSS sizing.
-   */
   function syncLightboxViewport() {
     _lbSyncRaf = 0;
     if (lightbox.style.display !== "flex") return;
@@ -641,13 +632,11 @@
         closeLightbox();
     };
 
-    // Keep the viewer fitted when the URL bar shows/hides, on rotate, or on pinch-zoom.
     window.visualViewport?.addEventListener("resize", queueLightboxSync);
     window.visualViewport?.addEventListener("scroll", queueLightboxSync);
     window.addEventListener("resize", queueLightboxSync);
     window.addEventListener("orientationchange", queueLightboxSync);
 
-    // Touch gestures: swipe left/right = prev/next, swipe down = close.
     const stage = lightbox.querySelector("#pp_stage");
     let g = null;
     lightbox.addEventListener("pointerdown", (e) => {
@@ -667,9 +656,9 @@
       }
       if (g.axis === "x" && gallery.images.length > 1) {
         stage.style.transform = `translateX(${g.dx}px)`;
-      } else if (g.axis === "y" && g.dy > 0) {
+      } else if (g.axis === "y") {
         stage.style.transform = `translateY(${g.dy}px)`;
-        stage.style.opacity = String(Math.max(0.3, 1 - g.dy / 400));
+        stage.style.opacity = String(Math.max(0.3, 1 - Math.abs(g.dy) / 400));
       }
     });
     const endGesture = (e) => {
@@ -682,7 +671,7 @@
         stage.style.opacity = "";
       };
       if (e.type === "pointercancel" || !axis) {
-        resetStage(false); // plain tap: the click handler closes the viewer
+        resetStage(false);
         return;
       }
       _lbSwipeAt = Date.now();
@@ -694,7 +683,7 @@
       ) {
         resetStage(false);
         navigateGallery(dx < 0 ? 1 : -1);
-      } else if (axis === "y" && dy > 90) {
+      } else if (axis === "y" && (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 40))) {
         resetStage(false);
         closeLightbox();
       } else {
@@ -708,11 +697,9 @@
   function openLightbox(images, startIndex) {
     attachLightbox();
     gallery = { images, index: startIndex };
-    // Show + size first so the filmstrip can measure itself when it centers the active thumb.
     lightbox.style.display = "flex";
     syncLightboxViewport();
     updateLightboxImage();
-    // Prevent Reddit's #lightbox hash from triggering its native viewer
     if (location.hash === "#lightbox") {
       history.replaceState(
         history.state,
@@ -742,9 +729,6 @@
     }
 
     if (filmstrip) {
-      // Rebuild the filmstrip whenever the gallery changes (keyed on the first
-      // image URL), not just when the image count changes — that would fail if
-      // two different galleries happen to have the same number of images.
       const galleryKey = gallery.images[0] ?? "";
       let rebuilt = false;
       if (filmstrip.dataset.galleryKey !== galleryKey) {
@@ -769,8 +753,6 @@
       Array.from(filmstrip.children).forEach((t, i) =>
         t.classList.toggle("pp_film_active", i === gallery.index),
       );
-      // Scroll only the filmstrip. scrollIntoView() also scrolls every ancestor
-      // (including the page) and was dragging the viewport around on mobile.
       const active = filmstrip.children[gallery.index];
       if (active) {
         const left =
@@ -823,13 +805,10 @@
   // =========================================================
 
   function injectAccountBadge() {
-    if (document.getElementById("pp_account_badge")) return; // already injected
+    if (document.getElementById("pp_account_badge")) return;
     const btn = document.getElementById("expand-user-drawer-button");
-    if (!btn) return; // drawer not in DOM yet
-    // If we already know the username, go straight to DOM injection.
-    // insertBadge() has its own duplicate-check guard at the top.
+    if (!btn) return;
     if (_cachedUsername) return insertBadge(_cachedUsername);
-    // A fetch is already in flight from a previous call; don't stack requests.
     if (_badgeFetchPromise) return;
 
     _badgeFetchPromise = fetch("/api/me.json", { credentials: "include" })
@@ -838,8 +817,6 @@
         if (d?.data?.name && d.data.name !== "undefined") {
           _cachedUsername = d.data.name;
           insertBadge(d.data.name);
-          // Re-run keyword filters now that we know the logged-in username,
-          // so any own posts already hidden before this resolved get shown.
           applyKeywordFilters();
         }
       })
@@ -879,9 +856,6 @@
   // KEYWORD FILTER & HIGHLIGHT ENGINE
   // =========================================================
 
-  // Cache compiled keyword regexes so we don't recompile on every post×keyword
-  // call during applyKeywordRules (which runs for every post on every tick).
-  // Capped at 256 entries with LRU eviction (delete-oldest = Map insertion order).
   const _KW_CACHE_MAX = 256;
   const _kwRegexCache = new Map();
 
@@ -889,7 +863,6 @@
     if (_kwRegexCache.has(keyword)) return _kwRegexCache.get(keyword);
     let entry;
     if (/^\/.*\/[gimsuy]*$/.test(keyword)) {
-      // User-supplied /regex/flags — compile as-is; flags are already embedded.
       try {
         const lastSlash = keyword.lastIndexOf("/");
         entry = {
@@ -897,13 +870,12 @@
             keyword.slice(1, lastSlash),
             keyword.slice(lastSlash + 1) || "i",
           ),
-          caseFold: false, // regex carries its own flags
+          caseFold: false,
         };
       } catch {
-        entry = { re: null, caseFold: false }; // invalid — cache the failure
+        entry = { re: null, caseFold: false };
       }
     } else {
-      // Plain keyword or glob — match case-insensitively via title lowercasing.
       const escaped = keyword
         .toLowerCase()
         .replace(/[.+^^${}()|[\]\\]/g, "\\$&")
@@ -912,7 +884,7 @@
       entry = { re: new RegExp(escaped), caseFold: true };
     }
     if (_kwRegexCache.size >= _KW_CACHE_MAX)
-      _kwRegexCache.delete(_kwRegexCache.keys().next().value); // evict oldest
+      _kwRegexCache.delete(_kwRegexCache.keys().next().value);
     _kwRegexCache.set(keyword, entry);
     return entry;
   }
@@ -1000,10 +972,7 @@
     applyKeywordHighlights();
   };
 
-  /** Apply display/opacity to a filtered post based on current _filteredVisible state. */
   const applyFilteredPostStyle = (post) => {
-    // _filteredVisible=true  → show at reduced opacity (user chose to reveal them)
-    // _filteredVisible=false → hide entirely (default)
     post.style.display = _filteredVisible ? "" : "none";
     post.style.opacity = _filteredVisible ? "0.35" : "";
   };
@@ -1033,9 +1002,6 @@
 
   const makeDeleteButton = (onDelete) => makeBtn("pp_kw_del", "✕", onDelete);
 
-  /**
-   * Wire up save/cancel/Enter/Escape behaviour shared by both inline editors.
-   */
   function wireEditor(input, saveBtn, cancelBtn, onSave, onCancel) {
     saveBtn.onclick = withStop(onSave);
     cancelBtn.onclick = withStop(onCancel);
@@ -1094,7 +1060,6 @@
     `;
     document.body.appendChild(panel);
 
-    // Shorthand panel element accessor
     const $ = (suffix) => panel.querySelector(`#${id}${suffix}`);
 
     if (isFilter) {
@@ -1432,9 +1397,6 @@
 
   function openKwPanel(mode) {
     const id = mode === "filter" ? "pp_filter_panel" : "pp_highlight_panel";
-    // If the panel was removed from the DOM (e.g. by a Reddit re-render or a
-    // nuke pass) the id guard inside buildKwPanel would have passed but the
-    // element is gone — so check isConnected and remove the stale node first.
     const existing = document.getElementById(id);
     if (existing && !existing.isConnected) existing.remove();
     buildKwPanel(mode);
@@ -1443,7 +1405,6 @@
       panel.style.display = panel.style.display === "flex" ? "none" : "flex";
   }
 
-  /** Add a subtle background on hover to a button element (used for menu entries). */
   const addHoverBg = (el, hoverColor = "rgba(255,255,255,0.06)") => {
     el.addEventListener("mouseenter", () => {
       el.style.background = hoverColor;
@@ -1597,13 +1558,11 @@
     for (const token of tokens.map((t) => t.trim())) {
       if (!token) continue;
       if (NATO_ALPHABET[token] !== undefined) {
-        // Hyphenated keys like "x-ray" live directly in NATO_ALPHABET,
-        // so this single lookup handles all cases; no secondary scan needed.
         res += NATO_ALPHABET[token];
         count++;
       }
     }
-    return count >= 3 ? res : null; // ≥3 tokens required to avoid "november oscar" → "NO" false positives
+    return count >= 3 ? res : null;
   }
 
   function binaryToText(b) {
@@ -1662,8 +1621,6 @@
       if (!val) return;
       const decoded = decoder(val);
       if (!decoded?.trim().length) return;
-      // Guard against inserting duplicate decoder boxes when multiple text nodes
-      // within the same <p> produce the same decoded output.
       const dedupeKey = `${type}:${decoded}`;
       if (seenDecoded.has(dedupeKey)) return;
       seenDecoded.add(dedupeKey);
@@ -1686,14 +1643,11 @@
     const nodes = [];
     let n;
     while ((n = walker.nextNode())) nodes.push(n);
-    // Share a Set across all text nodes in this <p> to deduplicate decoder boxes.
     const seenDecoded = new Set();
     nodes.forEach((node) => processTextNode(node, seenDecoded));
   }
 
   function createSelectionPopup() {
-    // Only ever called once (guarded by `if (!selectionPopup)` at the call
-    // site), so this single node lives in the DOM for the page lifetime.
     const popup = createElement("div", { className: "pp_selection_popup" });
     const btn = createElement("button", { innerHTML: "🔍 Search" });
     popup.appendChild(btn);
@@ -1720,11 +1674,6 @@
         el.setAttribute("pp-award-hidden", "true");
       });
     },
-    /**
-     * Hide the "This account has been permanently banned" banner.
-     * It is a shadow-DOM component, so match the inner banner by its text
-     * (checked in the shadow DOM and in the host's light DOM) and hide the host.
-     */
     nukeBanBanner() {
       deepQueryAll(document, 'div[role="banner"].banner.error').forEach(
         (inner) => {
@@ -1752,11 +1701,8 @@
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
         post.setAttribute("pp-images-handled", "true");
-
-        // Store the promise on the post element so click handlers can await it
         const galleryPromise = fetchGalleryImages(permalink);
 
-        // Attach click listeners immediately — await the promise inside the handler
         post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
           imgEl.classList.add("pp_imageViewable");
           imgEl.addEventListener(
@@ -1832,15 +1778,10 @@
             comment.getAttribute("author") === "AutoModerator" &&
             !comment.hasAttribute("pp-am-collapsed")
           ) {
-            // Only mark as collapsed (and stamp the attribute) if handleCollapse
-            // actually exists. If the custom element isn't fully upgraded yet the
-            // method won't be present; we deliberately skip pp-checked on this
-            // branch so the next observer tick can retry.
             if (typeof comment.handleCollapse === "function") {
               comment.handleCollapse(true);
               comment.setAttribute("pp-am-collapsed", "true");
             } else {
-              // Not upgraded yet — bail without stamping pp-checked so we retry.
               return;
             }
           }
@@ -1855,8 +1796,6 @@
             );
             comment.setAttribute("pp-shadow-styled", "true");
           }
-          // Mark as checked unconditionally so comments without a shadowRoot
-          // don't get reprocessed on every MutationObserver tick.
           comment.setAttribute("pp-checked", "true");
         });
     },
@@ -1927,10 +1866,6 @@
   // EVENT LISTENERS
   // =========================================================
 
-  // Drag + edge-snap for the floating toolbar (mouse, touch and pen).
-  // Drag from anywhere on the bar: a tap still hits the button, movement past
-  // the threshold starts a drag and swallows the click that would follow.
-  // On release the bar snaps to the nearest left/right edge; vertical position is free.
   const DRAG_THRESHOLD = 6;
   let _collapseClickGuard = 0;
   let _collapseSettleTimer = 0;
@@ -1987,10 +1922,9 @@
     s.left = `${side === "left" ? gap : vw - rect.width - gap}px`;
     s.top = `${top}px`;
     lsSet("pp_collapse_pos", { side, top: Math.round(top) });
-    // After the slide, swap the px position for CSS edge anchoring (resize-proof).
     clearTimeout(_collapseSettleTimer);
     _collapseSettleTimer = setTimeout(() => {
-      if (drag.active && drag.moved) return; // grabbed again mid-slide; its own release re-snaps
+      if (drag.active && drag.moved) return;
       anchorCollapseBar(side);
     }, 220);
   }
@@ -2002,14 +1936,13 @@
     try {
       collapseBtn.releasePointerCapture(e.pointerId);
     } catch {}
-    if (!drag.moved) return; // plain tap: let the button's click run
+    if (!drag.moved) return;
     _collapseClickGuard = Date.now() + 350;
     snapCollapseBar();
   };
   collapseBtn.addEventListener("pointerup", endCollapseDrag);
   collapseBtn.addEventListener("pointercancel", endCollapseDrag);
 
-  // Swallow the click that can trail a drag so it doesn't fire a button.
   collapseBtn.addEventListener(
     "click",
     (e) => {
@@ -2023,7 +1956,6 @@
 
   window.addEventListener("resize", clampCollapseBar);
 
-  // Collapse toolbar button wiring
   const collapseActions = [
     [
       "#pp_collapse_text",
@@ -2040,16 +1972,6 @@
     collapseBtn.querySelector(sel).addEventListener("click", withStop(fn)),
   );
 
-  // Patch history.pushState / replaceState to:
-  //   1. Keep collapse button in sync (existing behaviour)
-  //   2. Correct Reddit's own search navigation so the q param is properly
-  //      encoded and subreddit-scoped searches stay within the subreddit.
-  //      Reddit builds its search URLs with unencoded spaces in `q`, which
-  //      breaks multi-word queries. We intercept after Reddit commits the
-  //      navigation and immediately replace it with a clean URL.
-  //
-  // IMPORTANT: corrections call _origReplaceState directly (not the patched
-  // wrapper) to prevent the wrapper re-entering itself and risking recursion.
   const _origPushState = history.pushState.bind(history);
   const _origReplaceState = history.replaceState.bind(history);
 
@@ -2059,7 +1981,6 @@
       original(...args);
       syncCollapseButtonVisibility();
 
-      // args[2] is the new URL string passed to pushState/replaceState
       const rawUrl = args[2];
       if (!rawUrl) return;
       try {
@@ -2067,7 +1988,6 @@
         const q = u.searchParams.get("q");
         if (!q) return;
 
-        // Only act on Reddit search pages
         if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
           return;
 
@@ -2076,12 +1996,8 @@
           extractSubFromPathname(u.pathname),
         );
 
-        // Compare decoded `q` params rather than raw URL strings to avoid an
-        // infinite loop if Reddit appends extra params (e.g. &type=link).
         const correctedU = new URL(corrected, location.origin);
 
-        // Carry forward any extra params Reddit set (sort, type, etc.) so we
-        // don't silently drop them while fixing the encoding.
         for (const [k, v] of u.searchParams) {
           if (!correctedU.searchParams.has(k))
             correctedU.searchParams.set(k, v);
@@ -2091,12 +2007,8 @@
           u.searchParams.get("q") !== correctedU.searchParams.get("q") ||
           u.pathname !== correctedU.pathname
         )
-          // Use the original (unpatched) replaceState to avoid re-entering the
-          // wrapper and risking infinite recursion.
           _origReplaceState(args[0], args[1], correctedU.toString());
-      } catch {
-        // Malformed URL — ignore
-      }
+      } catch {}
     };
   history.pushState = _patchHistory(_origPushState);
   history.replaceState = _patchHistory(_origReplaceState);
@@ -2105,8 +2017,6 @@
   window.addEventListener(
     "keydown",
     (e) => {
-      // composedPath() pierces shadow roots so we catch Reddit's shadow-DOM
-      // search input even when e.target is the custom-element host.
       const _path = e.composedPath();
       const _inInput = _path.some(
         (el) =>
@@ -2153,34 +2063,9 @@
     true,
   );
 
-  // =========================================================
-  // INTRA-SUBREDDIT SEARCH — SPA render failure recovery
-  // =========================================================
-  // Problem: Reddit's SPA intercepts the "navigate" event (via e.intercept())
-  // before any userscript listener can cancel it. After the SPA-driven
-  // navigation "completes", the search results component sometimes fails to
-  // render — the URL changes but the page stays blank or shows the previous
-  // content. A manual address-bar Enter forces a hard load which always works.
-  //
-  // Strategy: on navigatesuccess to a search URL, wait a short tick for the
-  // SPA to finish rendering, then check whether a search results container
-  // actually appeared in the DOM. If it didn't, fall back to location.replace()
-  // which forces a full HTTP load of the (already-correct) URL.
-  //
-  // URL correction (restrict_sr, encoding) is handled by the existing
-  // pushState/replaceState patch above; this block only handles the render
-  // failure. We also keep a capture-phase keydown handler so that Enter always
-  // produces a hard navigation directly, bypassing the SPA entirely — the most
-  // reliable fix for the keyboard path.
-
-  // Fallback for non-keyboard submissions (search icon click, etc.):
-  // after the SPA navigation settles, check if results actually rendered.
-  // If not, force a hard reload of the current (already URL-corrected) URL.
   if (window.navigation) {
     let _lastSearchHref = null;
     window.navigation.addEventListener("navigate", (e) => {
-      // Track the URL we're navigating FROM so navigatesuccess can tell whether
-      // a real page transition occurred vs. an in-page SPA event.
       _lastSearchHref = location.href;
     });
     window.navigation.addEventListener("navigatesuccess", () => {
@@ -2189,15 +2074,10 @@
         return;
       if (!u.searchParams.get("q")) return;
 
-      // Only act when the URL actually changed (real navigation, not an
-      // in-page SPA event like lazy-loading more results). If the href is the
-      // same as before the navigate event, this is not a page transition.
       if (_lastSearchHref === location.href) return;
       _lastSearchHref = location.href;
 
-      // Give the SPA ~800 ms to render results, then check.
       setTimeout(() => {
-        // Any of these indicate results actually rendered.
         const rendered =
           document.querySelector(
             [
@@ -2210,7 +2090,6 @@
           ) !== null;
 
         if (!rendered) {
-          // SPA failed to render — hard reload the corrected URL.
           window.location.replace(location.href);
         }
       }, 800);
@@ -2261,10 +2140,6 @@
   let debounceTimer = null;
   new MutationObserver((mutations) => {
     if (!mutations.some((m) => m.addedNodes.length > 0)) return;
-    // Mark posts dirty if any shreddit-post was added this tick, either directly
-    // or wrapped in a container (Reddit typically wraps in faceplate-batch or div).
-    // querySelector is only available on Element nodes, so the ?. handles text/
-    // comment nodes without needing a separate nodeType === 1 check.
     if (
       mutations.some((m) =>
         Array.from(m.addedNodes).some(
