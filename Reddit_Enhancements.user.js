@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name            Reddit Enhancements
-// @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, social search helpers, and mobile swipe-to-dismiss.
+// @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, social search helpers, and mobile media/font optimizations.
 // @author          JR
-// @version         2.6.1
+// @version         2.7.0
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -47,7 +47,6 @@
     ".usertext-body",
   ];
 
-  // Selectors used to detect whether a mouseup occurred inside any comment area.
   const COMMENT_SELECTORS = [
     "shreddit-comment",
     '[data-testid="comment"]',
@@ -80,6 +79,10 @@
     "search-telemetry-tracker:has(search-answers-response-container-streaming)",
     "search-answers-response-container-streaming",
     "in-feed-community-recommendations",
+    // =========================================================
+    // MODIFICATION: Nuke the mosaic PDP related feed container on mobile
+    // =========================================================
+    "#mosaic-pdp-feed"
   ];
 
   const SIDEBAR_SELECTORS = [
@@ -110,7 +113,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.6.1";
+  const VERSION = "2.7.0";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -177,7 +180,7 @@
 
   let gallery = { images: [], index: 0 };
   let lastWheelTime = 0;
-  let collapseState = 0; // 0=EXP, 1=COL
+  let collapseState = 0;
   let selectionPopup = null;
   let currentSelText = "";
   let lastScrollY = 0;
@@ -340,13 +343,10 @@
   // =========================================================
 
   const isFilterMode = (mode) => mode === "filter" || mode === true;
-
   const storageKeyFor = (mode) =>
     isFilterMode(mode) ? FILTER_STORAGE_KEY : HIGHLIGHT_STORAGE_KEY;
-
   const getScopeEntries = (mode, scope) =>
     getStorage(storageKeyFor(mode))[scope] || [];
-
   const applyRulesForMode = (mode) =>
     isFilterMode(mode) ? applyKeywordFilters() : applyKeywordHighlights();
 
@@ -359,7 +359,19 @@
       textContent: `
     ${NUKE_SELECTORS.join(", ")} { display: none !important; }
     award-button, shreddit-slot[slot="award-button"] { display: none !important; }
-    #user-drawer-content hr.bg-neutral-border-weak, #left-sidebar-container hr.border-neutral-border-weak, flex-left-nav-container hr.border-neutral-border-weak { display: none !important; }
+
+    /* =========================================================
+       MODIFICATION: Hide horizontal rules globally across all views
+       ========================================================= */
+    #user-drawer-content hr,
+    #left-sidebar-container hr,
+    flex-left-nav-container hr,
+    hr.w-100.my-sm.border-neutral-border-weak,
+    nav hr,
+    aside hr {
+      display: none !important;
+    }
+
     a[href*="reddit.com/news"], a[href*="/news/"] { display: none !important; }
     a[href*="reddit.com/explore"], a[href*="/explore/"] { display: none !important; }
 
@@ -553,7 +565,7 @@
   anchorCollapseBar(_collapseSide);
 
   // =========================================================
-  // LIGHTBOX & GALLERY
+  // LIGHTBOX & GALLERY (MODIFIED TO SUPPORT IFRAMES & SWIPE UP/DOWN)
   // =========================================================
 
   const lightbox = createElement("div", { id: "pp_lightbox" });
@@ -608,7 +620,7 @@
     lightbox.innerHTML = `
       <div id="pp_lightbox_close" title="Close [Esc]">&times;</div>
       <div id="pp_nav_prev" class="pp_nav_btn" title="Previous [A]">&#10094;</div>
-      <div id="pp_stage"><img id="pp_lightbox_img" src="" alt="Enlarged View"></div>
+      <div id="pp_stage"></div>
       <div id="pp_nav_next" class="pp_nav_btn" title="Next [D]">&#10095;</div>
       <div id="pp_gallery_counter">1 / 1</div>
       <div id="pp_filmstrip"></div>
@@ -657,6 +669,9 @@
       if (g.axis === "x" && gallery.images.length > 1) {
         stage.style.transform = `translateX(${g.dx}px)`;
       } else if (g.axis === "y") {
+        // =========================================================
+        // MODIFICATION: Support vertical dragging (up or down) for dismissal
+        // =========================================================
         stage.style.transform = `translateY(${g.dy}px)`;
         stage.style.opacity = String(Math.max(0.3, 1 - Math.abs(g.dy) / 400));
       }
@@ -683,7 +698,13 @@
       ) {
         resetStage(false);
         navigateGallery(dx < 0 ? 1 : -1);
-      } else if (axis === "y" && (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 40))) {
+      } else if (
+        axis === "y" &&
+        // =========================================================
+        // MODIFICATION: Trigger close on swipe up or swipe down
+        // =========================================================
+        (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 40))
+      ) {
         resetStage(false);
         closeLightbox();
       } else {
@@ -711,13 +732,23 @@
 
   function updateLightboxImage() {
     if (!gallery.images.length) return;
-    const imgEl = lightbox.querySelector("#pp_lightbox_img");
+    const stage = lightbox.querySelector("#pp_stage");
     const counterEl = lightbox.querySelector("#pp_gallery_counter");
     const prevEl = lightbox.querySelector("#pp_nav_prev");
     const nextEl = lightbox.querySelector("#pp_nav_next");
     const filmstrip = lightbox.querySelector("#pp_filmstrip");
 
-    imgEl.src = decodeAmp(gallery.images[gallery.index]);
+    const currentUrl = decodeAmp(gallery.images[gallery.index]);
+
+    // =========================================================
+    // MODIFICATION: Detect if current item is a RedGIFs / iframe embed
+    // =========================================================
+    const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
+
+    stage.innerHTML = isIframe
+      ? `<iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>`
+      : `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+
     const multi = gallery.images.length > 1;
 
     if (prevEl) prevEl.style.display = multi ? "flex" : "none";
@@ -1697,6 +1728,31 @@
 
     handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
+
+      // =========================================================
+      // MODIFICATION: Intercept RedGIFs / iframes to open in lightbox instead of redirecting
+      // =========================================================
+      const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
+      if (embedEl) {
+        post.setAttribute("pp-images-handled", "true");
+        let src = embedEl.getAttribute("src") || "";
+        if (!src && embedEl.hasAttribute("html")) {
+          const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
+          if (match) src = match[1];
+        }
+
+        if (src) {
+          const container = embedEl.closest('[slot="post-media-container"]') || embedEl;
+          container.style.cursor = "zoom-in";
+          container.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            openLightbox([src], 0);
+          }, true);
+        }
+        return;
+      }
+
       const isGallery = post.hasAttribute("gallery");
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
@@ -1800,51 +1856,68 @@
         });
     },
 
-    initSidebar() {
-      if (
-        !/^\/r\/[^/]/.test(window.location.pathname) ||
-        /\/search\/?(\?|$)/.test(window.location.href)
-      ) {
+    async initSidebar() {
+      const match = window.location.pathname.match(/^\/r\/([^/]+)/);
+      if (!match || /\/search\/?(\?|$)/.test(window.location.href)) {
         document.getElementById("pp_sidebar_wrap")?.remove();
         return;
       }
-      const sidebar = SIDEBAR_SELECTORS.reduce(
-        (found, sel) => found ?? document.querySelector(sel),
-        null,
-      );
-      if (!sidebar) return;
+      const subName = match[1];
 
       const existingWrap = document.getElementById("pp_sidebar_wrap");
-      if (existingWrap) {
-        if (existingWrap.contains(sidebar)) return;
-        existingWrap.remove();
-      }
+      if (existingWrap && existingWrap.dataset.sub === subName) return;
+      if (existingWrap) existingWrap.remove();
 
       const collapsed = lsGet("pp_sidebar_collapsed", true) !== false;
       const wrap = createElement("div", {
         id: "pp_sidebar_wrap",
         className: collapsed ? "pp_sb_collapsed" : "",
       });
+      wrap.dataset.sub = subName;
+
       const tab = createElement("div", {
         id: "pp_sidebar_tab",
         textContent: collapsed ? "❮" : "❯",
       });
-      const inner = createElement("div", { id: "pp_sidebar_inner" });
+      const inner = createElement("div", {
+        id: "pp_sidebar_inner",
+        style: "padding: 16px; color: var(--color-neutral-content-weak, #d7dadc); font-family: sans-serif; font-size: 13px; line-height: 1.4;",
+      });
 
-      if (
-        sidebar.tagName === "FACEPLATE-PARTIAL" ||
-        !sidebar.classList.contains("contents")
-      )
-        inner.appendChild(sidebar);
-      else while (sidebar.firstChild) inner.appendChild(sidebar.firstChild);
-
+      inner.innerHTML = `<div style="color:rgba(255,255,255,0.4); text-align:center; margin-top:20px;">Loading r/${subName} info…</div>`;
       wrap.append(tab, inner);
       document.body.appendChild(wrap);
+
       tab.addEventListener("click", () => {
         const isCollapsed = wrap.classList.toggle("pp_sb_collapsed");
         tab.textContent = isCollapsed ? "❮" : "❯";
         lsSet("pp_sidebar_collapsed", isCollapsed);
       });
+
+      try {
+        const res = await fetch(`https://www.reddit.com/r/${subName}/about.json`, {
+          headers: { Accept: "application/json" },
+        });
+        if (!res.ok) throw new Error();
+        const json = await res.json();
+        const d = json?.data;
+        if (!d) throw new Error();
+
+        const subs = d.subscribers ? d.subscribers.toLocaleString() : "Unknown";
+        const active = d.active_user_count ? d.active_user_count.toLocaleString() : null;
+        const desc = d.public_description || d.description || "No description available.";
+
+        inner.innerHTML = `
+          <div style="font-weight: 700; font-size: 15px; color: #fff; margin-bottom: 8px;">r/${d.display_name}</div>
+          <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: 12px;">
+            👥 ${subs} members ${active ? `• 🟢 ${active} online` : ""}
+          </div>
+          <hr style="border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 12px 0;">
+          <div style="word-break: break-word; white-space: pre-wrap; font-size: 12px; color: rgba(255,255,255,0.85);">${desc}</div>
+        `;
+      } catch {
+        inner.innerHTML = `<div style="color:rgba(255,255,250,0.4); text-align:center; margin-top:20px;">Failed to load community info.</div>`;
+      }
     },
 
     processDecoders() {
