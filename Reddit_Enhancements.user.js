@@ -839,16 +839,13 @@
     const currentUrl = decodeAmp(gallery.images[gallery.index]);
     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
 
-    // Updated check: catch standard extensions OR Reddit/query-string video formats
     const isVideoFile =
       currentUrl.includes(".mp4") ||
       currentUrl.includes(".webm") ||
       currentUrl.includes(".mov") ||
       currentUrl.includes("format=mp4");
 
-    // Render stage content: Iframe, Video file (with touch shield for swipe-to-close), or Image
-    JavaScript
-
+    // Render stage content: Iframe, Video file, or Image
     if (isIframe) {
       stage.innerHTML = `
         <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
