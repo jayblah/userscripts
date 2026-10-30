@@ -813,10 +813,7 @@
     const currentUrl = decodeAmp(gallery.images[gallery.index]);
     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
 
-    // =========================================================
-    // MODIFICATION: Place the iframe first, then a transparent
-    // touch shield div on top (z-index: 10) so swipes are caught
-    // =========================================================
+    // Render stage content (iframe with touch shield vs standard image)
     stage.innerHTML = isIframe
       ? `
         <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
@@ -824,6 +821,7 @@
       `
       : `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
 
+    // Multi applies to galleries (more than 1 image and NOT an iframe)
     const multi = gallery.images.length > 1 && !isIframe;
 
     if (prevEl) prevEl.style.display = multi ? "flex" : "none";
@@ -834,8 +832,9 @@
         counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
     }
 
+    // Filmstrip should only hide for single items or iframes; standard galleries keep it
     if (filmstrip) {
-      if (isIframe || !multi) {
+      if (isIframe || gallery.images.length <= 1) {
         filmstrip.style.display = "none";
         filmstrip.innerHTML = "";
         filmstrip.dataset.galleryKey = "";
