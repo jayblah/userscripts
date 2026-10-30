@@ -741,11 +741,15 @@
   //   const currentUrl = decodeAmp(gallery.images[gallery.index]);
   //   const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
 
-  //   // Render stage content (iframe vs image)
+  //   // Render stage content (iframe with touch shield vs standard image)
   //   stage.innerHTML = isIframe
-  //     ? `<iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>`
+  //     ? `
+  //       <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
+  //       <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
+  //     `
   //     : `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
 
+  //   // Multi applies to galleries (more than 1 image and NOT an iframe)
   //   const multi = gallery.images.length > 1 && !isIframe;
 
   //   if (prevEl) prevEl.style.display = multi ? "flex" : "none";
@@ -756,11 +760,9 @@
   //       counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
   //   }
 
-  //   // =========================================================
-  //   // MODIFICATION: Hide filmstrip completely for iframes/RedGIFs
-  //   // =========================================================
+  //   // Filmstrip should only hide for single items or iframes; standard galleries keep it
   //   if (filmstrip) {
-  //     if (isIframe || !multi) {
+  //     if (isIframe || gallery.images.length <= 1) {
   //       filmstrip.style.display = "none";
   //       filmstrip.innerHTML = "";
   //       filmstrip.dataset.galleryKey = "";
@@ -812,17 +814,24 @@
 
     const currentUrl = decodeAmp(gallery.images[gallery.index]);
     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
+    const isVideoFile = currentUrl.includes(".mp4") || currentUrl.includes(".webm") || currentUrl.includes(".mov");
 
-    // Render stage content (iframe with touch shield vs standard image)
-    stage.innerHTML = isIframe
-      ? `
+    // Render stage content: Iframe, Video file (with touch shield), or Standard Image
+    if (isIframe) {
+      stage.innerHTML = `
         <iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>
         <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
-      `
-      : `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+      `;
+    } else if (isVideoFile) {
+      stage.innerHTML = `
+        <video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>
+        <div style="position:absolute; inset:0; z-index:10; background:transparent; touch-action:none;"></div>
+      `;
+    } else {
+      stage.innerHTML = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+    }
 
-    // Multi applies to galleries (more than 1 image and NOT an iframe)
-    const multi = gallery.images.length > 1 && !isIframe;
+    const multi = gallery.images.length > 1 && !isIframe && !isVideoFile;
 
     if (prevEl) prevEl.style.display = multi ? "flex" : "none";
     if (nextEl) nextEl.style.display = multi ? "flex" : "none";
@@ -832,9 +841,8 @@
         counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
     }
 
-    // Filmstrip should only hide for single items or iframes; standard galleries keep it
     if (filmstrip) {
-      if (isIframe || gallery.images.length <= 1) {
+      if (isIframe || isVideoFile || gallery.images.length <= 1) {
         filmstrip.style.display = "none";
         filmstrip.innerHTML = "";
         filmstrip.dataset.galleryKey = "";
@@ -1807,26 +1815,145 @@
     applyKeywordHighlights,
     applyAllKeywordRules,
 
+    // handleImages(post) {
+    //   if (post.hasAttribute("pp-images-handled")) return;
+    //   post.setAttribute("pp-images-handled", "true");
+
+    //   // --- HANDLE REDGIFS / EMBEDS ---
+    //   const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
+    //   if (embedEl) {
+    //     let src = embedEl.getAttribute("src") || "";
+    //     if (!src && embedEl.hasAttribute("html")) {
+    //       const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
+    //       if (match) src = match[1];
+    //     }
+
+    //     if (src) {
+    //       const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
+    //       if (container && !container.querySelector(".pp-embed-blocker")) {
+    //         container.style.position = "relative";
+    //         container.style.cursor = "zoom-in";
+
+    //         // Create a physical DOM overlay directly over the iframe to intercept touches/clicks
+    //         const blocker = createElement("div", {
+    //           className: "pp-embed-blocker",
+    //           style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
+    //         });
+
+    //         blocker.addEventListener("click", (e) => {
+    //           e.preventDefault();
+    //           e.stopImmediatePropagation();
+    //           e.stopPropagation();
+    //           openLightbox([src], 0);
+    //         }, true);
+
+    //         container.appendChild(blocker);
+    //       }
+    //     }
+    //     return;
+    //   }
+
+    //   // --- EXISTING GALLERY & IMAGE HANDLING ---
+    //   const isGallery = post.hasAttribute("gallery");
+    //   const permalink = post.getAttribute("permalink");
+    //   if (isGallery && permalink) {
+    //     const galleryPromise = fetchGalleryImages(permalink);
+
+    //     post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
+    //       imgEl.classList.add("pp_imageViewable");
+    //       imgEl.addEventListener(
+    //         "click",
+    //         async (e) => {
+    //           e.preventDefault();
+    //           e.stopImmediatePropagation();
+    //           e.stopPropagation();
+    //           document
+    //             .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
+    //             .forEach((el) => el.remove());
+
+    //           const urls = await galleryPromise;
+    //           if (!urls?.length) return;
+
+    //           const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
+    //           const idx = urls.findIndex((u) =>
+    //             clickedSrc.includes(
+    //               u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1],
+    //             ),
+    //           );
+    //           openLightbox(urls, idx !== -1 ? idx : 0);
+    //         },
+    //         true,
+    //       );
+    //     });
+    //     return;
+    //   }
+
+    //   const images = post.querySelectorAll(
+    //     "faceplate-img:not([pp-img-handled]), img:not(.pp_imageViewable)",
+    //   );
+    //   if (!images.length) return;
+    //   images.forEach((imgEl) => {
+    //     imgEl.classList.add("pp_imageViewable");
+    //     if (imgEl.tagName !== "IMG")
+    //       imgEl.setAttribute("pp-img-handled", "true");
+    //     imgEl.addEventListener(
+    //       "click",
+    //       (e) => {
+    //         const clickedSrc = getImgSrc(imgEl);
+    //         if (!clickedSrc) return;
+    //         e.preventDefault();
+    //         e.stopImmediatePropagation();
+    //         e.stopPropagation();
+    //         document
+    //           .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
+    //           .forEach((el) => el.remove());
+    //         const galleryContainer =
+    //           imgEl.closest("gallery-carousel") || imgEl.closest("ul");
+    //         const imgs = galleryContainer
+    //           ? [
+    //               ...new Set(
+    //                 Array.from(
+    //                   galleryContainer.querySelectorAll("faceplate-img, img"),
+    //                 )
+    //                   .map(getImgSrc)
+    //                   .filter(Boolean),
+    //               ),
+    //             ]
+    //           : [clickedSrc];
+    //         openLightbox(imgs, Math.max(0, imgs.indexOf(clickedSrc)));
+    //       },
+    //       true,
+    //     );
+    //   });
+    // },
     handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
       post.setAttribute("pp-images-handled", "true");
 
-      // --- HANDLE REDGIFS / EMBEDS ---
+      // --- HANDLE REDGIFS / EMBEDS & NATIVE VIDEOS ---
       const embedEl = post.querySelector('shreddit-embed[providername="RedGIFs"], iframe[src*="redgifs.com"]');
-      if (embedEl) {
-        let src = embedEl.getAttribute("src") || "";
-        if (!src && embedEl.hasAttribute("html")) {
-          const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
-          if (match) src = match[1];
+      const videoEl = post.querySelector('video');
+
+      if (embedEl || videoEl) {
+        let src = "";
+        if (embedEl) {
+          src = embedEl.getAttribute("src") || "";
+          if (!src && embedEl.hasAttribute("html")) {
+            const match = embedEl.getAttribute("html").match(/src="([^"]+)"/);
+            if (match) src = match[1];
+          }
+        } else if (videoEl) {
+          src = videoEl.getAttribute("src") || videoEl.querySelector("source")?.getAttribute("src") || "";
         }
 
         if (src) {
-          const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
+          const targetEl = embedEl || videoEl;
+          const container = targetEl.closest('[slot="post-media-container"]') || targetEl.parentElement;
           if (container && !container.querySelector(".pp-embed-blocker")) {
             container.style.position = "relative";
             container.style.cursor = "zoom-in";
 
-            // Create a physical DOM overlay directly over the iframe to intercept touches/clicks
+            // Create a physical DOM overlay directly over the media player to intercept clicks
             const blocker = createElement("div", {
               className: "pp-embed-blocker",
               style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
