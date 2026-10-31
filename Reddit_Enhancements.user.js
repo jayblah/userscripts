@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name            Reddit Enhancements
-// @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, social search helpers, and mobile media/font optimizations.
+// @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.9.6
+// @version         2.11.2
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -37,7 +37,7 @@
   };
 
   /** Per-mode accent colors for filter/highlight panels. */
-  const MODE_ACCENT = { filter: "#ff4500", highlight: "#1E88DB" };
+  const MODE_ACCENT = { filter: DC.accent, highlight: "#1E88DB" };
 
   // Containers scanned for NATO/binary content (tighter — paragraph-level bodies).
   const DECODER_SELECTORS = [
@@ -70,11 +70,11 @@
     "search-telemetry-tracker:has(search-answers-response-container-streaming)",
     "search-answers-response-container-streaming",
     "in-feed-community-recommendations",
-    // =========================================================
-    // MODIFICATION: Nuke the mosaic PDP related feed container on mobile
-    // =========================================================
-    "#mosaic-pdp-feed"
   ];
+
+  // Also hidden/removed by the sweep (see sweepRoot).
+  const AWARD_SEL = "award-button, shreddit-slot[slot='award-button']";
+  const BANNER_SEL = 'div[role="banner"].banner.error';
 
   const ALLOWED_SUBREDDITS = [
     "/r/bigtitsinbikinis/",
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.9.6";
+  const VERSION = "2.11.2";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -173,6 +173,7 @@
   );
   let _cachedUsername = null;
   let _badgeFetchPromise = null;
+  let _badgeRetryAt = 0;
   let drag = { active: false, offsetX: 0, offsetY: 0, moved: false };
 
   let _onAllowedSubreddit = false;
@@ -182,9 +183,6 @@
   // =========================================================
 
   const decodeAmp = (s) => s.replaceAll("&amp;", "&");
-  const _coarseMQ = window.matchMedia?.("(pointer: coarse)");
-  const isCoarse = () => !!_coarseMQ?.matches;
-  const freshZoom = () => ({ s: 1, x: 0, y: 0 });
   const normalizeScope = (str) =>
     str
       .split(",")
@@ -193,7 +191,7 @@
       .join(",");
   const panelIdFor = (mode) =>
     mode === "filter" ? "pp_filter_panel" : "pp_highlight_panel";
-  const accentFor = (mode) => MODE_ACCENT[mode] ?? "#ff4500";
+  const accentFor = (mode) => MODE_ACCENT[mode] ?? DC.accent;
   const clearLightboxHash = () => {
     if (location.hash === "#lightbox") {
       history.replaceState(
@@ -261,6 +259,46 @@
       style,
     });
 
+  // Wheel delta in pixels for both pixel and line scroll modes.
+  const wheelDelta = (e) => (e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY);
+
+  // Coalesces bursts of calls (e.g. window resize) into one run per frame.
+  const rafThrottle = (fn) => {
+    let queued = false;
+    return () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        fn();
+      });
+    };
+  };
+
+  const isVideoUrl = (u) => /\.(mp4|webm|mov|m3u8)|format=mp4/.test(u);
+  const freshZoom = () => ({ s: 1, x: 0, y: 0 });
+  // Inline style shared by everything that fills the lightbox stage.
+  const FILL = "position:absolute; inset:0;";
+
+  // Thumbnail for a gallery item: <img>, or a first-frame <video> for clips.
+  const makeThumb = (src, className, lazy) => {
+    const url = decodeAmp(src);
+    return isVideoUrl(url)
+      ? createElement("video", {
+        className,
+        src: `${url}#t=0.1`,
+        muted: true,
+        preload: "metadata",
+        playsInline: true,
+      })
+      : createElement("img", {
+        className,
+        src: url,
+        loading: lazy ? "lazy" : "eager",
+        decoding: "async",
+      });
+  };
+
   // =========================================================
   // SHADOW ROOT REGISTRY
   // =========================================================
@@ -312,6 +350,11 @@
     if (this.localName === "video" && !_videoSeen.has(this)) {
       _videoSeen.add(this);
       _videoRefs.push(new WeakRef(this));
+      // Drop collected players so the list can't grow without bound.
+      if (_videoRefs.length > 100) {
+        for (let i = _videoRefs.length - 1; i >= 0; i--)
+          if (!_videoRefs[i].deref()) _videoRefs.splice(i, 1);
+      }
     }
     return _play.apply(this, args);
   };
@@ -481,7 +524,7 @@
     createElement("style", {
       textContent: `
     ${NUKE_SELECTORS.join(", ")} { display: none !important; }
-    award-button, shreddit-slot[slot="award-button"] { display: none !important; }
+    ${AWARD_SEL} { display: none !important; }
 
     /* =========================================================
        MODIFICATION: Hide horizontal rules globally across all views
@@ -498,79 +541,42 @@
     a[href*="reddit.com/news"], a[href*="/news/"] { display: none !important; }
     a[href*="reddit.com/explore"], a[href*="/explore/"] { display: none !important; }
 
-    /* =========================================================
-       MOBILE FONT SCALING (TARGETS MOBILE VIEWPORTS / TOUCH)
-       ========================================================= */
-    @media (max-width: 768px), (pointer: coarse) {
-      html, body {
-        font-size: 17px !important;
-      }
-      shreddit-post [slot="title"],
-      shreddit-post h1,
-      shreddit-post h2,
-      shreddit-post a[id^="post-title"] {
-        font-size: 1.3rem !important;
-        line-height: 1.35 !important;
-      }
-      shreddit-post [slot="text-body"],
-      shreddit-post .md,
-      shreddit-post p {
-        font-size: 1.2rem !important;
-        line-height: 1.5 !important;
-      }
-      shreddit-comment [slot="comment"],
-      shreddit-comment [id$="-comment-rt"],
-      shreddit-comment .md,
-      shreddit-comment p {
-        font-size: 1.2rem !important;
-        line-height: 1.45 !important;
-      }
-      shreddit-comment [slot="commentHeader"] {
-        font-size: 0.9rem !important;
-      }
-    }
-
     .pp_imageViewable { cursor: zoom-in !important; }
 
     /* AutoModerator fallback stub (used when Reddit's native collapse fails) */
     shreddit-comment[pp-am-stub]:not([pp-am-open]) { display: none !important; }
-    .pp_am_stub { margin: 4px 0; padding: 8px 12px; background: ${DC.bg}; border: 1px solid ${DC.border}; border-radius: 6px; color: rgba(255,255,255,0.55); font: 600 13px sans-serif; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+    .pp_am_stub { margin: 4px 0; padding: 8px 12px; background: ${DC.bg}; border: 1px solid ${DC.border}; border-radius: 6px; color: rgba(255,255,255,0.55); font: 600 13px sans-serif; cursor: pointer; user-select: none; -webkit-user-select: none; }
 
-    #pp_lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 999999; display: none; flex-direction: column; align-items: center; cursor: zoom-out; user-select: none; -webkit-user-select: none; box-sizing: border-box; padding: 56px 0 0; overflow: hidden; overscroll-behavior: contain; touch-action: none; -webkit-tap-highlight-color: transparent; transform-origin: 0 0; }
-    @supports (height: 100dvh) { #pp_lightbox { height: 100dvh; } }
+    #pp_lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 999999; display: none; flex-direction: column; align-items: center; cursor: zoom-out; user-select: none; -webkit-user-select: none; box-sizing: border-box; padding: 56px 0 0; overflow: hidden; overscroll-behavior: contain; }
     #pp_stage { position: relative; flex: 1 1 0; min-height: 0; width: 90%; overflow: hidden; }
-    #pp_stage.pp_snap { transition: transform 0.18s ease-out, opacity 0.18s ease-out; }
     #pp_lightbox img#pp_lightbox_img { position: absolute; inset: 0; margin: auto; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; pointer-events: none; }
-    #pp_filmstrip { position: relative; flex-shrink: 0; display: flex; gap: 6px; padding: 10px 12px; box-sizing: border-box; max-width: 90%; overflow-x: auto; overflow-y: hidden; touch-action: pan-x; overscroll-behavior: contain; cursor: default; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
+    #pp_filmstrip { position: relative; flex-shrink: 0; display: flex; gap: 6px; padding: 10px 12px; box-sizing: border-box; max-width: 90%; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain; cursor: default; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
     #pp_filmstrip:empty { display: none; }
     .pp_film_thumb { width: 54px; height: 54px; object-fit: cover; border-radius: 4px; cursor: pointer; opacity: 0.45; border: 2px solid transparent; flex-shrink: 0; transition: opacity 0.15s, border-color 0.15s; }
     .pp_film_thumb:hover { opacity: 0.75; }
-    .pp_film_thumb.pp_film_active { opacity: 1; border-color: #ff4500; }
+    .pp_film_thumb.pp_film_active { opacity: 1; border-color: ${DC.accent}; }
 
-    #pp_lightbox_close { position: absolute; top: 6px; right: 8px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 32px; line-height: 1; cursor: pointer; border-radius: 50%; z-index: 1000001; }
-    #pp_lightbox_close:hover { background: rgba(255,255,255,0.15); }
-    .pp_nav_btn { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.1); color: white; border: none; font-size: 28px; cursor: pointer; border-radius: 4px; transition: background 0.2s; z-index: 1000000; box-sizing: border-box; height: 60px; width: 60px; display: flex; justify-content: center; align-items: center; padding: 0; line-height: 1; }
-    .pp_nav_btn:hover { background: rgba(255,255,255,0.25); }
+    /* Shared look for the lightbox's round-cornered buttons (arrows, grid toggle). */
+    .pp_nav_btn, #pp_grid_btn { position: absolute; background: rgba(255,255,255,0.1); color: #fff; border: none; cursor: pointer; border-radius: 4px; transition: background 0.2s; box-sizing: border-box; display: flex; justify-content: center; align-items: center; padding: 0; line-height: 1; }
+    .pp_nav_btn:hover, #pp_grid_btn:hover { background: rgba(255,255,255,0.25); }
+    .pp_nav_btn { top: 50%; transform: translateY(-50%); font-size: 28px; z-index: 1000000; height: 60px; width: 60px; }
     #pp_nav_prev { left: 20px; } #pp_nav_next { right: 20px; }
     #pp_gallery_counter { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-family: sans-serif; font-size: 14px; background: rgba(0,0,0,0.6); padding: 6px 16px; border-radius: 20px; display: none; z-index: 1000001; }
 
     /* No gallery counter showing (single image, video, embed): use the full screen. */
-    #pp_lightbox.pp_lb_media { padding-top: env(safe-area-inset-top, 0px) !important; }
+    #pp_lightbox.pp_lb_media { padding-top: 0 !important; }
 
-    @media (pointer: coarse) {
-      #pp_stage { width: 100%; }
-      #pp_filmstrip { max-width: 100%; padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); }
-      .pp_film_thumb { width: 46px; height: 46px; }
-      .pp_nav_btn { display: none !important; }
-      #pp_lightbox_close { top: calc(4px + env(safe-area-inset-top, 0px)); background: rgba(255,255,255,0.12); }
-      #pp_gallery_counter { top: calc(12px + env(safe-area-inset-top, 0px)); }
-    }
-
-    /* Small screens: no reserved top strip; the gallery counter overlays the media. */
-    @media (max-width: 768px), (pointer: coarse) {
-      #pp_lightbox { padding-top: env(safe-area-inset-top, 0px); }
-      #pp_lightbox.pp_lb_media { padding-bottom: env(safe-area-inset-bottom, 0px); }
-    }
+    /* Gallery grid view: thumbnails of every image; click one to open it. */
+    #pp_grid { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; gap: clamp(6px, 0.7vw, 14px); align-content: start; padding: 4px; box-sizing: border-box; cursor: zoom-out; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
+    .pp_grid_thumb { display: block; border-radius: 6px; cursor: pointer; background: #111; border: 2px solid transparent; box-sizing: border-box; transition: border-color 0.15s, filter 0.15s; }
+    /* Few images: fill the stage with as-large-as-possible, uncropped thumbnails. */
+    #pp_grid.pp_grid_fit { overflow: hidden; align-content: stretch; }
+    #pp_grid.pp_grid_fit .pp_grid_thumb { max-width: 100%; max-height: 100%; width: auto; height: auto; min-width: 0; min-height: 0; place-self: center; object-fit: contain; }
+    /* Many images: square crops that scroll. */
+    #pp_grid.pp_grid_scroll .pp_grid_thumb { width: 100%; aspect-ratio: 1; object-fit: cover; }
+    .pp_grid_thumb:hover { border-color: rgba(255,255,255,0.5); filter: brightness(1.1); }
+    .pp_grid_thumb.pp_grid_active { border-color: ${DC.accent}; }
+    #pp_grid_btn { top: 10px; right: 20px; width: 40px; height: 40px; display: none; font-size: 20px; z-index: 1000001; }
 
     .pp_decoder_box { margin: 8px 0; padding: 6px; background: ${DC.bg}; border: 1px solid ${DC.border}; border-radius: 6px; font-family: sans-serif; display: flex; align-items: center; gap: 10px; color: ${DC.text}; }
     .pp_decoder_label { font-size: 10px; font-weight: 900; color: ${DC.accent}; text-transform: uppercase; letter-spacing: 1px; }
@@ -583,10 +589,10 @@
     .pp_panel_title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.4); }
     .pp_panel_head_actions { display: flex; gap: 12px; align-items: center; }
     .pp_panel_show_btn { font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.35); background: transparent !important; border: none !important; height: 24px; padding: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; line-height: 1; box-sizing: border-box; transition: color 0.15s ease; letter-spacing: 0.04em; }
-    .pp_panel_show_btn.pp_show_active { color: #ff4500; }
+    .pp_panel_show_btn.pp_show_active { color: ${DC.accent}; }
     .pp_panel_show_btn:hover:not(.pp_show_active) { color: rgba(255,255,255,0.6); }
     .pp_panel_close_btn { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; background: transparent !important; border: none !important; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; line-height: 1; padding: 0; transition: color 0.15s ease; }
-    .pp_panel_close_btn:hover { color: #ff4500; }
+    .pp_panel_close_btn:hover { color: ${DC.accent}; }
     .pp_tab_bar { display: flex; margin: 4px 16px 0; gap: 16px; border-bottom: 1px solid rgba(255,255,255,0.06); }
     .pp_tab { background: transparent !important; border: none; padding: 8px 0; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.35); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; line-height: 1; box-sizing: border-box; transition: color 0.15s ease; }
     .pp_tab::after { display: none !important; } .pp_tab.pp_tab_active { color: #fff !important; } .pp_tab:hover:not(.pp_tab_active) { color: rgba(255,255,255,0.75); }
@@ -600,7 +606,7 @@
     .pp_kw_label { flex: 1; font-size: 12px; color: rgba(255,255,255,0.7); font-family: ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
     .pp_kw_label:hover { color: #fff; }
     .pp_kw_del { flex-shrink: 0; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; background: transparent !important; border: none !important; color: rgba(255,255,255,0.3); font-size: 10px; cursor: pointer; opacity: 0; line-height: 1; transition: color 0.15s ease; }
-    .pp_kw_row:hover .pp_kw_del { opacity: 1; } .pp_kw_del:hover { color: #ff4500; }
+    .pp_kw_row:hover .pp_kw_del { opacity: 1; } .pp_kw_del:hover { color: ${DC.accent}; }
     .pp_scope_header { display: flex; align-items: center; gap: 6px; height: 32px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.04); box-sizing: border-box; }
     .pp_scope_chevron { font-size: 8px; color: rgba(255,255,255,0.3); transition: transform 0.15s ease; flex-shrink: 0; }
     .pp_scope_name { flex: 1; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.5); cursor: text; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -613,7 +619,7 @@
     .pp_edit_cancel { flex-shrink: 0; width: auto; height: 32px; display: inline-flex !important; align-items: center !important; justify-content: center !important; background: transparent !important; border: none !important; color: rgba(255,255,255,0.4); font-size: 12px; font-weight: 500; cursor: pointer; line-height: 1 !important; margin: 0 !important; box-sizing: border-box; transition: color 0.15s ease; }
     .pp_edit_cancel:hover { color: #fff; }
     .pp_add_row { display: flex; align-items: center !important; justify-content: center; gap: 10px; padding: 14px 16px; border-top: 1px solid rgba(255,255,255,0.06); margin-top: 6px; box-sizing: border-box; }
-    .pp_add_btn { flex-shrink: 0; padding: 0; height: 32px; background: transparent !important; border: none !important; font-size: 12px; font-weight: 700; cursor: pointer; color: #ff4500; box-sizing: border-box; display: inline-flex !important; align-items: center !important; justify-content: center !important; line-height: 1 !important; margin: 0 !important; vertical-align: middle; transition: filter 0.15s ease; }
+    .pp_add_btn { flex-shrink: 0; padding: 0; height: 32px; background: transparent !important; border: none !important; font-size: 12px; font-weight: 700; cursor: pointer; color: ${DC.accent}; box-sizing: border-box; display: inline-flex !important; align-items: center !important; justify-content: center !important; line-height: 1 !important; margin: 0 !important; vertical-align: middle; transition: filter 0.15s ease; }
     .pp_add_btn:hover { filter: brightness(1.2); }
     .pp_color_pick { -webkit-appearance: none !important; appearance: none !important; flex-shrink: 0; width: 20px !important; height: 20px !important; min-width: 20px !important; max-width: 20px !important; border: 1px solid rgba(255,255,255,0.15); border-radius: 50% !important; cursor: pointer; padding: 0; background: transparent; box-sizing: border-box; display: inline-flex !important; align-items: center !important; justify-content: center !important; margin: 0 !important; vertical-align: middle; overflow: hidden; }
     .pp_color_pick::-webkit-color-swatch-wrapper { padding: 0 !important; margin: 0 !important; }
@@ -648,7 +654,7 @@
 
     div#pp_float_collapse { position: fixed; z-index: 99999; display: none; cursor: grab; flex-direction: column; align-items: center; justify-content: center; background: rgba(21,24,26,0.9) !important; backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.08) !important; border-radius: 8px !important; box-shadow: 0 8px 32px rgba(0,0,0,0.5); width: 34px; padding: 4px 0; box-sizing: border-box; }
     div#pp_float_collapse:active { cursor: grabbing; }
-    div#pp_float_collapse { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    div#pp_float_collapse { -webkit-user-select: none; user-select: none; }
     div#pp_float_collapse.pp_dragging, div#pp_float_collapse.pp_dragging * { cursor: grabbing !important; }
     div#pp_float_collapse .pp_collapse_main_btn, div#pp_float_collapse .pp_collapse_sub_btn { display: inline-flex !important; align-items: center !important; justify-content: center !important; width: 26px !important; background: transparent !important; color: #b3b3b3 !important; border: none !important; font-size: 11px !important; font-weight: 600 !important; cursor: pointer !important; border-radius: 4px !important; transition: background 0.2s, color 0.2s !important; user-select: none !important; padding: 0 !important; margin: 0 !important; box-sizing: border-box !important; }
     div#pp_float_collapse .pp_collapse_main_btn { height: 28px !important; color: #ffffff !important; font-size: 9px !important; font-weight: 700 !important; }
@@ -673,12 +679,10 @@
     <button class="pp_collapse_sub_btn" id="pp_jump_bottom" title="Scroll to bottom [X]">↓</button>
   `;
 
-  function collapseGap() {
-    return isCoarse() ? 12 : 8;
-  }
+  const COLLAPSE_GAP = 8;
 
   function anchorCollapseBar(side) {
-    const gap = collapseGap();
+    const gap = COLLAPSE_GAP;
     const s = collapseBtn.style;
     s.transition = "none";
     if (side === "right") {
@@ -694,7 +698,7 @@
     const top = parseInt(collapseBtn.style.top, 10);
     const h = collapseBtn.offsetHeight;
     if (!Number.isFinite(top) || !h) return;
-    const gap = collapseGap();
+    const gap = COLLAPSE_GAP;
     const maxTop = Math.max(gap, window.innerHeight - h - gap);
     collapseBtn.style.top = `${Math.min(Math.max(gap, top), maxTop)}px`;
   }
@@ -712,50 +716,87 @@
   anchorCollapseBar(_collapseSide);
 
   // =========================================================
-  // LIGHTBOX & GALLERY (MODIFIED TO SUPPORT IFRAMES & SWIPE UP/DOWN)
+  // LIGHTBOX & GALLERY (SUPPORTS IFRAMES)
   // =========================================================
 
   const lightbox = createElement("div", { id: "pp_lightbox" });
-  let _lbSwipeAt = 0;
-  let _lbSyncRaf = 0;
 
-  // Pinch-zoom state. Applied as a transform on #pp_zoom (inside the stage),
-  // so it never fights with the stage's own swipe transform.
-  const ZOOM_MAX = 6;
+  // Show/hide an element inside the lightbox by selector.
+  const setShown = (sel, show, display = "flex") => {
+    const el = lightbox.querySelector(sel);
+    if (el) el.style.display = show ? display : "none";
+  };
+
+  // Zoom for the image/video/embed being viewed (including a single image inside
+  // a gallery): hold the right mouse button and scroll the wheel. Applied as a
+  // transform on #pp_zoom (inside the stage), so the click-catching overlay above
+  // iframes/videos never moves or scales.
+  const ZOOM_MAX = 8;
   let _zoom = freshZoom();
+  let _panned = false;
 
-  function applyZoom(animate) {
+  function applyZoom() {
     const el = lightbox.querySelector("#pp_zoom");
-    if (!el) return;
-    el.style.transition = animate ? "transform 0.18s ease-out" : "none";
-    el.style.transform =
-      _zoom.s === 1 && !_zoom.x && !_zoom.y
-        ? ""
-        : `translate(${_zoom.x}px, ${_zoom.y}px) scale(${_zoom.s})`;
+    if (el)
+      el.style.transform =
+        _zoom.s === 1
+          ? ""
+          : `translate(${_zoom.x}px, ${_zoom.y}px) scale(${_zoom.s})`;
+    lightbox.style.cursor = _zoom.s > 1 ? "grab" : "";
   }
 
-  function clampZoom() {
-    const stage = lightbox.querySelector("#pp_stage");
-    if (!stage || _zoom.s <= 1) {
+  function resetZoom() {
+    _zoom = freshZoom();
+    applyZoom();
+  }
+
+  // Keep the zoomed media covering the stage (no empty edges).
+  function clampZoom(stage) {
+    if (_zoom.s <= 1) {
       _zoom = freshZoom();
       return;
     }
     const W = stage.clientWidth;
     const H = stage.clientHeight;
-    _zoom.s = Math.min(_zoom.s, ZOOM_MAX);
     _zoom.x = Math.min(0, Math.max(W - W * _zoom.s, _zoom.x));
     _zoom.y = Math.min(0, Math.max(H - H * _zoom.s, _zoom.y));
   }
 
-  function resetZoom(animate) {
-    _zoom = freshZoom();
-    applyZoom(animate);
+  // Zoom around the cursor so the point under it stays put.
+  function zoomAt(e) {
+    const stage = lightbox.querySelector("#pp_stage");
+    if (!stage) return;
+    const r = stage.getBoundingClientRect();
+    const lx = e.clientX - r.left;
+    const ly = e.clientY - r.top;
+    const dy = wheelDelta(e);
+    const s0 = _zoom.s;
+    const s1 = Math.min(ZOOM_MAX, Math.max(1, s0 * Math.exp(-dy * 0.002)));
+    if (s1 === s0) return;
+    _zoom.x = lx - (lx - _zoom.x) * (s1 / s0);
+    _zoom.y = ly - (ly - _zoom.y) * (s1 / s0);
+    _zoom.s = s1;
+    clampZoom(stage);
+    applyZoom();
   }
 
   // Non-passive wheel listeners on window force scrolling to wait on the main
   // thread, so this is attached only while the lightbox is open.
+  // Plain wheel: scrolls the grid, or pages through a gallery. With the right
+  // mouse button held (e.buttons bit 2) it zooms the current media instead.
   function onLightboxWheel(e) {
     stopEvent(e);
+    // Grid view: the wheel scrolls the thumbnails.
+    if (gallery.grid) {
+      const grid = lightbox.querySelector("#pp_grid");
+      if (grid) grid.scrollTop += wheelDelta(e);
+      return;
+    }
+    if (e.buttons & 2) {
+      zoomAt(e);
+      return;
+    }
+    if (gallery.images.length <= 1) return;
     const now = Date.now();
     if (now - lastWheelTime > 150) {
       lastWheelTime = now;
@@ -766,50 +807,9 @@
 
   const closeLightbox = () => {
     window.removeEventListener("wheel", onLightboxWheel, WHEEL_OPTS);
-    _zoom = freshZoom();
+    resetZoom();
     lightbox.style.display = "none";
     clearLightboxHash();
-  };
-
-  // Height of the viewport with every browser bar shown (100svh). Mobile browsers
-  // can report a visual viewport that runs behind a floating bottom toolbar, which
-  // pushes centered media visibly low.
-  const _svhProbe = createElement("div", {
-    style:
-      "position:fixed;top:0;left:0;width:0;height:100svh;visibility:hidden;pointer-events:none;",
-  });
-
-  function syncLightboxViewport() {
-    _lbSyncRaf = 0;
-    if (lightbox.style.display !== "flex") return;
-    const vv = window.visualViewport;
-    const st = lightbox.style;
-    const scale = vv?.scale || 1;
-    const unzoomed = Math.abs(scale - 1) < 0.001;
-    const touch = isCoarse();
-    if (!vv || (!touch && unzoomed)) {
-      ["top", "left", "right", "bottom", "width", "height", "transform"].forEach(
-        (p) => st.removeProperty(p),
-      );
-      return;
-    }
-    const visibleH = unzoomed
-      ? Math.min(vv.height, _svhProbe.offsetHeight || Infinity)
-      : vv.height;
-    st.top = "0";
-    st.left = "0";
-    st.right = "auto";
-    st.bottom = "auto";
-    st.width = `${vv.width * scale}px`;
-    st.height = `${visibleH * scale}px`;
-    st.transform =
-      unzoomed && !vv.offsetLeft && !vv.offsetTop
-        ? ""
-        : `translate(${vv.offsetLeft}px, ${vv.offsetTop}px) scale(${1 / scale})`;
-  }
-
-  const queueLightboxSync = () => {
-    if (!_lbSyncRaf) _lbSyncRaf = requestAnimationFrame(syncLightboxViewport);
   };
 
   function attachLightbox() {
@@ -822,10 +822,14 @@
       <div id="pp_stage"></div>
       <div id="pp_nav_next" class="pp_nav_btn" title="Next [D]">&#10095;</div>
       <div id="pp_gallery_counter">1 / 1</div>
+      <div id="pp_grid_btn" title="Grid view [G]">&#9638;</div>
       <div id="pp_filmstrip"></div>
     `;
-    lightbox.appendChild(_svhProbe);
 
+    // Right-click + wheel is the zoom gesture; don't pop the browser menu on release.
+    lightbox.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    lightbox.querySelector("#pp_grid_btn").onclick = withStop(toggleGrid);
     lightbox.querySelector("#pp_nav_prev").onclick = withStop(() =>
       navigateGallery(-1),
     );
@@ -833,236 +837,196 @@
       navigateGallery(1),
     );
     lightbox.onclick = (e) => {
-      if (Date.now() - _lbSwipeAt < 400) return;
-      // While zoomed in, a plain tap resets zoom instead of closing.
-      if (_zoom.s > 1.001) {
-        resetZoom(true);
+      // A drag-pan ends in a click; it shouldn't close or reset anything.
+      if (_panned) {
+        _panned = false;
         return;
       }
+      // While zoomed in, a plain click resets zoom instead of closing.
+      if (_zoom.s > 1) {
+        resetZoom();
+        return;
+      }
+      // Backdrop, the grid's empty space, or the media itself (image, video or
+      // embed overlay) all dismiss, so a click at 1x closes whatever you click.
+      const t = e.target;
       if (
-        e.target === lightbox ||
-        e.target.id === "pp_stage" ||
-        e.target.id === "pp_zoom" ||
-        e.target.id === "pp_lightbox_img"
+        t === lightbox ||
+        t.id === "pp_stage" ||
+        t.id === "pp_grid" ||
+        t.closest?.("#pp_zoom, #pp_overlay")
       )
         closeLightbox();
     };
 
-    window.visualViewport?.addEventListener("resize", queueLightboxSync);
-    window.visualViewport?.addEventListener("scroll", queueLightboxSync);
-    window.addEventListener("resize", queueLightboxSync);
-    window.addEventListener("orientationchange", queueLightboxSync);
+    // Re-fit the thumbnail grid when the window is resized.
+    window.addEventListener(
+      "resize",
+      rafThrottle(() => {
+        if (!gallery.grid || lightbox.style.display !== "flex") return;
+        const grid = lightbox.querySelector("#pp_grid");
+        if (grid) layoutGrid(grid);
+      }),
+    );
 
+    // Drag to pan while zoomed in.
     const stage = lightbox.querySelector("#pp_stage");
-    let g = null;
-
-    // ---- Pinch zoom / pan (touch only) ----
-    const pointers = new Map();
-    let pinch = null;
     let pan = null;
-
-    const toStageLocal = (x, y) => {
-      const r = stage.getBoundingClientRect();
-      return { x: x - r.left, y: y - r.top };
-    };
-    const pinchMetrics = () => {
-      const [a, b] = [...pointers.values()];
-      return {
-        d: Math.hypot(a.x - b.x, a.y - b.y),
-        mx: (a.x + b.x) / 2,
-        my: (a.y + b.y) / 2,
-      };
-    };
-    const beginPinch = () => {
-      // Cancel any swipe in progress.
-      g = null;
-      pan = null;
-      stage.classList.remove("pp_snap");
-      stage.style.transform = "";
-      stage.style.opacity = "";
-      const m = pinchMetrics();
-      const l = toStageLocal(m.mx, m.my);
-      pinch = {
-        d0: Math.max(m.d, 1),
-        s0: _zoom.s,
-        cx: (l.x - _zoom.x) / _zoom.s,
-        cy: (l.y - _zoom.y) / _zoom.s,
-      };
-    };
-    const movePinch = () => {
-      const m = pinchMetrics();
-      const l = toStageLocal(m.mx, m.my);
-      const s1 = Math.min(ZOOM_MAX, Math.max(0.5, (pinch.s0 * m.d) / pinch.d0));
-      _zoom.s = s1;
-      _zoom.x = l.x - pinch.cx * s1;
-      _zoom.y = l.y - pinch.cy * s1;
-      applyZoom(false);
-    };
-    const beginPan = (id, x, y) => {
-      pan = { id, x, y, zx: _zoom.x, zy: _zoom.y, moved: false };
-    };
-    const movePan = (e) => {
+    stage.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      _panned = false;
+      if (_zoom.s <= 1) return;
+      pan = { id: e.pointerId, x: e.clientX, y: e.clientY, zx: _zoom.x, zy: _zoom.y };
+      try {
+        stage.setPointerCapture(e.pointerId);
+      } catch {}
+    });
+    stage.addEventListener("pointermove", (e) => {
+      if (!pan || e.pointerId !== pan.id) return;
       const dx = e.clientX - pan.x;
       const dy = e.clientY - pan.y;
-      if (!pan.moved && Math.hypot(dx, dy) < 6) return;
-      pan.moved = true;
+      if (!_panned && Math.hypot(dx, dy) < 4) return;
+      _panned = true;
       _zoom.x = pan.zx + dx;
       _zoom.y = pan.zy + dy;
-      clampZoom();
-      applyZoom(false);
+      clampZoom(stage);
+      applyZoom();
+    });
+    const endPan = (e) => {
+      if (pan && e.pointerId === pan.id) pan = null;
     };
-    const endZoomPointer = (e) => {
-      pointers.delete(e.pointerId);
-      if (pinch && pointers.size < 2) {
-        pinch = null;
-        _lbSwipeAt = Date.now();
-        clampZoom(); // snaps back to 1x if pinched below it
-        applyZoom(true);
-        // One finger still down while zoomed in: keep going as a pan.
-        const rest = pointers.entries().next().value;
-        if (rest && _zoom.s > 1.001) beginPan(rest[0], rest[1].x, rest[1].y);
-      } else if (pan && e.pointerId === pan.id) {
-        if (pan.moved) _lbSwipeAt = Date.now();
-        pan = null;
-      }
-    };
-
-    lightbox.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "mouse") return;
-      if (e.target.closest?.("#pp_filmstrip, .pp_nav_btn")) return;
-      if (e.isPrimary) {
-        // First finger of a new gesture: drop any stale state.
-        pointers.clear();
-        pinch = null;
-        pan = null;
-      }
-      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pointers.size === 2) {
-        beginPinch();
-        return;
-      }
-      if (pointers.size > 2 || !e.isPrimary) return;
-      if (_zoom.s > 1.001) {
-        beginPan(e.pointerId, e.clientX, e.clientY);
-        return;
-      }
-
-      g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), axis: null, dx: 0, dy: 0 };
-      stage.classList.remove("pp_snap");
-    }, true);
-
-    lightbox.addEventListener("pointermove", (e) => {
-      const tracked = pointers.get(e.pointerId);
-      if (tracked) {
-        tracked.x = e.clientX;
-        tracked.y = e.clientY;
-      }
-      if (pinch && pointers.size >= 2) {
-        movePinch();
-        return;
-      }
-      if (pan && e.pointerId === pan.id) {
-        movePan(e);
-        return;
-      }
-      if (!g || e.pointerId !== g.id) return;
-      g.dx = e.clientX - g.x;
-      g.dy = e.clientY - g.y;
-      if (!g.axis) {
-        if (Math.max(Math.abs(g.dx), Math.abs(g.dy)) < 10) return;
-        g.axis = Math.abs(g.dx) > Math.abs(g.dy) ? "x" : "y";
-      }
-      if (g.axis === "x" && gallery.images.length > 1) {
-        stage.style.transform = `translateX(${g.dx}px)`;
-      } else if (g.axis === "y") {
-        stage.style.transform = `translateY(${g.dy}px)`;
-        stage.style.opacity = String(Math.max(0.3, 1 - Math.abs(g.dy) / 400));
-      }
-    }, true);
-
-    const endGesture = (e) => {
-      endZoomPointer(e);
-      if (!g || e.pointerId !== g.id) return;
-      const { axis, dx, dy, t } = g;
-      g = null;
-
-      const resetStage = (animate) => {
-        if (animate) stage.classList.add("pp_snap");
-        stage.style.transform = "";
-        stage.style.opacity = "";
-      };
-      if (e.type === "pointercancel" || !axis) {
-        resetStage(false);
-        return;
-      }
-      _lbSwipeAt = Date.now();
-      const fast = Date.now() - t < 300;
-      if (
-        axis === "x" &&
-        gallery.images.length > 1 &&
-        (Math.abs(dx) > 60 || (fast && Math.abs(dx) > 30))
-      ) {
-        resetStage(false);
-        navigateGallery(dx < 0 ? 1 : -1);
-      } else if (
-        axis === "y" &&
-        (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 40))
-      ) {
-        resetStage(false);
-        closeLightbox();
-      } else {
-        resetStage(true);
-      }
-    };
-    lightbox.addEventListener("pointerup", endGesture, true);
-    lightbox.addEventListener("pointercancel", endGesture, true);
+    stage.addEventListener("pointerup", endPan);
+    stage.addEventListener("pointercancel", endPan);
   }
 
-  function openLightbox(images, startIndex, startTime = 0) {
+  // `grid` opens a multi-image gallery as a thumbnail grid instead of image 1.
+  function openLightbox(images, startIndex, startTime = 0, grid = false) {
     attachLightbox();
-    gallery = { images, index: startIndex, startTime };
+    gallery = { images, index: startIndex, startTime, grid: grid && images.length > 1 };
     lightbox.style.display = "flex";
     window.addEventListener("wheel", onLightboxWheel, WHEEL_OPTS);
-    syncLightboxViewport();
     updateLightboxImage();
     clearLightboxHash();
   }
 
+  function toggleGrid() {
+    if (gallery.images.length <= 1) return;
+    gallery.grid = !gallery.grid;
+    updateLightboxImage();
+  }
+
+  // Show image i in the normal (single-image) view.
+  function showImage(i) {
+    gallery.index = i;
+    gallery.grid = false;
+    updateLightboxImage();
+  }
+
+  // Click handler for a grid or filmstrip thumbnail.
+  const onThumbClick = (i) => (e) => {
+    e.stopPropagation();
+    showImage(i);
+  };
+
+  // Sizes the grid to the stage. If every thumbnail can be at least GRID_MIN_FIT
+  // px without scrolling, pick the columns/rows that make them largest (2 images
+  // on a wide screen become left/right halves). Otherwise use scrolling squares
+  // whose size follows the viewport width.
+  const GRID_MIN_FIT = 140;
+  function layoutGrid(grid) {
+    const n = grid.children.length;
+    // Gap and padding come from the stylesheet so there's one source of truth.
+    const cs = getComputedStyle(grid);
+    const gap = parseFloat(cs.columnGap) || 0;
+    const W =
+      grid.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const H =
+      grid.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    let best = { size: 0, cols: 1, rows: n };
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols);
+      const size = Math.min(
+        (W - gap * (cols - 1)) / cols,
+        (H - gap * (rows - 1)) / rows,
+      );
+      if (size > best.size) best = { size, cols, rows };
+    }
+    const fit = best.size >= GRID_MIN_FIT;
+    grid.classList.toggle("pp_grid_fit", fit);
+    grid.classList.toggle("pp_grid_scroll", !fit);
+    if (fit) {
+      grid.style.gridTemplateColumns = `repeat(${best.cols}, minmax(0, 1fr))`;
+      grid.style.gridTemplateRows = `repeat(${best.rows}, minmax(0, 1fr))`;
+    } else {
+      const target = Math.min(360, Math.max(160, window.innerWidth * 0.16));
+      const cols = Math.max(1, Math.floor((W + gap) / (target + gap)));
+      grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+      grid.style.gridTemplateRows = "";
+    }
+  }
+
+  // Thumbnail grid of every image in the gallery. Clicking one opens it in the
+  // normal view (counter and filmstrip follow gallery.index).
+  function renderGridView() {
+    const stage = lightbox.querySelector("#pp_stage");
+    const grid = createElement("div", { id: "pp_grid" });
+    gallery.images.forEach((src, i) => {
+      const className =
+        "pp_grid_thumb" + (i === gallery.index ? " pp_grid_active" : "");
+      const thumb = makeThumb(src, className, gallery.images.length > 24);
+      thumb.addEventListener("click", onThumbClick(i));
+      grid.appendChild(thumb);
+    });
+    stage.innerHTML = "";
+    stage.appendChild(grid);
+    layoutGrid(grid);
+    resetZoom();
+
+    // Keep the counter strip, hide the single-image controls.
+    lightbox.classList.remove("pp_lb_media");
+    setShown("#pp_gallery_counter", true, "block");
+    lightbox.querySelector("#pp_gallery_counter").textContent =
+      `${gallery.images.length} images`;
+    for (const sel of ["#pp_nav_prev", "#pp_nav_next", "#pp_filmstrip", "#pp_grid_btn"])
+      setShown(sel, false);
+
+    // Center the current image's thumbnail.
+    const current = grid.children[gallery.index];
+    if (current)
+      grid.scrollTop =
+        current.offsetTop - (grid.clientHeight - current.offsetHeight) / 2;
+  }
+
   function updateLightboxImage() {
     if (!gallery.images.length) return;
+    if (gallery.grid && gallery.images.length > 1) {
+      renderGridView();
+      return;
+    }
     const stage = lightbox.querySelector("#pp_stage");
-    const counterEl = lightbox.querySelector("#pp_gallery_counter");
-    const prevEl = lightbox.querySelector("#pp_nav_prev");
-    const nextEl = lightbox.querySelector("#pp_nav_next");
     const filmstrip = lightbox.querySelector("#pp_filmstrip");
 
     const currentUrl = decodeAmp(gallery.images[gallery.index]);
     const isIframe = currentUrl.includes("redgifs.com") || currentUrl.includes("iframe");
 
-    const isVideoFile =
-      currentUrl.includes(".mp4") ||
-      currentUrl.includes(".webm") ||
-      currentUrl.includes(".mov") ||
-      currentUrl.includes(".m3u8") ||
-      currentUrl.includes("format=mp4");
+    const isVideoFile = isVideoUrl(currentUrl);
+    const safeUrl = escapeHtml(currentUrl);
 
     // Render stage content: Iframe, Video file, or Image.
-    // Media goes inside #pp_zoom (the pinch-zoom target). The touch-catching
-    // overlay for iframes/videos stays outside it so it never moves or scales.
     let media;
     let overlay = "";
-    const overlayHtml = `<div style="position:absolute; top:0; left:0; right:48px; bottom:48px; z-index:10; background:transparent; touch-action:none;"></div>`;
+    const overlayHtml = `<div id="pp_overlay" style="position:absolute; top:0; left:0; right:48px; bottom:48px; z-index:10; background:transparent;"></div>`;
     if (isIframe) {
-      media = `<iframe src="${currentUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="position:absolute; inset:0; width:100%; height:100%;"></iframe>`;
+      media = `<iframe src="${safeUrl}" frameborder="0" scrolling="no" width="100%" height="100%" allowfullscreen style="${FILL} width:100%; height:100%;"></iframe>`;
       overlay = overlayHtml;
     } else if (isVideoFile) {
-      media = `<video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>`;
+      media = `<video src="${safeUrl}" autoplay loop muted playsinline style="${FILL} width:100%; height:100%; object-fit:contain;"></video>`;
       overlay = overlayHtml;
     } else {
-      media = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+      media = `<img id="pp_lightbox_img" src="${safeUrl}" alt="Enlarged View" style="${FILL} max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
     }
-    stage.innerHTML = `<div id="pp_zoom" style="position:absolute; inset:0; transform-origin:0 0;">${media}</div>${overlay}`;
-    _zoom = freshZoom();
+    stage.innerHTML = `<div id="pp_zoom" style="${FILL} transform-origin:0 0;">${media}</div>${overlay}`;
+    resetZoom();
 
     // Resume from the inline player's position (consumed once).
     if (isVideoFile && gallery.startTime > 0) {
@@ -1084,13 +1048,14 @@
     // The top strip only exists for the gallery counter; skip it whenever no counter shows.
     lightbox.classList.toggle("pp_lb_media", !multi);
 
-    if (prevEl) prevEl.style.display = multi ? "flex" : "none";
-    if (nextEl) nextEl.style.display = multi ? "flex" : "none";
-    if (counterEl) {
-      counterEl.style.display = multi ? "block" : "none";
-      if (multi)
-        counterEl.textContent = `${gallery.index + 1} / ${gallery.images.length}`;
-    }
+    // Grid button shows for any multi-image gallery; the rest only for images.
+    setShown("#pp_grid_btn", gallery.images.length > 1);
+    setShown("#pp_nav_prev", multi);
+    setShown("#pp_nav_next", multi);
+    setShown("#pp_gallery_counter", multi, "block");
+    if (multi)
+      lightbox.querySelector("#pp_gallery_counter").textContent =
+        `${gallery.index + 1} / ${gallery.images.length}`;
 
     if (filmstrip) {
       if (isIframe || isVideoFile || gallery.images.length <= 1) {
@@ -1106,17 +1071,8 @@
           filmstrip.dataset.galleryKey = galleryKey;
           filmstrip.innerHTML = "";
           gallery.images.forEach((src, i) => {
-            const thumb = createElement("img", {
-              className: "pp_film_thumb",
-              src: decodeAmp(src),
-              loading: "lazy",
-              decoding: "async",
-            });
-            thumb.addEventListener("click", (e) => {
-              e.stopPropagation();
-              gallery.index = i;
-              updateLightboxImage();
-            });
+            const thumb = makeThumb(src, "pp_film_thumb", true);
+            thumb.addEventListener("click", onThumbClick(i));
             filmstrip.appendChild(thumb);
           });
         }
@@ -1137,10 +1093,10 @@
   }
 
   function navigateGallery(dir) {
-    if (!gallery.images.length) return;
-    gallery.index =
-      (gallery.index + dir + gallery.images.length) % gallery.images.length;
-    updateLightboxImage();
+    if (!gallery.images.length || gallery.grid) return;
+    showImage(
+      (gallery.index + dir + gallery.images.length) % gallery.images.length,
+    );
   }
 
   async function fetchGalleryImages(permalink) {
@@ -1181,6 +1137,9 @@
     if (!btn) return;
     if (_cachedUsername) return insertBadge(_cachedUsername);
     if (_badgeFetchPromise) return;
+    // Logged out or failed lookups used to refetch on every pass; back off.
+    if (performance.now() < _badgeRetryAt) return;
+    _badgeRetryAt = performance.now() + 30000;
 
     _badgeFetchPromise = fetch("/api/me.json", { credentials: "include" })
       .then((r) => r.json())
@@ -1975,7 +1934,7 @@
       });
     };
 
-    // Two-stage SimpCity search: 1st tap = title-only, later taps = whole site.
+    // Two-stage SimpCity search: 1st click = title-only, later clicks = whole site.
     // Stage lives in this closure, so it resets whenever the box is rebuilt
     // (page reload / navigation).
     let scStage = 0;
@@ -2057,13 +2016,13 @@
   const isAutoMod = (c) =>
     (c.getAttribute("author") || "").toLowerCase() === "automoderator";
 
-  // Fallback: hide the comment behind our own tap-to-expand bar. Doesn't
+  // Fallback: hide the comment behind our own click-to-expand bar. Doesn't
   // depend on any Reddit internals.
   function stubAutoMod(comment) {
     if (comment.hasAttribute("pp-am-stub") || !comment.parentNode) return;
     comment.setAttribute("pp-am-stub", "true");
     const label = (open) =>
-      open ? "▾ AutoModerator — tap to collapse" : "▸ AutoModerator — tap to expand";
+      open ? "▾ AutoModerator — click to collapse" : "▸ AutoModerator — click to expand";
     const bar = createElement("div", {
       className: "pp_am_stub",
       textContent: label(false),
@@ -2101,8 +2060,6 @@
   // in the document and inside registered shadow roots using one native query
   // per root (no JS element iteration).
 
-  const AWARD_SEL = "award-button, shreddit-slot[slot='award-button']";
-  const BANNER_SEL = 'div[role="banner"].banner.error';
   const SWEEP_SEL = `${NUKE_SELECTORS.join(", ")}, ${AWARD_SEL}, ${BANNER_SEL}`;
   const BAN_RE = /account has been (permanently )?(banned|suspended)/i;
 
@@ -2136,7 +2093,6 @@
   let _lastFullSweep = -Infinity;
   let _trailingSweep = 0;
   function sweep() {
-    sweepRoot(document);
     const fresh = _freshRoots;
     _freshRoots = [];
     const now = performance.now();
@@ -2144,6 +2100,8 @@
     if (now - _lastFullSweep < gap) {
       // Cheap path: only roots registered since the last sweep, plus one trailing
       // run so late content in existing roots is still caught on an idle page.
+      // The document-wide query is part of the full path only: the stylesheet
+      // already hides light-DOM matches, so it doesn't need to run every pass.
       for (const root of fresh) if (root.host?.isConnected) sweepRoot(root);
       if (!_trailingSweep)
         _trailingSweep = setTimeout(() => {
@@ -2154,6 +2112,7 @@
     }
     // Full path: catches content rendered into existing roots.
     _lastFullSweep = now;
+    sweepRoot(document);
     const live = [];
     for (const ref of _rootRefs) {
       const root = ref.deref();
@@ -2218,6 +2177,13 @@
     return doc.body.innerHTML;
   }
 
+  // Makes an image open the lightbox on click. Capture phase, so it runs before
+  // Reddit's own handlers.
+  const bindViewable = (imgEl, onClick) => {
+    imgEl.classList.add("pp_imageViewable");
+    imgEl.addEventListener("click", onClick, true);
+  };
+
   const Actions = {
     handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
@@ -2275,26 +2241,21 @@
         };
 
         post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
-          imgEl.classList.add("pp_imageViewable");
-          imgEl.addEventListener(
-            "click",
-            async (e) => {
-              swallowEvent(e);
-              killNativeLightbox();
+          bindViewable(imgEl, async (e) => {
+            swallowEvent(e);
+            killNativeLightbox();
 
-              const urls = await loadUrls();
-              if (!urls?.length) return;
+            const urls = await loadUrls();
+            if (!urls?.length) return;
 
-              const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
-              const idx = urls.findIndex((u) =>
-                clickedSrc.includes(
-                  u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1],
-                ),
-              );
-              openLightbox(urls, idx !== -1 ? idx : 0);
-            },
-            true,
-          );
+            const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
+            const idx = urls.findIndex((u) =>
+              clickedSrc.includes(
+                u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1],
+              ),
+            );
+            openLightbox(urls, idx !== -1 ? idx : 0, 0, true);
+          });
         });
         return;
       }
@@ -2305,33 +2266,28 @@
       );
       if (!images.length) return;
       images.forEach((imgEl) => {
-        imgEl.classList.add("pp_imageViewable");
         if (imgEl.tagName !== "IMG")
           imgEl.setAttribute("pp-img-handled", "true");
-        imgEl.addEventListener(
-          "click",
-          (e) => {
-            const clickedSrc = getImgSrc(imgEl);
-            if (!clickedSrc) return;
-            swallowEvent(e);
-            killNativeLightbox();
-            const galleryContainer =
-              imgEl.closest("gallery-carousel") || imgEl.closest("ul");
-            const imgs = galleryContainer
-              ? [
-                ...new Set(
-                  Array.from(
-                    galleryContainer.querySelectorAll("faceplate-img, img"),
-                  )
-                    .map(getImgSrc)
-                    .filter(Boolean),
-                ),
-              ]
-              : [clickedSrc];
-            openLightbox(imgs, Math.max(0, imgs.indexOf(clickedSrc)));
-          },
-          true,
-        );
+        bindViewable(imgEl, (e) => {
+          const clickedSrc = getImgSrc(imgEl);
+          if (!clickedSrc) return;
+          swallowEvent(e);
+          killNativeLightbox();
+          const galleryContainer =
+            imgEl.closest("gallery-carousel") || imgEl.closest("ul");
+          const imgs = galleryContainer
+            ? [
+              ...new Set(
+                Array.from(
+                  galleryContainer.querySelectorAll("faceplate-img, img"),
+                )
+                  .map(getImgSrc)
+                  .filter(Boolean),
+              ),
+            ]
+            : [clickedSrc];
+          openLightbox(imgs, Math.max(0, imgs.indexOf(clickedSrc)), 0, true);
+        });
       });
       post.setAttribute("pp-images-handled", "true");
     },
@@ -2388,7 +2344,7 @@
         style: "padding: 16px; color: var(--color-neutral-content-weak, #d7dadc); font-family: sans-serif; font-size: 13px; line-height: 1.4;",
       });
 
-      inner.innerHTML = `<div style="color:rgba(255,255,255,0.4); text-align:center; margin-top:20px;">Loading r/${subName} info…</div>`;
+      inner.innerHTML = `<div style="color:rgba(255,255,255,0.4); text-align:center; margin-top:20px;">Loading r/${escapeHtml(subName)} info…</div>`;
       wrap.append(tab, inner);
       document.body.appendChild(wrap);
 
@@ -2535,7 +2491,7 @@
   });
 
   function snapCollapseBar() {
-    const gap = collapseGap();
+    const gap = COLLAPSE_GAP;
     const rect = collapseBtn.getBoundingClientRect();
     const vw = document.documentElement.clientWidth;
     const side = rect.left + rect.width / 2 < vw / 2 ? "left" : "right";
@@ -2578,7 +2534,7 @@
     true,
   );
 
-  window.addEventListener("resize", clampCollapseBar);
+  window.addEventListener("resize", rafThrottle(clampCollapseBar));
 
   const collapseActions = [
     [
@@ -2638,19 +2594,25 @@
   history.replaceState = _patchHistory(_origReplaceState);
   window.addEventListener("popstate", syncCollapseButtonVisibility);
 
+  const HOTKEYS = new Set([
+    "s", "w", "a", "d", "x", "g", "escape", "arrowleft", "arrowright",
+  ]);
+
   window.addEventListener(
     "keydown",
     (e) => {
-      const _path = e.composedPath();
-      const _inInput = _path.some(
+      // Cheap rejects first: this fires on every keystroke on the page.
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const key = e.key?.toLowerCase();
+      if (!HOTKEYS.has(key)) return;
+      const _inInput = e.composedPath().some(
         (el) =>
           el.tagName === "INPUT" ||
           el.tagName === "TEXTAREA" ||
           el.isContentEditable ||
           el.getAttribute?.("contenteditable") === "true",
       );
-      if (_inInput || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      const key = e.key.toLowerCase();
+      if (_inInput) return;
       const prevent = () => {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -2663,10 +2625,13 @@
           key === "escape" ||
           key === "x" ||
           key === "w" ||
-          key === "s"
+          key === "s" ||
+          key === "g"
         ) {
           prevent();
-          lbNav[key] ? navigateGallery(lbNav[key]) : closeLightbox();
+          if (key === "g") toggleGrid();
+          else if (lbNav[key]) navigateGallery(lbNav[key]);
+          else closeLightbox();
         }
         return;
       }
@@ -2721,53 +2686,6 @@
   }
 
   // =========================================================
-  // OPEN POSTS IN NEW TAB
-  // =========================================================
-
-  // Controls inside a feed card that must keep their own click behavior.
-  const POST_CLICK_SKIP_SEL = [
-    "button", "input", "textarea", "select", "label", "summary",
-    "[role='button']", "[role='menu']", "[role='menuitem']",
-    "faceplate-dropdown-menu", "shreddit-post-overflow-menu", "shreddit-join-button",
-    "shreddit-player", "shreddit-player-2", "gallery-carousel",
-    "[slot='post-media-container']", ".pp_imageViewable", ".pp-embed-blocker",
-  ].join(", ");
-
-  const normPath = (href) =>
-    new URL(href, location.origin).pathname.replace(/\/+$/, "").toLowerCase();
-
-  // Window capture runs before Reddit's own card/link handlers (and the media ones).
-  window.addEventListener(
-    "click",
-    (e) => {
-      if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
-      const path = e.composedPath();
-      const post = path.find((n) => n.localName === "shreddit-post");
-      const permalink = post?.getAttribute("permalink");
-      if (!permalink) return;
-      const postPath = normPath(permalink);
-      if (normPath(location.href) === postPath) return; // already on the post
-      if (String(window.getSelection?.() || "")) return;
-
-      for (const n of path) {
-        if (n === post) break;
-        if (n.nodeType !== 1) continue;
-        if (n.matches(POST_CLICK_SKIP_SEL)) return;
-        if (n.localName === "a" && n.hasAttribute("href")) {
-          // Only links to the post itself; subreddit/user/external links behave normally.
-          if (normPath(n.href) !== postPath) return;
-          break;
-        }
-      }
-
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      window.open(new URL(permalink, location.origin).href, "_blank", "noopener");
-    },
-    true,
-  );
-
-  // =========================================================
   // MUTATION OBSERVER ENGINE
   // =========================================================
 
@@ -2806,14 +2724,18 @@
         }
       }
       if (!covered) discoverRoots(n);
-      const hasPost =
-        n.localName === "shreddit-post" || n.querySelector("shreddit-post");
-      if (hasPost) _kwDirty = true;
-      if (hasPost || n.closest("shreddit-post")) _mediaDirty = true;
+      // Skip the subtree queries once a flag is already set this pass.
+      if (!_kwDirty || !_mediaDirty) {
+        const hasPost =
+          n.localName === "shreddit-post" || n.querySelector("shreddit-post");
+        if (hasPost) _kwDirty = true;
+        if (hasPost || n.closest("shreddit-post")) _mediaDirty = true;
+      }
       if (
-        n.localName === "shreddit-comment" ||
-        n.closest("shreddit-comment") ||
-        n.querySelector("shreddit-comment")
+        !_commentsDirty &&
+        (n.localName === "shreddit-comment" ||
+          n.closest("shreddit-comment") ||
+          n.querySelector("shreddit-comment"))
       )
         _commentsDirty = true;
     }
