@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, social search helpers, and mobile media/font optimizations.
 // @author          JR
-// @version         2.8.2
+// @version         2.9.6
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -47,15 +47,6 @@
     ".usertext-body",
   ];
 
-  const COMMENT_SELECTORS = [
-    "shreddit-comment",
-    '[data-testid="comment"]',
-    ".Comment",
-    ".usertext-body",
-    ".md",
-    ".comment",
-  ];
-
   const NUKE_SELECTORS = [
     "#subreddit-banner-img",
     'faceplate-tracker[noun="games_drawer"]',
@@ -85,14 +76,6 @@
     "#mosaic-pdp-feed"
   ];
 
-  const SIDEBAR_SELECTORS = [
-    "faceplate-partial[id='subreddit-right-rail__partial']",
-    "#right-rail-entity-panel-root",
-    "shreddit-sidebar",
-    "#right-sidebar-container",
-    "[grid-area='right-sidebar']",
-  ];
-
   const ALLOWED_SUBREDDITS = [
     "/r/bigtitsinbikinis/",
     "/r/ygwbt/",
@@ -113,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.8.2";
+  const VERSION = "2.9.6";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -171,6 +154,9 @@
     " ": " ",
   };
 
+  const DECODER_PENDING_SEL = DECODER_SELECTORS.map(
+    (s) => `${s}:not([pp-decoder-scanned])`,
+  ).join(", ");
   const BINARY_RE = /\b(?:[01]{8} ?){2,}\b/g;
   const SOCIAL_SITE_CLAUSE = SOCIAL_SITES.map((s) => `site:${s}`).join(" OR ");
 
@@ -181,8 +167,6 @@
   let gallery = { images: [], index: 0 };
   let lastWheelTime = 0;
   let collapseState = 0;
-  let selectionPopup = null;
-  let currentSelText = "";
   let lastScrollY = 0;
   let _filteredVisible = JSON.parse(
     localStorage.getItem(FILTER_VISIBLE_KEY) || "false",
@@ -247,12 +231,115 @@
       style,
     });
 
-  function deepQueryAll(root, selector, results = []) {
-    root.querySelectorAll(selector).forEach((el) => results.push(el));
-    root.querySelectorAll("*").forEach((el) => {
-      if (el.shadowRoot) deepQueryAll(el.shadowRoot, selector, results);
-    });
-    return results;
+  // =========================================================
+  // SHADOW ROOT REGISTRY
+  // =========================================================
+  // Reddit renders much of its UI inside shadow roots, which document-level
+  // queries can't reach. Instead of re-walking every element on every mutation,
+  // each root is registered once: imperative roots via an attachShadow hook,
+  // declarative (SSR) roots via a one-time walk of newly added subtrees.
+
+  const _seenRoots = new WeakSet();
+  const _rootByHost = new WeakMap(); // also reaches closed shadow roots
+  let _rootRefs = [];
+  let _freshRoots = [];
+
+  function registerRoot(root) {
+    if (_seenRoots.has(root)) return false;
+    _seenRoots.add(root);
+    _rootByHost.set(root.host, root);
+    _rootRefs.push(new WeakRef(root));
+    _freshRoots.push(root);
+    return true;
+  }
+
+  function discoverRoots(scope) {
+    if (scope.shadowRoot && registerRoot(scope.shadowRoot))
+      discoverRoots(scope.shadowRoot);
+    for (const el of scope.querySelectorAll("*")) {
+      if (el.shadowRoot && registerRoot(el.shadowRoot))
+        discoverRoots(el.shadowRoot);
+    }
+  }
+
+  const _attachShadow = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function (init) {
+    const root = _attachShadow.call(this, init);
+    registerRoot(root);
+    return root;
+  };
+
+  // =========================================================
+  // INLINE VIDEO LOOKUP (for resuming playback in the lightbox)
+  // =========================================================
+
+  // Every <video> that has ever been asked to play, so a player can be found even
+  // when its element is hidden in a closed shadow root or its markup changes.
+  const _videoRefs = [];
+  const _videoSeen = new WeakSet();
+  const _play = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function (...args) {
+    if (this.localName === "video" && !_videoSeen.has(this)) {
+      _videoSeen.add(this);
+      _videoRefs.push(new WeakRef(this));
+    }
+    return _play.apply(this, args);
+  };
+
+  // First <video> under a node: light DOM, open shadow roots and closed ones.
+  function findVideo(node) {
+    const own = node.querySelector("video");
+    if (own) return own;
+    const root = node.shadowRoot ?? _rootByHost.get(node);
+    const inRoot = root && findVideo(root);
+    if (inRoot) return inRoot;
+    for (const el of node.querySelectorAll("*")) {
+      const r = el.shadowRoot ?? _rootByHost.get(el);
+      const hit = r && findVideo(r);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  // The tracked video overlapping an element the most (prunes dead refs).
+  function videoNear(el) {
+    const r = el.getBoundingClientRect();
+    let best = null;
+    let bestArea = 0;
+    for (let i = _videoRefs.length - 1; i >= 0; i--) {
+      const v = _videoRefs[i].deref();
+      if (!v) {
+        _videoRefs.splice(i, 1);
+        continue;
+      }
+      if (!v.isConnected) continue;
+      const b = v.getBoundingClientRect();
+      const w = Math.min(r.right, b.right) - Math.max(r.left, b.left);
+      const h = Math.min(r.bottom, b.bottom) - Math.max(r.top, b.top);
+      if (w > 0 && h > 0 && w * h > bestArea) {
+        best = v;
+        bestArea = w * h;
+      }
+    }
+    return best;
+  }
+
+  // Best playable URL for a shreddit player: packaged MP4 (widest support, seekable),
+  // then the HLS playlist, then the preview clip.
+  function pickVideoSrc(player) {
+    try {
+      const best = JSON.parse(player.getAttribute("packaged-media-json") || "null")
+        ?.playbackMp4s?.permutations?.map((p) => p.source)
+        .filter((src) => src?.url)
+        .sort((a, b) => (b.dimensions?.height ?? 0) - (a.dimensions?.height ?? 0))[0];
+      if (best) return best.url;
+    } catch {}
+    return (
+      player.querySelector("source")?.getAttribute("src") ||
+      player.getAttribute("src") ||
+      player.getAttribute("preview") ||
+      ""
+    );
   }
 
   const getHeaderOffset = () =>
@@ -437,17 +524,22 @@
     #pp_nav_prev { left: 20px; } #pp_nav_next { right: 20px; }
     #pp_gallery_counter { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.8); font-family: sans-serif; font-size: 14px; background: rgba(0,0,0,0.6); padding: 6px 16px; border-radius: 20px; display: none; z-index: 1000001; }
 
-    /* Videos/embeds use the full screen; the top strip was reserved for a close button that no longer exists. */
+    /* No gallery counter showing (single image, video, embed): use the full screen. */
     #pp_lightbox.pp_lb_media { padding-top: env(safe-area-inset-top, 0px) !important; }
 
     @media (pointer: coarse) {
-      #pp_lightbox { padding-top: calc(52px + env(safe-area-inset-top, 0px)); }
       #pp_stage { width: 100%; }
-      #pp_filmstrip { max-width: 100%; padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+      #pp_filmstrip { max-width: 100%; padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); }
       .pp_film_thumb { width: 46px; height: 46px; }
       .pp_nav_btn { display: none !important; }
       #pp_lightbox_close { top: calc(4px + env(safe-area-inset-top, 0px)); background: rgba(255,255,255,0.12); }
       #pp_gallery_counter { top: calc(12px + env(safe-area-inset-top, 0px)); }
+    }
+
+    /* Small screens: no reserved top strip; the gallery counter overlays the media. */
+    @media (max-width: 768px), (pointer: coarse) {
+      #pp_lightbox { padding-top: env(safe-area-inset-top, 0px); }
+      #pp_lightbox.pp_lb_media { padding-bottom: env(safe-area-inset-bottom, 0px); }
     }
 
     .pp_decoder_box { margin: 8px 0; padding: 6px; background: ${DC.bg}; border: 1px solid ${DC.border}; border-radius: 6px; font-family: sans-serif; display: flex; align-items: center; gap: 10px; color: ${DC.text}; }
@@ -455,9 +547,6 @@
     .pp_decoder_result { background: ${DC.darkInput}; padding: 5px 10px; border-radius: 4px; font-family: monospace; font-size: 13px; flex-grow: 1; border: 1px solid #222; color: #eee; overflow-x: auto; white-space: nowrap; }
     .pp_decoder_btn { display: inline-flex; align-items: center; justify-content: center; border: none; padding: 0 12px; height: 26px; border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 700; transition: filter 0.1s; line-height: 1; }
 
-    .pp_selection_popup { position: absolute; background: ${DC.bg}; border: 1px solid ${DC.border}; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 10000; display: none; overflow: hidden; }
-    .pp_selection_popup button { background: transparent; color: ${DC.text}; border: none; padding: 6px 14px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 32px; }
-    .pp_selection_popup button:hover { background: ${DC.border}; }
 
     .pp_panel { display: none; flex-direction: column; position: fixed; z-index: 99998; width: 320px; top: 80px; left: 50%; transform: translateX(-50%); background: #0d0d0e; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; box-shadow: 0 24px 64px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.02) inset; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
     .pp_panel_head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 8px; }
@@ -618,7 +707,20 @@
     applyZoom(animate);
   }
 
+  // Non-passive wheel listeners on window force scrolling to wait on the main
+  // thread, so this is attached only while the lightbox is open.
+  function onLightboxWheel(e) {
+    stopEvent(e);
+    const now = Date.now();
+    if (now - lastWheelTime > 150) {
+      lastWheelTime = now;
+      navigateGallery(e.deltaY > 0 ? 1 : -1);
+    }
+  }
+  const WHEEL_OPTS = { passive: false, capture: true };
+
   const closeLightbox = () => {
+    window.removeEventListener("wheel", onLightboxWheel, WHEEL_OPTS);
     _zoom = { s: 1, x: 0, y: 0 };
     lightbox.style.display = "none";
     if (location.hash === "#lightbox") {
@@ -629,6 +731,14 @@
       );
     }
   };
+
+  // Height of the viewport with every browser bar shown (100svh). Mobile browsers
+  // can report a visual viewport that runs behind a floating bottom toolbar, which
+  // pushes centered media visibly low.
+  const _svhProbe = createElement("div", {
+    style:
+      "position:fixed;top:0;left:0;width:0;height:100svh;visibility:hidden;pointer-events:none;",
+  });
 
   function syncLightboxViewport() {
     _lbSyncRaf = 0;
@@ -644,12 +754,15 @@
       );
       return;
     }
+    const visibleH = unzoomed
+      ? Math.min(vv.height, _svhProbe.offsetHeight || Infinity)
+      : vv.height;
     st.top = "0";
     st.left = "0";
     st.right = "auto";
     st.bottom = "auto";
     st.width = `${vv.width * scale}px`;
-    st.height = `${vv.height * scale}px`;
+    st.height = `${visibleH * scale}px`;
     st.transform =
       unzoomed && !vv.offsetLeft && !vv.offsetTop
         ? ""
@@ -660,107 +773,6 @@
     if (!_lbSyncRaf) _lbSyncRaf = requestAnimationFrame(syncLightboxViewport);
   };
 
-  // function attachLightbox() {
-  //   if (document.documentElement.contains(lightbox)) return;
-  //   document.documentElement.appendChild(lightbox);
-
-  //   lightbox.innerHTML = `
-  //     <div id="pp_lightbox_close" title="Close [Esc]">&times;</div>
-  //     <div id="pp_nav_prev" class="pp_nav_btn" title="Previous [A]">&#10094;</div>
-  //     <div id="pp_stage"></div>
-  //     <div id="pp_nav_next" class="pp_nav_btn" title="Next [D]">&#10095;</div>
-  //     <div id="pp_gallery_counter">1 / 1</div>
-  //     <div id="pp_filmstrip"></div>
-  //   `;
-
-  //   lightbox.querySelector("#pp_lightbox_close").onclick =
-  //     withStop(closeLightbox);
-  //   lightbox.querySelector("#pp_nav_prev").onclick = withStop(() =>
-  //     navigateGallery(-1),
-  //   );
-  //   lightbox.querySelector("#pp_nav_next").onclick = withStop(() =>
-  //     navigateGallery(1),
-  //   );
-  //   lightbox.onclick = (e) => {
-  //     if (Date.now() - _lbSwipeAt < 400) return;
-  //     if (
-  //       e.target === lightbox ||
-  //       e.target.id === "pp_stage" ||
-  //       e.target.id === "pp_lightbox_img"
-  //     )
-  //       closeLightbox();
-  //   };
-
-  //   window.visualViewport?.addEventListener("resize", queueLightboxSync);
-  //   window.visualViewport?.addEventListener("scroll", queueLightboxSync);
-  //   window.addEventListener("resize", queueLightboxSync);
-  //   window.addEventListener("orientationchange", queueLightboxSync);
-
-  //   const stage = lightbox.querySelector("#pp_stage");
-  //   let g = null;
-  //   lightbox.addEventListener("pointerdown", (e) => {
-  //     if (e.pointerType === "mouse" || !e.isPrimary) return;
-  //     if (e.target.closest?.("#pp_filmstrip, #pp_lightbox_close, .pp_nav_btn"))
-  //       return;
-  //     g = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(), axis: null, dx: 0, dy: 0 };
-  //     stage.classList.remove("pp_snap");
-  //   });
-  //   lightbox.addEventListener("pointermove", (e) => {
-  //     if (!g || e.pointerId !== g.id) return;
-  //     g.dx = e.clientX - g.x;
-  //     g.dy = e.clientY - g.y;
-  //     if (!g.axis) {
-  //       if (Math.max(Math.abs(g.dx), Math.abs(g.dy)) < 10) return;
-  //       g.axis = Math.abs(g.dx) > Math.abs(g.dy) ? "x" : "y";
-  //     }
-  //     if (g.axis === "x" && gallery.images.length > 1) {
-  //       stage.style.transform = `translateX(${g.dx}px)`;
-  //     } else if (g.axis === "y") {
-  //       // =========================================================
-  //       // MODIFICATION: Support vertical dragging (up or down) for dismissal
-  //       // =========================================================
-  //       stage.style.transform = `translateY(${g.dy}px)`;
-  //       stage.style.opacity = String(Math.max(0.3, 1 - Math.abs(g.dy) / 400));
-  //     }
-  //   });
-  //   const endGesture = (e) => {
-  //     if (!g || e.pointerId !== g.id) return;
-  //     const { axis, dx, dy, t } = g;
-  //     g = null;
-  //     const resetStage = (animate) => {
-  //       if (animate) stage.classList.add("pp_snap");
-  //       stage.style.transform = "";
-  //       stage.style.opacity = "";
-  //     };
-  //     if (e.type === "pointercancel" || !axis) {
-  //       resetStage(false);
-  //       return;
-  //     }
-  //     _lbSwipeAt = Date.now();
-  //     const fast = Date.now() - t < 300;
-  //     if (
-  //       axis === "x" &&
-  //       gallery.images.length > 1 &&
-  //       (Math.abs(dx) > 60 || (fast && Math.abs(dx) > 30))
-  //     ) {
-  //       resetStage(false);
-  //       navigateGallery(dx < 0 ? 1 : -1);
-  //     } else if (
-  //       axis === "y" &&
-  //       // =========================================================
-  //       // MODIFICATION: Trigger close on swipe up or swipe down
-  //       // =========================================================
-  //       (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 40))
-  //     ) {
-  //       resetStage(false);
-  //       closeLightbox();
-  //     } else {
-  //       resetStage(true);
-  //     }
-  //   };
-  //   lightbox.addEventListener("pointerup", endGesture);
-  //   lightbox.addEventListener("pointercancel", endGesture);
-  // }
   function attachLightbox() {
     if (document.documentElement.contains(lightbox)) return;
     document.documentElement.appendChild(lightbox);
@@ -773,6 +785,7 @@
       <div id="pp_gallery_counter">1 / 1</div>
       <div id="pp_filmstrip"></div>
     `;
+    lightbox.appendChild(_svhProbe);
 
     lightbox.querySelector("#pp_nav_prev").onclick = withStop(() =>
       navigateGallery(-1),
@@ -966,10 +979,11 @@
     lightbox.addEventListener("pointercancel", endGesture, true);
   }
 
-  function openLightbox(images, startIndex) {
+  function openLightbox(images, startIndex, startTime = 0) {
     attachLightbox();
-    gallery = { images, index: startIndex };
+    gallery = { images, index: startIndex, startTime };
     lightbox.style.display = "flex";
+    window.addEventListener("wheel", onLightboxWheel, WHEEL_OPTS);
     syncLightboxViewport();
     updateLightboxImage();
     if (location.hash === "#lightbox") {
@@ -996,9 +1010,8 @@
       currentUrl.includes(".mp4") ||
       currentUrl.includes(".webm") ||
       currentUrl.includes(".mov") ||
+      currentUrl.includes(".m3u8") ||
       currentUrl.includes("format=mp4");
-
-    lightbox.classList.toggle("pp_lb_media", isIframe || isVideoFile);
 
     // Render stage content: Iframe, Video file, or Image.
     // Media goes inside #pp_zoom (the pinch-zoom target). The touch-catching
@@ -1013,12 +1026,30 @@
       media = `<video src="${currentUrl}" autoplay loop muted playsinline style="position:absolute; inset:0; width:100%; height:100%; object-fit:contain;"></video>`;
       overlay = overlayHtml;
     } else {
-      media = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
+      media = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
     }
     stage.innerHTML = `<div id="pp_zoom" style="position:absolute; inset:0; transform-origin:0 0;">${media}</div>${overlay}`;
     _zoom = { s: 1, x: 0, y: 0 };
 
+    // Resume from the inline player's position (consumed once).
+    if (isVideoFile && gallery.startTime > 0) {
+      const video = stage.querySelector("video");
+      const t = gallery.startTime;
+      video.addEventListener(
+        "loadedmetadata",
+        () => {
+          video.currentTime = Number.isFinite(video.duration)
+            ? Math.min(t, Math.max(video.duration - 0.25, 0))
+            : t;
+        },
+        { once: true },
+      );
+    }
+    gallery.startTime = 0;
+
     const multi = gallery.images.length > 1 && !isIframe && !isVideoFile;
+    // The top strip only exists for the gallery counter; skip it whenever no counter shows.
+    lightbox.classList.toggle("pp_lb_media", !multi);
 
     if (prevEl) prevEl.style.display = multi ? "flex" : "none";
     if (nextEl) nextEl.style.display = multi ? "flex" : "none";
@@ -1228,7 +1259,21 @@
     ).flatMap((s) => allData[s] || []);
   }
 
-  function applyKeywordRules(isFilter) {
+  // Per-mode version + per-post "evaluated at version" map. Forced calls bump the
+  // version (re-evaluating everything); onlyNew calls skip already-evaluated posts.
+  const _kwVer = [0, 0];
+  const _kwSeen = [new WeakMap(), new WeakMap()];
+
+  function applyKeywordRules(isFilter, onlyNew = false) {
+    const i = isFilter ? 0 : 1;
+    if (!onlyNew) _kwVer[i]++;
+    const seen = _kwSeen[i];
+    const ver = _kwVer[i];
+    const posts = [...document.querySelectorAll("shreddit-post")].filter(
+      (post) => seen.get(post) !== ver,
+    );
+    if (!posts.length) return;
+
     const ctx = getPageContext();
     const isAggregate = ctx.type !== "subreddit";
     const allData = getStorage(storageKeyFor(isFilter));
@@ -1238,7 +1283,8 @@
         (s) => allData[s] || [],
       );
 
-    document.querySelectorAll("shreddit-post").forEach((post) => {
+    for (const post of posts) {
+      seen.set(post, ver);
       const title = getPostTitle(post);
       const entries = _getEntriesForPost(post, isAggregate, allData, pageData);
 
@@ -1269,14 +1315,14 @@
           post.removeAttribute("pp-kw-highlighted");
         }
       }
-    });
+    }
   }
 
   const applyKeywordFilters = () => applyKeywordRules(true);
   const applyKeywordHighlights = () => applyKeywordRules(false);
-  const applyAllKeywordRules = () => {
-    applyKeywordFilters();
-    applyKeywordHighlights();
+  const applyAllKeywordRules = (onlyNew = false) => {
+    applyKeywordRules(true, onlyNew);
+    applyKeywordRules(false, onlyNew);
   };
 
   const applyFilteredPostStyle = (post) => {
@@ -1976,14 +2022,6 @@
     nodes.forEach((node) => processTextNode(node, seenDecoded));
   }
 
-  function createSelectionPopup() {
-    const popup = createElement("div", { className: "pp_selection_popup" });
-    const btn = createElement("button", { innerHTML: "🔍 Search" });
-    popup.appendChild(btn);
-    document.documentElement.appendChild(popup);
-    return { popup, btn };
-  }
-
   // =========================================================
   // ACTIONS PIPELINE
   // =========================================================
@@ -2032,35 +2070,77 @@
     }, 800);
   }
 
-  const Actions = {
-    nuke() {
-      deepQueryAll(document, NUKE_SELECTORS.join(", ")).forEach(
-        (item) => item.isConnected && item.remove(),
-      );
-    },
-    nukeAwardButtons() {
-      deepQueryAll(
-        document,
-        "award-button:not([pp-award-hidden]), shreddit-slot[slot='award-button']:not([pp-award-hidden])",
-      ).forEach((el) => {
+  // =========================================================
+  // SWEEP: nuke selectors, award buttons, ban banner
+  // =========================================================
+  // Light DOM is already hidden by the global stylesheet; this removes matches
+  // in the document and inside registered shadow roots using one native query
+  // per root (no JS element iteration).
+
+  const AWARD_SEL = "award-button, shreddit-slot[slot='award-button']";
+  const BANNER_SEL = 'div[role="banner"].banner.error';
+  const SWEEP_SEL = `${NUKE_SELECTORS.join(", ")}, ${AWARD_SEL}, ${BANNER_SEL}`;
+  const BAN_RE = /account has been (permanently )?(banned|suspended)/i;
+
+  function sweepRoot(root) {
+    for (const el of root.querySelectorAll(SWEEP_SEL)) {
+      if (!el.isConnected) continue;
+      if (el.matches(BANNER_SEL)) {
+        const host = el.getRootNode()?.host;
+        if (!BAN_RE.test(`${el.textContent} ${host?.textContent ?? ""}`)) continue;
+        const target = host ?? el;
+        if (target.hasAttribute("pp-ban-hidden")) continue;
+        target.style.setProperty("display", "none", "important");
+        target.setAttribute("pp-ban-hidden", "true");
+      } else if (el.matches(AWARD_SEL)) {
+        if (el.hasAttribute("pp-award-hidden")) continue;
         el.style.display = "none";
         el.setAttribute("pp-award-hidden", "true");
-      });
-    },
-    nukeBanBanner() {
-      deepQueryAll(document, 'div[role="banner"].banner.error').forEach(
-        (inner) => {
-          const host = inner.getRootNode()?.host;
-          const text = `${inner.textContent} ${host?.textContent ?? ""}`;
-          if (!/account has been (permanently )?(banned|suspended)/i.test(text))
-            return;
-          const target = host ?? inner;
-          if (target.hasAttribute("pp-ban-hidden")) return;
-          target.style.setProperty("display", "none", "important");
-          target.setAttribute("pp-ban-hidden", "true");
-        },
-      );
-    },
+      } else {
+        el.remove();
+      }
+    }
+  }
+
+  // Full sweeps (every registered root) are frequent right after load/navigation,
+  // when hydration renders banners and rails, and rare once the page has settled.
+  // New roots are always swept immediately regardless.
+  const FULL_SWEEP_GAP_HOT = 750;
+  const FULL_SWEEP_GAP_IDLE = 4000;
+  const HOT_WINDOW = 8000;
+  let _hotUntil = performance.now() + HOT_WINDOW;
+  let _lastFullSweep = -Infinity;
+  let _trailingSweep = 0;
+  function sweep() {
+    sweepRoot(document);
+    const fresh = _freshRoots;
+    _freshRoots = [];
+    const now = performance.now();
+    const gap = now < _hotUntil ? FULL_SWEEP_GAP_HOT : FULL_SWEEP_GAP_IDLE;
+    if (now - _lastFullSweep < gap) {
+      // Cheap path: only roots registered since the last sweep, plus one trailing
+      // run so late content in existing roots is still caught on an idle page.
+      for (const root of fresh) if (root.host?.isConnected) sweepRoot(root);
+      if (!_trailingSweep)
+        _trailingSweep = setTimeout(() => {
+          _trailingSweep = 0;
+          queueRun();
+        }, gap - (now - _lastFullSweep) + 20);
+      return;
+    }
+    // Full path: catches content rendered into existing roots.
+    _lastFullSweep = now;
+    const live = [];
+    for (const ref of _rootRefs) {
+      const root = ref.deref();
+      if (!root) continue;
+      live.push(ref);
+      if (root.host?.isConnected) sweepRoot(root);
+    }
+    _rootRefs = live;
+  }
+
+  const Actions = {
     injectAccountBadge,
     injectFilterMenuEntry,
     syncCollapseButton: syncCollapseButtonVisibility,
@@ -2103,11 +2183,10 @@
       }
 
       // --- 2. HANDLE SHREDDIT PLAYERS (NATIVE VIDEOS / GIFS) ---
-      const shredditPlayer = post.querySelector('shreddit-player');
+      const shredditPlayer = post.querySelector("shreddit-player, shreddit-player-2");
       if (shredditPlayer) {
         post.setAttribute("pp-images-handled", "true");
-        const src = shredditPlayer.querySelector('source')?.getAttribute("src") ||
-          shredditPlayer.getAttribute("src") || "";
+        const src = pickVideoSrc(shredditPlayer);
 
         if (src) {
           const container = shredditPlayer.closest('[slot="post-media-container"]') || shredditPlayer.parentElement;
@@ -2122,7 +2201,8 @@
               e.preventDefault();
               e.stopImmediatePropagation();
               e.stopPropagation();
-              openLightbox([src], 0);
+              const inline = findVideo(container) ?? videoNear(container);
+              openLightbox([pickVideoSrc(shredditPlayer) || src], 0, inline?.currentTime ?? 0);
             }, true);
             container.appendChild(blocker);
           }
@@ -2297,16 +2377,10 @@
 
     processDecoders() {
       if (!_onAllowedSubreddit) return;
-      document
-        .querySelectorAll(
-          DECODER_SELECTORS.map((s) => `${s}:not([pp-decoder-scanned])`).join(
-            ", ",
-          ),
-        )
-        .forEach((container) => {
-          container.setAttribute("pp-decoder-scanned", "true");
-          container.querySelectorAll("p").forEach(scanParagraph);
-        });
+      for (const container of document.querySelectorAll(DECODER_PENDING_SEL)) {
+        container.setAttribute("pp-decoder-scanned", "true");
+        container.querySelectorAll("p").forEach(scanParagraph);
+      }
     },
   };
 
@@ -2544,57 +2618,143 @@
     });
   }
 
+  // =========================================================
+  // OPEN POSTS IN NEW TAB
+  // =========================================================
+
+  // Controls inside a feed card that must keep their own click behavior.
+  const POST_CLICK_SKIP_SEL = [
+    "button", "input", "textarea", "select", "label", "summary",
+    "[role='button']", "[role='menu']", "[role='menuitem']",
+    "faceplate-dropdown-menu", "shreddit-post-overflow-menu", "shreddit-join-button",
+    "shreddit-player", "shreddit-player-2", "gallery-carousel",
+    "[slot='post-media-container']", ".pp_imageViewable", ".pp-embed-blocker",
+  ].join(", ");
+
+  const normPath = (href) =>
+    new URL(href, location.origin).pathname.replace(/\/+$/, "").toLowerCase();
+
+  // Window capture runs before Reddit's own card/link handlers (and the media ones).
   window.addEventListener(
-    "wheel",
+    "click",
     (e) => {
-      if (lightbox.style.display !== "flex") return;
-      stopEvent(e);
-      const now = Date.now();
-      if (now - lastWheelTime > 150) {
-        lastWheelTime = now;
-        navigateGallery(e.deltaY > 0 ? 1 : -1);
+      if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      const path = e.composedPath();
+      const post = path.find((n) => n.localName === "shreddit-post");
+      const permalink = post?.getAttribute("permalink");
+      if (!permalink) return;
+      const postPath = normPath(permalink);
+      if (normPath(location.href) === postPath) return; // already on the post
+      if (String(window.getSelection?.() || "")) return;
+
+      for (const n of path) {
+        if (n === post) break;
+        if (n.nodeType !== 1) continue;
+        if (n.matches(POST_CLICK_SKIP_SEL)) return;
+        if (n.localName === "a" && n.hasAttribute("href")) {
+          // Only links to the post itself; subreddit/user/external links behave normally.
+          if (normPath(n.href) !== postPath) return;
+          break;
+        }
       }
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      window.open(new URL(permalink, location.origin).href, "_blank", "noopener");
     },
-    { passive: false, capture: true },
+    true,
   );
 
   // =========================================================
   // MUTATION OBSERVER ENGINE
   // =========================================================
 
-  let debounceTimer = null;
-  new MutationObserver((mutations) => {
-    if (!mutations.some((m) => m.addedNodes.length > 0)) return;
-    if (
-      mutations.some((m) =>
-        Array.from(m.addedNodes).some(
-          (n) =>
-            n.nodeName === "SHREDDIT-POST" ||
-            n.querySelector?.("shreddit-post"),
-        ),
+  // Observer callback only records added nodes. All real work happens in a single
+  // coalesced run (max once per 200ms) so a busy page can never starve it, and
+  // each feature only runs when something relevant was actually added.
+  let _added = [];
+  let _runQueued = false;
+  let _kwDirty = false;
+  let _mediaDirty = false;
+  let _commentsDirty = false;
+  let _lastHref = location.href;
+
+  const OWN_UI_SEL =
+    "#pp_lightbox, #pp_sidebar_wrap, #pp_float_collapse, .pp_decoder_box, .pp_am_stub";
+
+  const queueRun = () => {
+    if (_runQueued) return;
+    _runQueued = true;
+    setTimeout(run, 200);
+  };
+
+  function run() {
+    _runQueued = false;
+
+    for (const n of _added.splice(0)) {
+      if (!n.isConnected) continue;
+      discoverRoots(n);
+      const hasPost =
+        n.localName === "shreddit-post" || n.querySelector("shreddit-post");
+      if (hasPost) _kwDirty = true;
+      if (hasPost || n.closest("shreddit-post")) _mediaDirty = true;
+      if (
+        n.localName === "shreddit-comment" ||
+        n.closest("shreddit-comment") ||
+        n.querySelector("shreddit-comment")
       )
-    )
-      _postsDirty = true;
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      Actions.nuke();
-      Actions.nukeAwardButtons();
-      Actions.nukeBanBanner();
-      Actions.injectAccountBadge();
-      Actions.initSidebar();
+        _commentsDirty = true;
+    }
+
+    if (location.href !== _lastHref) {
+      _lastHref = location.href;
+      _hotUntil = performance.now() + HOT_WINDOW;
+      syncCollapseButtonVisibility();
+      _kwVer[0]++;
+      _kwVer[1]++;
+      _kwDirty = _mediaDirty = _commentsDirty = true;
+    }
+
+    sweep();
+    injectAccountBadge();
+    Actions.initSidebar();
+    injectFilterMenuEntry();
+
+    if (_commentsDirty) {
+      _commentsDirty = false;
       Actions.processComments();
-      Actions.syncCollapseButton();
       Actions.processDecoders();
-      if (_postsDirty) {
-        Actions.applyAllKeywordRules();
-        _postsDirty = false;
+    }
+    if (_kwDirty) {
+      _kwDirty = false;
+      applyAllKeywordRules(true);
+    }
+    if (_mediaDirty) {
+      _mediaDirty = false;
+      for (const post of document.querySelectorAll(
+        "shreddit-post:not([pp-images-handled])",
+      ))
+        Actions.handleImages(post);
+    }
+  }
+
+  new MutationObserver((records) => {
+    let any = false;
+    for (const { addedNodes } of records) {
+      for (const n of addedNodes) {
+        if (n.nodeType !== 1 || n.closest?.(OWN_UI_SEL)) continue;
+        _added.push(n);
+        any = true;
       }
-      Actions.injectFilterMenuEntry();
-      document
-        .querySelectorAll("shreddit-post:not([pp-images-handled])")
-        .forEach((post) => Actions.handleImages(post));
-    }, 250);
+    }
+    if (any) queueRun();
   }).observe(document.documentElement, { childList: true, subtree: true });
+
+  // processComments skips AutoModerator comments until the element is upgraded.
+  customElements.whenDefined("shreddit-comment").then(() => {
+    _commentsDirty = true;
+    queueRun();
+  });
 
   // =========================================================
   // BOOTSTRAP
@@ -2603,10 +2763,9 @@
   function bootstrap() {
     document.documentElement.appendChild(collapseBtn);
     syncCollapseButtonVisibility();
-    Actions.processDecoders();
-    Actions.processComments();
-    Actions.nukeBanBanner();
-    Actions.injectAccountBadge();
+    _added.push(document.documentElement);
+    _kwDirty = _mediaDirty = _commentsDirty = true;
+    run();
   }
   document.readyState === "loading"
     ? document.addEventListener("DOMContentLoaded", bootstrap)
