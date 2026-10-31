@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Leak Finder
-// @version      1.8
+// @version      1.8.1
 // @description  Cross-checks profiles on OF, Fansly, IG, TikTok, Fanfix, VSCO, and X against SC.
 // @author       JR
 // @license      MIT
@@ -79,6 +79,37 @@
       .map((n) => n.textContent)
       .join(" ")
       .trim();
+
+  // Profile stats and UI labels that share the same span[dir=auto] markup as the name.
+  const IG_NOISE =
+    /\b(followers?|following|posts?|reels?|tagged)\b|^[\d.,]+\s*[KMB]?$|^(follow|message|requested)$/i;
+
+  // Instagram profile display name. Anchors on the "@handle" span (the name sits
+  // in the same <section>); falls back to scanning the header/main. Skips stats,
+  // the handle, and the URL username, so it can't latch onto "57.5K followers".
+  const findInstagramName = (username) => {
+    const lower = username.toLowerCase();
+    const isName = (el) => {
+      const t = el.textContent.trim();
+      return (
+        t.length > 2 &&
+        t.length <= 60 &&
+        !t.startsWith("@") &&
+        t.toLowerCase() !== lower &&
+        !IG_NOISE.test(t) &&
+        !el.querySelector("span[dir='auto']")
+      );
+    };
+    const spans = (root) => [...root.querySelectorAll("span[dir='auto']")];
+    const handle = spans(document).find(
+      (el) => /^@[\w.]+$/.test(el.textContent.trim()) && el.closest("section"),
+    );
+    const scope =
+      handle?.closest("section") ??
+      document.querySelector("header") ??
+      document.querySelector("main");
+    return scope ? (spans(scope).find(isName) ?? null) : null;
+  };
 
   const getUsername = () => {
     const { hostname, pathname } = window.location;
@@ -245,7 +276,7 @@
       pollForDisplayName(
         username,
         list,
-        () => document.querySelector("h1, header section span[dir='auto']"),
+        () => findInstagramName(username),
         null,
         "SC (Name)",
       );
