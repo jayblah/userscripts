@@ -175,7 +175,6 @@
   let _badgeFetchPromise = null;
   let drag = { active: false, offsetX: 0, offsetY: 0, moved: false };
 
-  let _postsDirty = false;
   let _onAllowedSubreddit = false;
 
   // =========================================================
@@ -183,6 +182,31 @@
   // =========================================================
 
   const decodeAmp = (s) => s.replaceAll("&amp;", "&");
+  const _coarseMQ = window.matchMedia?.("(pointer: coarse)");
+  const isCoarse = () => !!_coarseMQ?.matches;
+  const freshZoom = () => ({ s: 1, x: 0, y: 0 });
+  const normalizeScope = (str) =>
+    str
+      .split(",")
+      .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
+      .filter(Boolean)
+      .join(",");
+  const panelIdFor = (mode) =>
+    mode === "filter" ? "pp_filter_panel" : "pp_highlight_panel";
+  const accentFor = (mode) => MODE_ACCENT[mode] ?? "#ff4500";
+  const clearLightboxHash = () => {
+    if (location.hash === "#lightbox") {
+      history.replaceState(
+        history.state,
+        "",
+        location.href.replace("#lightbox", ""),
+      );
+    }
+  };
+  const killNativeLightbox = () =>
+    document
+      .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
+      .forEach((el) => el.remove());
   const buildSocialURL = (q) =>
     `https://www.google.com/search?q=${encodeURIComponent(`${q} (${SOCIAL_SITE_CLAUSE})`)}`;
 
@@ -204,6 +228,12 @@
 
   const stopEvent = (e) => {
     e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const swallowEvent = (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
     e.stopPropagation();
   };
 
@@ -598,6 +628,21 @@
     #pp_sidebar_tab { pointer-events: all; flex-shrink: 0; width: 22px; height: 56px; background: #000; border-radius: 6px 0 0 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #eeefef; font-size: 13px; user-select: none; transition: background 0.15s; box-shadow: -2px 0 6px rgba(0,0,0,0.5); }
     #pp_sidebar_tab:hover { background: #1a1a1b; }
     #pp_sidebar_inner { pointer-events: all; width: 312px; height: 100%; overflow-y: auto; background: var(--color-neutral-background, #1a1a1b); box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
+    #pp_sidebar_inner .pp_sb_section { border-top: 1px solid rgba(255,255,255,0.08); margin-top: 14px; padding-top: 12px; }
+    #pp_sidebar_inner .pp_sb_heading { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-bottom: 8px; }
+    #pp_sidebar_inner .pp_sb_md { font-size: 12px; line-height: 1.45; color: rgba(255,255,255,0.85); word-break: break-word; }
+    #pp_sidebar_inner .pp_sb_md > :first-child { margin-top: 0; }
+    #pp_sidebar_inner .pp_sb_md p, #pp_sidebar_inner .pp_sb_md ul, #pp_sidebar_inner .pp_sb_md ol, #pp_sidebar_inner .pp_sb_md blockquote { margin: 0 0 8px; }
+    #pp_sidebar_inner .pp_sb_md ul, #pp_sidebar_inner .pp_sb_md ol { padding-left: 18px; }
+    #pp_sidebar_inner .pp_sb_md h1, #pp_sidebar_inner .pp_sb_md h2, #pp_sidebar_inner .pp_sb_md h3, #pp_sidebar_inner .pp_sb_md h4 { font-size: 13px; margin: 10px 0 6px; color: #fff; }
+    #pp_sidebar_inner .pp_sb_md a, #pp_sidebar_inner .pp_sb_mods a { color: #4fbcff; text-decoration: none; }
+    #pp_sidebar_inner .pp_sb_md img { max-width: 100%; height: auto; }
+    #pp_sidebar_inner .pp_sb_md table { border-collapse: collapse; width: 100%; font-size: 11px; }
+    #pp_sidebar_inner .pp_sb_md th, #pp_sidebar_inner .pp_sb_md td { border: 1px solid rgba(255,255,255,0.12); padding: 3px 5px; }
+    #pp_sidebar_inner .pp_sb_rule { margin: 0 0 4px; }
+    #pp_sidebar_inner .pp_sb_rule summary { cursor: pointer; font-size: 12px; color: rgba(255,255,255,0.75); padding: 4px 0; }
+    #pp_sidebar_inner .pp_sb_rule .pp_sb_md { padding: 2px 0 6px 12px; }
+    #pp_sidebar_inner .pp_sb_mods { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
     [grid-area="right-sidebar"], #right-sidebar-container, aside:has(shreddit-sidebar), .right-sidebar { display: none !important; }
     html[data-pp-page="user"] #right-sidebar-container { display: block !important; }
 
@@ -629,7 +674,7 @@
   `;
 
   function collapseGap() {
-    return window.matchMedia?.("(pointer: coarse)").matches ? 12 : 8;
+    return isCoarse() ? 12 : 8;
   }
 
   function anchorCollapseBar(side) {
@@ -677,7 +722,7 @@
   // Pinch-zoom state. Applied as a transform on #pp_zoom (inside the stage),
   // so it never fights with the stage's own swipe transform.
   const ZOOM_MAX = 6;
-  let _zoom = { s: 1, x: 0, y: 0 };
+  let _zoom = freshZoom();
 
   function applyZoom(animate) {
     const el = lightbox.querySelector("#pp_zoom");
@@ -692,7 +737,7 @@
   function clampZoom() {
     const stage = lightbox.querySelector("#pp_stage");
     if (!stage || _zoom.s <= 1) {
-      _zoom = { s: 1, x: 0, y: 0 };
+      _zoom = freshZoom();
       return;
     }
     const W = stage.clientWidth;
@@ -703,7 +748,7 @@
   }
 
   function resetZoom(animate) {
-    _zoom = { s: 1, x: 0, y: 0 };
+    _zoom = freshZoom();
     applyZoom(animate);
   }
 
@@ -721,15 +766,9 @@
 
   const closeLightbox = () => {
     window.removeEventListener("wheel", onLightboxWheel, WHEEL_OPTS);
-    _zoom = { s: 1, x: 0, y: 0 };
+    _zoom = freshZoom();
     lightbox.style.display = "none";
-    if (location.hash === "#lightbox") {
-      history.replaceState(
-        history.state,
-        "",
-        location.href.replace("#lightbox", ""),
-      );
-    }
+    clearLightboxHash();
   };
 
   // Height of the viewport with every browser bar shown (100svh). Mobile browsers
@@ -747,7 +786,7 @@
     const st = lightbox.style;
     const scale = vv?.scale || 1;
     const unzoomed = Math.abs(scale - 1) < 0.001;
-    const touch = window.matchMedia?.("(pointer: coarse)").matches;
+    const touch = isCoarse();
     if (!vv || (!touch && unzoomed)) {
       ["top", "left", "right", "bottom", "width", "height", "transform"].forEach(
         (p) => st.removeProperty(p),
@@ -986,13 +1025,7 @@
     window.addEventListener("wheel", onLightboxWheel, WHEEL_OPTS);
     syncLightboxViewport();
     updateLightboxImage();
-    if (location.hash === "#lightbox") {
-      history.replaceState(
-        history.state,
-        "",
-        location.href.replace("#lightbox", ""),
-      );
-    }
+    clearLightboxHash();
   }
 
   function updateLightboxImage() {
@@ -1029,7 +1062,7 @@
       media = `<img id="pp_lightbox_img" src="${currentUrl}" alt="Enlarged View" style="position:absolute; inset:0; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;">`;
     }
     stage.innerHTML = `<div id="pp_zoom" style="position:absolute; inset:0; transform-origin:0 0;">${media}</div>${overlay}`;
-    _zoom = { s: 1, x: 0, y: 0 };
+    _zoom = freshZoom();
 
     // Resume from the inline player's position (consumed once).
     if (isVideoFile && gallery.startTime > 0) {
@@ -1203,10 +1236,13 @@
     if (/^\/.*\/[gimsuy]*$/.test(keyword)) {
       try {
         const lastSlash = keyword.lastIndexOf("/");
+        // g/y make RegExp.test() stateful (lastIndex), which would make cached
+        // regexes alternate between match and miss; matching never needs them.
+        const rawFlags = keyword.slice(lastSlash + 1);
         entry = {
           re: new RegExp(
             keyword.slice(1, lastSlash),
-            keyword.slice(lastSlash + 1) || "i",
+            rawFlags ? rawFlags.replace(/[gy]/g, "") : "i",
           ),
           caseFold: false,
         };
@@ -1227,10 +1263,10 @@
     return entry;
   }
 
-  function keywordMatchesTitle(keyword, title) {
+  function keywordMatchesTitle(keyword, title, lowerTitle) {
     const { re, caseFold } = _buildKeywordRegex(keyword);
     if (!re) return false;
-    return re.test(caseFold ? title.toLowerCase() : title);
+    return re.test(caseFold ? lowerTitle : title);
   }
 
   function getScopesForSub(sub, allScopeKeys) {
@@ -1251,12 +1287,15 @@
     return scopes;
   }
 
-  function _getEntriesForPost(post, isAggregate, allData, pageData) {
+  function _getEntriesForPost(post, isAggregate, allData, pageData, scopeKeys, subCache) {
     if (!isAggregate) return pageData;
-    return getScopesForSub(
-      getPostSubreddit(post),
-      Object.keys(allData),
-    ).flatMap((s) => allData[s] || []);
+    const sub = getPostSubreddit(post);
+    let entries = subCache.get(sub);
+    if (!entries) {
+      entries = getScopesForSub(sub, scopeKeys).flatMap((s) => allData[s] || []);
+      subCache.set(sub, entries);
+    }
+    return entries;
   }
 
   // Per-mode version + per-post "evaluated at version" map. Forced calls bump the
@@ -1283,16 +1322,27 @@
         (s) => allData[s] || [],
       );
 
+    const scopeKeys = Object.keys(allData);
+    const subCache = new Map();
+
     for (const post of posts) {
       seen.set(post, ver);
       const title = getPostTitle(post);
-      const entries = _getEntriesForPost(post, isAggregate, allData, pageData);
+      const lowerTitle = title.toLowerCase();
+      const entries = _getEntriesForPost(
+        post,
+        isAggregate,
+        allData,
+        pageData,
+        scopeKeys,
+        subCache,
+      );
 
       if (isFilter) {
         const matched =
           !isOwnPost(post) &&
           entries.length > 0 &&
-          entries.some((kw) => keywordMatchesTitle(kw, title));
+          entries.some((kw) => keywordMatchesTitle(kw, title, lowerTitle));
         if (matched) {
           post.setAttribute("pp-kw-filtered", "true");
           applyFilteredPostStyle(post);
@@ -1303,7 +1353,7 @@
         }
       } else {
         const match = entries.find((h) =>
-          h.keywords.some((kw) => keywordMatchesTitle(kw, title)),
+          h.keywords.some((kw) => keywordMatchesTitle(kw, title, lowerTitle)),
         );
         if (match) {
           post.style.outline = `2px solid ${match.color}`;
@@ -1376,10 +1426,10 @@
 
   function buildKwPanel(mode) {
     const isFilter = mode === "filter";
-    const id = isFilter ? "pp_filter_panel" : "pp_highlight_panel";
+    const id = panelIdFor(mode);
     if (document.getElementById(id)) return;
 
-    const accent = MODE_ACCENT[mode] ?? "#ff4500";
+    const accent = accentFor(mode);
     const sub = getCurrentSubreddit();
     const defaultScope = sub || "global";
 
@@ -1444,7 +1494,7 @@
             : null;
       tab === "all"
         ? renderAllScopes(mode, id)
-        : renderKwList(mode, activeScope, id, false);
+        : renderKwList(mode, activeScope, id);
     }
 
     $("_tab_global").addEventListener("click", () => setTab("global"));
@@ -1466,12 +1516,7 @@
     });
 
     $("_sub_confirm").addEventListener("click", () => {
-      const normalized = $("_sub_input")
-        .value.trim()
-        .split(",")
-        .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
-        .filter(Boolean)
-        .join(",");
+      const normalized = normalizeScope($("_sub_input").value);
       if (!normalized) return;
       subTab.dataset.scope = normalized;
       subTab.textContent = normalized.includes(",")
@@ -1506,7 +1551,7 @@
         }
       });
       applyRulesForMode(mode);
-      renderKwList(mode, activeScope, id, false);
+      renderKwList(mode, activeScope, id);
       input.value = "";
       input.focus();
     };
@@ -1521,7 +1566,7 @@
     setTab(sub ? "sub" : "global");
   }
 
-  function makeEditableRow(mode, scope, entry, index, panelId, onDone) {
+  function makeEditableRow(mode, scope, entry, index, onDone) {
     const isFilter = mode === "filter";
     const keywords = isFilter ? [entry] : entry.keywords;
     const row = createElement("div", { className: "pp_edit_row" });
@@ -1567,7 +1612,7 @@
     return row;
   }
 
-  function buildListRow(mode, scope, entry, index, panelId, onReRender) {
+  function buildListRow(mode, scope, entry, index, onReRender) {
     const isFilter = mode === "filter";
     const keywords = isFilter ? [entry] : entry.keywords;
 
@@ -1587,7 +1632,7 @@
     });
     label.addEventListener("click", () =>
       row.replaceWith(
-        makeEditableRow(mode, scope, entry, index, panelId, onReRender),
+        makeEditableRow(mode, scope, entry, index, onReRender),
       ),
     );
 
@@ -1609,7 +1654,7 @@
   const makeEmptyState = (text) =>
     createElement("div", { className: "pp_kw_empty", textContent: text });
 
-  function renderKwList(mode, scope, panelId, readonly) {
+  function renderKwList(mode, scope, panelId) {
     const list = document.getElementById(`${panelId}_list`);
     if (!list) return;
     const entries = getScopeEntries(mode, scope);
@@ -1618,29 +1663,15 @@
     if (!entries.length)
       return list.appendChild(makeEmptyState("Nothing here yet"));
     entries.forEach((entry, i) => {
-      const row = buildListRow(mode, scope, entry, i, panelId, () =>
-        renderKwList(mode, scope, panelId, readonly),
+      list.appendChild(
+        buildListRow(mode, scope, entry, i, () =>
+          renderKwList(mode, scope, panelId),
+        ),
       );
-      if (readonly) {
-        const label = row.querySelector(".pp_kw_label");
-        label.title = label.textContent;
-        label.style.cursor = "default";
-        label.replaceWith(label.cloneNode(true));
-        row.querySelector(".pp_kw_del")?.remove();
-      }
-      list.appendChild(row);
     });
   }
 
-  function makeScopeNameEditor(
-    oldScope,
-    headerEl,
-    _bodyEl,
-    mode,
-    panelId,
-    onDone,
-  ) {
-    const isFilter = mode === "filter";
+  function makeScopeNameEditor(oldScope, headerEl, mode, onDone) {
     const editorRow = createElement("div", {
       style:
         "display:flex;align-items:center;gap:6px;height:32px;box-sizing:border-box;border-bottom:1px solid rgba(255,255,255,0.04);padding:0 2px;",
@@ -1663,7 +1694,7 @@
       "pp_edit_save",
       "Save",
       null,
-      `color:${MODE_ACCENT[mode] ?? "#ff4500"};${btnStyle}`,
+      `color:${accentFor(mode)};${btnStyle}`,
     );
     const cancelBtn = makeBtn("pp_edit_cancel", "✕", null, btnStyle);
 
@@ -1671,14 +1702,7 @@
 
     const save = () => {
       const newScope =
-        input.value.trim() === "global"
-          ? "global"
-          : input.value
-            .trim()
-            .split(",")
-            .map((s) => s.trim().toLowerCase().replace(/^r\//, ""))
-            .filter(Boolean)
-            .join(",");
+        input.value.trim() === "global" ? "global" : normalizeScope(input.value);
       if (!newScope) return;
       renameScopeInStorage(oldScope, newScope);
       applyAllKeywordRules();
@@ -1725,7 +1749,7 @@
         const currentEntries = getScopeEntries(mode, scope);
         currentEntries.forEach((entry, i) =>
           body.appendChild(
-            buildListRow(mode, scope, entry, i, panelId, renderBodyEntries),
+            buildListRow(mode, scope, entry, i, renderBodyEntries),
           ),
         );
         countBadge.textContent = currentEntries.length;
@@ -1734,7 +1758,7 @@
       let open = false;
       scopeLabel.addEventListener("click", (e) => {
         e.stopPropagation();
-        makeScopeNameEditor(scope, header, body, mode, panelId, () =>
+        makeScopeNameEditor(scope, header, mode, () =>
           renderAllScopes(mode, panelId),
         );
       });
@@ -1749,7 +1773,7 @@
   }
 
   function openKwPanel(mode) {
-    const id = mode === "filter" ? "pp_filter_panel" : "pp_highlight_panel";
+    const id = panelIdFor(mode);
     const existing = document.getElementById(id);
     if (existing && !existing.isConnected) existing.remove();
     buildKwPanel(mode);
@@ -2140,14 +2164,61 @@
     _rootRefs = live;
   }
 
-  const Actions = {
-    injectAccountBadge,
-    injectFilterMenuEntry,
-    syncCollapseButton: syncCollapseButtonVisibility,
-    applyKeywordFilters,
-    applyKeywordHighlights,
-    applyAllKeywordRules,
+  // Click-catching overlay over an inline player/embed that opens the lightbox.
+  function addMediaBlocker(mediaEl, style, onOpen) {
+    const container =
+      mediaEl.closest('[slot="post-media-container"]') || mediaEl.parentElement;
+    if (!container || container.querySelector(".pp-embed-blocker")) return;
+    container.style.position = "relative";
+    container.style.cursor = "zoom-in";
+    const blocker = createElement("div", {
+      className: "pp-embed-blocker",
+      style: `position: absolute; ${style} z-index: 10; cursor: zoom-in; background: transparent;`,
+    });
+    blocker.addEventListener(
+      "click",
+      (e) => {
+        swallowEvent(e);
+        onOpen(container);
+      },
+      true,
+    );
+    container.appendChild(blocker);
+  }
 
+  const escapeHtml = (s) =>
+    String(s).replace(
+      /[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+    );
+
+  // Reddit's *_html fields arrive entity-escaped; decode, then strip anything
+  // executable before it goes into innerHTML.
+  function cleanRedditHtml(escaped) {
+    if (!escaped) return "";
+    const ta = document.createElement("textarea");
+    ta.innerHTML = escaped;
+    const doc = new DOMParser().parseFromString(ta.value, "text/html");
+    doc
+      .querySelectorAll("script, style, iframe, object, embed, link, meta, form")
+      .forEach((n) => n.remove());
+    doc.body.querySelectorAll("*").forEach((el) => {
+      for (const a of [...el.attributes]) {
+        if (
+          /^on/i.test(a.name) ||
+          (/^(href|src|xlink:href)$/i.test(a.name) && /^\s*javascript:/i.test(a.value))
+        )
+          el.removeAttribute(a.name);
+      }
+      if (el.tagName === "A") {
+        el.target = "_blank";
+        el.rel = "noopener noreferrer";
+      }
+    });
+    return doc.body.innerHTML;
+  }
+
+  const Actions = {
     handleImages(post) {
       if (post.hasAttribute("pp-images-handled")) return;
 
@@ -2161,24 +2232,12 @@
           if (match) src = match[1];
         }
 
-        if (src) {
-          const container = embedEl.closest('[slot="post-media-container"]') || embedEl.parentElement;
-          if (container && !container.querySelector(".pp-embed-blocker")) {
-            container.style.position = "relative";
-            container.style.cursor = "zoom-in";
-            const blocker = createElement("div", {
-              className: "pp-embed-blocker",
-              style: "position: absolute; top: 0; left: 0; right: 48px; bottom: 48px; z-index: 10; cursor: zoom-in; background: transparent;"
-            });
-            blocker.addEventListener("click", (e) => {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              e.stopPropagation();
-              openLightbox([src], 0);
-            }, true);
-            container.appendChild(blocker);
-          }
-        }
+        if (src)
+          addMediaBlocker(
+            embedEl,
+            "top: 0; left: 0; right: 48px; bottom: 48px;",
+            () => openLightbox([src], 0),
+          );
         return;
       }
 
@@ -2188,25 +2247,15 @@
         post.setAttribute("pp-images-handled", "true");
         const src = pickVideoSrc(shredditPlayer);
 
-        if (src) {
-          const container = shredditPlayer.closest('[slot="post-media-container"]') || shredditPlayer.parentElement;
-          if (container && !container.querySelector(".pp-embed-blocker")) {
-            container.style.position = "relative";
-            container.style.cursor = "zoom-in";
-            const blocker = createElement("div", {
-              className: "pp-embed-blocker",
-              style: "position: absolute; inset: 0; z-index: 10; cursor: zoom-in; background: transparent;"
-            });
-            blocker.addEventListener("click", (e) => {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              e.stopPropagation();
-              const inline = findVideo(container) ?? videoNear(container);
-              openLightbox([pickVideoSrc(shredditPlayer) || src], 0, inline?.currentTime ?? 0);
-            }, true);
-            container.appendChild(blocker);
-          }
-        }
+        if (src)
+          addMediaBlocker(shredditPlayer, "inset: 0;", (container) => {
+            const inline = findVideo(container) ?? videoNear(container);
+            openLightbox(
+              [pickVideoSrc(shredditPlayer) || src],
+              0,
+              inline?.currentTime ?? 0,
+            );
+          });
         return;
       }
 
@@ -2215,21 +2264,25 @@
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
         post.setAttribute("pp-images-handled", "true");
-        const galleryPromise = fetchGalleryImages(permalink);
+        // Fetched on first click (not for every gallery in the feed); a failed
+        // fetch is dropped so the next click retries.
+        let galleryPromise = null;
+        const loadUrls = async () => {
+          galleryPromise ??= fetchGalleryImages(permalink);
+          const result = await galleryPromise;
+          if (!result) galleryPromise = null;
+          return result;
+        };
 
         post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
           imgEl.classList.add("pp_imageViewable");
           imgEl.addEventListener(
             "click",
             async (e) => {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              e.stopPropagation();
-              document
-                .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
-                .forEach((el) => el.remove());
+              swallowEvent(e);
+              killNativeLightbox();
 
-              const urls = await galleryPromise;
+              const urls = await loadUrls();
               if (!urls?.length) return;
 
               const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
@@ -2260,12 +2313,8 @@
           (e) => {
             const clickedSrc = getImgSrc(imgEl);
             if (!clickedSrc) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            e.stopPropagation();
-            document
-              .querySelectorAll("shreddit-lightbox, shreddit-media-lightbox")
-              .forEach((el) => el.remove());
+            swallowEvent(e);
+            killNativeLightbox();
             const galleryContainer =
               imgEl.closest("gallery-carousel") || imgEl.closest("ul");
             const imgs = galleryContainer
@@ -2350,25 +2399,78 @@
       });
 
       try {
-        const res = await fetch(`https://www.reddit.com/r/${subName}/about.json`, {
-          headers: { Accept: "application/json" },
-        });
-        if (!res.ok) throw new Error();
-        const json = await res.json();
-        const d = json?.data;
+        const getJson = async (path) => {
+          const res = await fetch(`https://www.reddit.com/r/${subName}/${path}`, {
+            headers: { Accept: "application/json" },
+          });
+          if (!res.ok) throw new Error();
+          return res.json();
+        };
+        // About is required; rules and moderators are best-effort extras.
+        const [aboutRes, rulesRes, modsRes] = await Promise.allSettled([
+          getJson("about.json"),
+          getJson("about/rules.json"),
+          getJson("about/moderators.json"),
+        ]);
+        if (aboutRes.status !== "fulfilled") throw new Error();
+        const d = aboutRes.value?.data;
         if (!d) throw new Error();
 
         const subs = d.subscribers ? d.subscribers.toLocaleString() : "Unknown";
         const active = d.active_user_count ? d.active_user_count.toLocaleString() : null;
-        const desc = d.public_description || d.description || "No description available.";
+        const created = d.created_utc
+          ? new Date(d.created_utc * 1000).toLocaleDateString(undefined, {
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+          })
+          : null;
+        const publicDesc =
+          cleanRedditHtml(d.public_description_html) ||
+          escapeHtml(d.public_description || "");
+        const fullDesc = cleanRedditHtml(d.description_html);
+        const rules =
+          rulesRes.status === "fulfilled" ? rulesRes.value?.rules || [] : [];
+        const mods =
+          modsRes.status === "fulfilled"
+            ? modsRes.value?.data?.children || []
+            : [];
+
+        const section = (title, body) => `
+          <div class="pp_sb_section">
+            <div class="pp_sb_heading">${title}</div>
+            ${body}
+          </div>`;
+
+        const rulesHtml = rules
+          .map(
+            (r, i) => `
+            <details class="pp_sb_rule">
+              <summary>${i + 1}. ${escapeHtml(r.short_name || "")}</summary>
+              <div class="pp_sb_md">${cleanRedditHtml(r.description_html) || escapeHtml(r.description || "")}</div>
+            </details>`,
+          )
+          .join("");
+        const modsHtml = mods
+          .map(
+            (m) =>
+              `<a href="/user/${encodeURIComponent(m.name)}/" target="_blank" rel="noopener noreferrer">u/${escapeHtml(m.name)}</a>`,
+          )
+          .join("");
 
         inner.innerHTML = `
-          <div style="font-weight: 700; font-size: 15px; color: #fff; margin-bottom: 8px;">r/${d.display_name}</div>
-          <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: 12px;">
+          <div style="font-weight: 700; font-size: 15px; color: #fff; margin-bottom: 8px;">r/${escapeHtml(d.display_name)}</div>
+          <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: 4px;">
             👥 ${subs} members ${active ? `• 🟢 ${active} online` : ""}
           </div>
-          <hr style="border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 12px 0;">
-          <div style="word-break: break-word; white-space: pre-wrap; font-size: 12px; color: rgba(255,255,255,0.85);">${desc}</div>
+          <div style="font-size: 12px; color: rgba(255,255,255,0.6); margin-bottom: 12px;">
+            ${created ? `🎂 Created ${created}` : ""}${d.over18 ? " • 🔞 Adult content" : ""}
+          </div>
+          ${publicDesc ? `<div class="pp_sb_md">${publicDesc}</div>` : ""}
+          ${fullDesc ? section("About", `<div class="pp_sb_md">${fullDesc}</div>`) : ""}
+          ${rulesHtml ? section(`r/${escapeHtml(d.display_name)} Rules`, rulesHtml) : ""}
+          ${modsHtml ? section("Moderators", `<div class="pp_sb_mods">${modsHtml}</div>`) : ""}
+          ${!publicDesc && !fullDesc && !rulesHtml ? `<div style="color:rgba(255,255,255,0.4);">No description available.</div>` : ""}
         `;
       } catch {
         inner.innerHTML = `<div style="color:rgba(255,255,250,0.4); text-align:center; margin-top:20px;">Failed to load community info.</div>`;
@@ -2554,7 +2656,7 @@
         e.stopImmediatePropagation();
       };
 
-      if (lightbox?.style.display === "flex") {
+      if (lightbox.style.display === "flex") {
         const lbNav = { arrowright: 1, d: 1, arrowleft: -1, a: -1 };
         if (
           lbNav[key] !== undefined ||
@@ -2587,7 +2689,7 @@
 
   if (window.navigation) {
     let _lastSearchHref = null;
-    window.navigation.addEventListener("navigate", (e) => {
+    window.navigation.addEventListener("navigate", () => {
       _lastSearchHref = location.href;
     });
     window.navigation.addEventListener("navigatesuccess", () => {
@@ -2691,9 +2793,19 @@
   function run() {
     _runQueued = false;
 
-    for (const n of _added.splice(0)) {
+    const batch = _added.splice(0);
+    const batchSet = new Set(batch);
+    for (const n of batch) {
       if (!n.isConnected) continue;
-      discoverRoots(n);
+      // A node under another recorded node is already covered by that node's walk.
+      let covered = false;
+      for (let p = n.parentElement; p; p = p.parentElement) {
+        if (batchSet.has(p)) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) discoverRoots(n);
       const hasPost =
         n.localName === "shreddit-post" || n.querySelector("shreddit-post");
       if (hasPost) _kwDirty = true;
