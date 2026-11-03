@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.11.8
+// @version         2.11.9
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.11.8";
+  const VERSION = "2.11.9";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -543,7 +543,7 @@
 
     .pp_imageViewable { cursor: zoom-in !important; }
 
-    .shreddit-subreddit-icon__icon { display: none !important; }
+    .shreddit-subreddit-icon__icon, [id="subreddit-icon-img-desktop"] { display: none !important; }
 
     /* AutoModerator fallback stub (used when Reddit's native collapse fails) */
     shreddit-comment[pp-am-stub]:not([pp-am-open]) { display: none !important; }
@@ -635,7 +635,7 @@
     #pp_sidebar_wrap.pp_sb_collapsed { transform: translateX(calc(100% - 22px)); }
     #pp_sidebar_tab { pointer-events: all; flex-shrink: 0; width: 22px; height: 56px; background: #000; border-radius: 6px 0 0 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #eeefef; font-size: 13px; user-select: none; transition: background 0.15s; box-shadow: -2px 0 6px rgba(0,0,0,0.5); }
     #pp_sidebar_tab:hover { background: #1a1a1b; }
-    #pp_sidebar_inner { pointer-events: all; width: 312px; height: 100%; overflow-y: auto; background: var(--color-neutral-background, #1a1a1b); box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
+    #pp_sidebar_inner { pointer-events: all; width: 312px; height: 100%; overflow-y: auto; overscroll-behavior: contain; background: var(--color-neutral-background, #1a1a1b); box-shadow: -4px 0 16px rgba(0,0,0,0.4); }
     #pp_sidebar_inner .pp_sb_section { border-top: 1px solid rgba(255,255,255,0.08); margin-top: 14px; padding-top: 12px; }
     #pp_sidebar_inner .pp_sb_heading { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-bottom: 8px; }
     #pp_sidebar_inner .pp_sb_md { font-size: 12px; line-height: 1.45; color: rgba(255,255,255,0.85); word-break: break-word; }
