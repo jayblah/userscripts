@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.11.2
+// @version         2.11.3
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.11.2";
+  const VERSION = "2.11.3";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -157,7 +157,7 @@
   const DECODER_PENDING_SEL = DECODER_SELECTORS.map(
     (s) => `${s}:not([pp-decoder-scanned])`,
   ).join(", ");
-  const BINARY_RE = /\b(?:[01]{8} ?){2,}\b/g;
+  const BINARY_RE = /\b(?:[01]{8}\s*){2,}\b/g;
   const SOCIAL_SITE_CLAUSE = SOCIAL_SITES.map((s) => `site:${s}`).join(" OR ");
 
   // =========================================================
@@ -1975,23 +1975,17 @@
 
   function processTextNode(node, seenDecoded) {
     const text = node.textContent;
-    const processMatch = (val, type, decoder) => {
-      if (!val) return;
-      const decoded = decoder(val);
-      if (!decoded?.trim().length) return;
-      const dedupeKey = `${type}:${decoded}`;
-      if (seenDecoded.has(dedupeKey)) return;
-      seenDecoded.add(dedupeKey);
-      const target = node.parentNode.tagName === "P" ? node.parentNode : node;
-      target.parentNode.insertBefore(
-        createTranslationComponent(type, decoded),
-        target.nextSibling,
-      );
-    };
-    text
-      .match(BINARY_RE)
-      ?.forEach((match) => processMatch(match, "binary", binaryToText));
-    if (/[a-zA-Z]/.test(text)) processMatch(text, "nato", natoToText);
+    if (!/[a-zA-Z]/.test(text)) return;
+    const decoded = natoToText(text);
+    if (!decoded?.trim().length) return;
+    const dedupeKey = `nato:${decoded}`;
+    if (seenDecoded.has(dedupeKey)) return;
+    seenDecoded.add(dedupeKey);
+    const target = node.parentNode.tagName === "P" ? node.parentNode : node;
+    target.parentNode.insertBefore(
+      createTranslationComponent("nato", decoded),
+      target.nextSibling,
+    );
   }
 
   function scanParagraph(p) {
@@ -2003,6 +1997,21 @@
     while ((n = walker.nextNode())) nodes.push(n);
     const seenDecoded = new Set();
     nodes.forEach((node) => processTextNode(node, seenDecoded));
+
+    // Binary is matched over the whole paragraph so a message wrapped across
+    // lines (newlines or <br>, i.e. separate text nodes) decodes as one piece.
+    const joined = nodes.map((t) => t.textContent).join("\n");
+    let anchor = p;
+    for (const match of joined.match(BINARY_RE) ?? []) {
+      const decoded = binaryToText(match);
+      if (!decoded?.trim().length) continue;
+      const dedupeKey = `binary:${decoded}`;
+      if (seenDecoded.has(dedupeKey)) continue;
+      seenDecoded.add(dedupeKey);
+      const box = createTranslationComponent("binary", decoded);
+      anchor.parentNode.insertBefore(box, anchor.nextSibling);
+      anchor = box;
+    }
   }
 
   // =========================================================
