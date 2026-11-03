@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.11.3
+// @version         2.11.4
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.11.3";
+  const VERSION = "2.11.4";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -1934,6 +1934,10 @@
       });
     };
 
+    // A decoded link (https://link.me/name) is only useful as its last path
+    // segment; the rest is noise for searching.
+    const searchTerm = translatedText.replace(/^.*\//, "") || translatedText;
+
     // Two-stage SimpCity search: 1st click = title-only, later clicks = whole site.
     // Stage lives in this closure, so it resets whenever the box is rebuilt
     // (page reload / navigation).
@@ -1945,7 +1949,7 @@
       style: `background:#1E88DB;color:white;font-size:15px`,
     });
     scBtn.onclick = () => {
-      window.open(buildSimpCityUrl(translatedText, scStage === 0), "_blank");
+      window.open(buildSimpCityUrl(searchTerm, scStage === 0), "_blank");
       if (scStage === 0) {
         scStage = 1;
         scBtn.textContent = "◉";
@@ -1967,7 +1971,7 @@
         className: "pp_decoder_btn",
         innerHTML: SEARCH_ICON,
         style: `background:${DC.accent};color:white`,
-        onclick: () => window.open(buildSocialURL(translatedText), "_blank"),
+        onclick: () => window.open(buildSocialURL(searchTerm), "_blank"),
       }),
     );
     return container;
