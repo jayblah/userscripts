@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Amazon Unit Prices
 // @namespace    https://github.com/jayblah/userscripts
-// @version      3.3.4
+// @version      3.3.5
 // @description  Adds large unit price badges to the best-value cards on Amazon search pages.
 // @author       JR
 // @match        *://*.amazon.com/*
 // @match        *://*.amazon.co.uk/*
-// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/AMZ_Unit_Price_Badges.user.js
-// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/AMZ_Unit_Price_Badges.user.js
+// @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/AMZ_Unit_Prices.user.js
+// @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/AMZ_Unit_Prices.user.js
 // @grant        none
 // ==/UserScript==
 
