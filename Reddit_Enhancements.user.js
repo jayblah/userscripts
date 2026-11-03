@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.11.4
+// @version         2.11.5
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.11.4";
+  const VERSION = "2.11.5";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -1934,9 +1934,13 @@
       });
     };
 
-    // A decoded link (https://link.me/name) is only useful as its last path
-    // segment; the rest is noise for searching.
-    const searchTerm = translatedText.replace(/^.*\//, "") || translatedText;
+    // Only the handle is worth searching: drop a link's host/path
+    // (https://link.me/name) or a leading label ("TikTok and IG: name").
+    const searchTerm =
+      translatedText
+        .replace(/^.*\//, "")
+        .replace(/^.*:\s+/, "")
+        .trim() || translatedText;
 
     // Two-stage SimpCity search: 1st click = title-only, later clicks = whole site.
     // Stage lives in this closure, so it resets whenever the box is rebuilt
