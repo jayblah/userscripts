@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.12.3
+// @version         2.12.4
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.12.3";
+  const VERSION = "2.12.4";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -2015,9 +2015,10 @@
   // already shown. Returns the new box, or null.
   function insertDecoded(type, decoded, after, seenDecoded) {
     if (!decoded?.trim().length) return null;
-    const dedupeKey = `${type}:${decoded}`;
-    if (seenDecoded.has(dedupeKey)) return null;
-    seenDecoded.add(dedupeKey);
+    // Keyed by text alone: the same message in binary and base64 (or in
+    // another paragraph of the comment) is shown once.
+    if (seenDecoded.has(decoded)) return null;
+    seenDecoded.add(decoded);
     const box = createTranslationComponent(type, decoded);
     after.parentNode.insertBefore(box, after.nextSibling);
     return box;
@@ -2030,14 +2031,14 @@
     return !!insertDecoded("nato", natoToText(text), target, seenDecoded);
   }
 
-  function scanParagraph(p) {
+  // `seenDecoded` is shared by every paragraph of one comment.
+  function scanParagraph(p, seenDecoded) {
     if (p.hasAttribute("data-decoded")) return;
     p.setAttribute("data-decoded", "true");
     const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
     const nodes = [];
     let n;
     while ((n = walker.nextNode())) nodes.push(n);
-    const seenDecoded = new Set();
     // One decoded component per paragraph is enough: NATO, then binary,
     // then base64; later decoders are skipped once one has rendered.
     let rendered = false;
@@ -2490,7 +2491,8 @@
       if (!_onAllowedSubreddit) return;
       for (const container of document.querySelectorAll(DECODER_PENDING_SEL)) {
         container.setAttribute("pp-decoder-scanned", "true");
-        container.querySelectorAll("p").forEach(scanParagraph);
+        const seenDecoded = new Set();
+        container.querySelectorAll("p").forEach((p) => scanParagraph(p, seenDecoded));
       }
     },
   };
