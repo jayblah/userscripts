@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
 // @author          JR
-// @version         2.11.9
+// @version         2.12.3
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.11.9";
+  const VERSION = "2.12.3";
 
   // =========================================================
   // CORE TRANSLATION DICTIONARIES
@@ -258,6 +258,10 @@
       onclick: onClick,
       style,
     });
+
+  const clamp = (v, lo, hi) => Math.min(Math.max(lo, v), hi);
+  const isSearchPath = (pathname) =>
+    pathname.endsWith("/search/") || pathname.endsWith("/search");
 
   // Wheel delta in pixels for both pixel and line scroll modes.
   const wheelDelta = (e) => (e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY);
@@ -581,7 +585,7 @@
     #pp_grid_btn { top: 10px; right: 20px; width: 40px; height: 40px; display: none; font-size: 20px; z-index: 1000001; }
 
     .pp_decoder_box { margin: 8px 0; padding: 6px; background: ${DC.bg}; border: 1px solid ${DC.border}; border-radius: 6px; font-family: sans-serif; display: flex; align-items: center; gap: 10px; color: ${DC.text}; }
-    .pp_decoder_label { font-size: 10px; font-weight: 900; color: ${DC.accent}; text-transform: uppercase; letter-spacing: 1px; }
+    .pp_decoder_label { font-size: 10px; font-weight: 900; color: ${DC.accent}; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; flex-shrink: 0; }
     .pp_decoder_result { background: ${DC.darkInput}; padding: 5px 10px; border-radius: 4px; font-family: monospace; font-size: 13px; flex-grow: 1; border: 1px solid #222; color: #eee; overflow-x: auto; white-space: nowrap; }
     .pp_decoder_btn { display: inline-flex; align-items: center; justify-content: center; border: none; padding: 0 12px; height: 26px; border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 700; transition: filter 0.1s; line-height: 1; }
 
@@ -702,7 +706,7 @@
     if (!Number.isFinite(top) || !h) return;
     const gap = COLLAPSE_GAP;
     const maxTop = Math.max(gap, window.innerHeight - h - gap);
-    collapseBtn.style.top = `${Math.min(Math.max(gap, top), maxTop)}px`;
+    collapseBtn.style.top = `${clamp(top, gap, maxTop)}px`;
   }
 
   const _savedPos = lsGet("pp_collapse_pos", null);
@@ -760,8 +764,8 @@
     }
     const W = stage.clientWidth;
     const H = stage.clientHeight;
-    _zoom.x = Math.min(0, Math.max(W - W * _zoom.s, _zoom.x));
-    _zoom.y = Math.min(0, Math.max(H - H * _zoom.s, _zoom.y));
+    _zoom.x = clamp(_zoom.x, W - W * _zoom.s, 0);
+    _zoom.y = clamp(_zoom.y, H - H * _zoom.s, 0);
   }
 
   // Zoom around the cursor so the point under it stays put.
@@ -773,7 +777,7 @@
     const ly = e.clientY - r.top;
     const dy = wheelDelta(e);
     const s0 = _zoom.s;
-    const s1 = Math.min(ZOOM_MAX, Math.max(1, s0 * Math.exp(-dy * 0.002)));
+    const s1 = clamp(s0 * Math.exp(-dy * 0.002), 1, ZOOM_MAX);
     if (s1 === s0) return;
     _zoom.x = lx - (lx - _zoom.x) * (s1 / s0);
     _zoom.y = ly - (ly - _zoom.y) * (s1 / s0);
@@ -1816,14 +1820,7 @@
     if (mainBtnLabel) mainBtnLabel.textContent = shouldCollapse ? "EXP" : "COL";
     collapseBtn.classList.toggle("pp_collapsed", collapseState !== 0);
 
-    if (anchor)
-      setTimeout(
-        () =>
-          smoothScrollTo(
-            window.scrollY + anchor.getBoundingClientRect().top - offset,
-          ),
-        30,
-      );
+    if (anchor) setTimeout(() => smoothScrollTo(getRelativeTop(anchor)), 30);
   }
 
   function jumpToTop() {
@@ -1886,7 +1883,7 @@
   }
 
   // =========================================================
-  // NATO / BINARY DECODER
+  // NATO / BINARY / BASE64 DECODER
   // =========================================================
 
   function natoToText(s) {
@@ -1915,6 +1912,40 @@
     return res;
   }
 
+  const BASE64_RE = /(?<![A-Za-z0-9+/=])(?:[A-Za-z0-9+/]{4}){4,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![A-Za-z0-9+/=])/g;
+
+  // Returns the decoded text only if it is valid UTF-8 made of printable
+  // characters, which keeps ordinary long words/IDs from being "decoded".
+  function base64ToText(b) {
+    try {
+      const bin = atob(b);
+      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(text))
+        return null;
+      return text;
+    } catch {
+      return null;
+    }
+  }
+
+  // Only handles/names are worth searching: @handles win; otherwise URLs are
+  // dropped (or a link's host/path / a leading "Label:" is stripped) and the
+  // rest is split into names ("Sha Rizel and Skylor"), one search per name.
+  function extractSearchTerms(text) {
+    const handles = [...text.matchAll(/(?:^|\s)@([\w.]{2,})/g)].map((m) => m[1]);
+    const noUrls = text.replace(/\bhttps?:\/\/\S+/gi, " ").trim();
+    const base =
+      (noUrls && noUrls !== text.trim()
+        ? noUrls
+        : text.replace(/^.*\//, "").replace(/^.*:\s+/, "").trim()) || text;
+    const parts = handles.length
+      ? handles
+      : base.split(/\s+(?:and|&|\+|x)\s+|\s*[,;\n]\s*/i);
+    const terms = [...new Set(parts.map((t) => t.trim()).filter(Boolean))];
+    return (terms.length ? terms : [text.trim()]).slice(0, 4);
+  }
+
   function createTranslationComponent(type, translatedText) {
     const container = createElement("div", { className: "pp_decoder_box" });
     const SEARCH_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" style="display:block"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>`;
@@ -1936,13 +1967,9 @@
       });
     };
 
-    // Only the handle is worth searching: drop a link's host/path
-    // (https://link.me/name) or a leading label ("TikTok and IG: name").
-    const searchTerm =
-      translatedText
-        .replace(/^.*\//, "")
-        .replace(/^.*:\s+/, "")
-        .trim() || translatedText;
+    const searchTerms = extractSearchTerms(translatedText);
+    const openAll = (urlFor) =>
+      searchTerms.forEach((t) => window.open(urlFor(t), "_blank"));
 
     // Two-stage SimpCity search: 1st click = title-only, later clicks = whole site.
     // Stage lives in this closure, so it resets whenever the box is rebuilt
@@ -1955,7 +1982,8 @@
       style: `background:#1E88DB;color:white;font-size:15px`,
     });
     scBtn.onclick = () => {
-      window.open(buildSimpCityUrl(searchTerm, scStage === 0), "_blank");
+      const titleOnly = scStage === 0;
+      openAll((t) => buildSimpCityUrl(t, titleOnly));
       if (scStage === 0) {
         scStage = 1;
         scBtn.textContent = "◉";
@@ -1965,7 +1993,7 @@
     container.append(
       createElement("div", {
         className: "pp_decoder_label",
-        textContent: type === "nato" ? "NATO" : "BIN",
+        textContent: { nato: "NATO", binary: "BIN", base64: "B64" }[type],
       }),
       createElement("div", {
         className: "pp_decoder_result",
@@ -1977,25 +2005,29 @@
         className: "pp_decoder_btn",
         innerHTML: SEARCH_ICON,
         style: `background:${DC.accent};color:white`,
-        onclick: () => window.open(buildSocialURL(searchTerm), "_blank"),
+        onclick: () => openAll(buildSocialURL),
       }),
     );
     return container;
   }
 
+  // Inserts a decoder box after `after` unless the text is empty or was
+  // already shown. Returns the new box, or null.
+  function insertDecoded(type, decoded, after, seenDecoded) {
+    if (!decoded?.trim().length) return null;
+    const dedupeKey = `${type}:${decoded}`;
+    if (seenDecoded.has(dedupeKey)) return null;
+    seenDecoded.add(dedupeKey);
+    const box = createTranslationComponent(type, decoded);
+    after.parentNode.insertBefore(box, after.nextSibling);
+    return box;
+  }
+
   function processTextNode(node, seenDecoded) {
     const text = node.textContent;
-    if (!/[a-zA-Z]/.test(text)) return;
-    const decoded = natoToText(text);
-    if (!decoded?.trim().length) return;
-    const dedupeKey = `nato:${decoded}`;
-    if (seenDecoded.has(dedupeKey)) return;
-    seenDecoded.add(dedupeKey);
+    if (!/[a-zA-Z]/.test(text)) return false;
     const target = node.parentNode.tagName === "P" ? node.parentNode : node;
-    target.parentNode.insertBefore(
-      createTranslationComponent("nato", decoded),
-      target.nextSibling,
-    );
+    return !!insertDecoded("nato", natoToText(text), target, seenDecoded);
   }
 
   function scanParagraph(p) {
@@ -2006,27 +2038,29 @@
     let n;
     while ((n = walker.nextNode())) nodes.push(n);
     const seenDecoded = new Set();
-    nodes.forEach((node) => processTextNode(node, seenDecoded));
+    // One decoded component per paragraph is enough: NATO, then binary,
+    // then base64; later decoders are skipped once one has rendered.
+    let rendered = false;
+    for (const node of nodes) {
+      if (processTextNode(node, seenDecoded)) rendered = true;
+    }
+    if (rendered) return;
 
-    // Binary is matched over the whole paragraph so a message wrapped across
-    // lines (newlines or <br>, i.e. separate text nodes) decodes as one piece.
+    // Binary/base64 are matched over the whole paragraph so a message wrapped
+    // across lines (newlines or <br>, i.e. separate text nodes) decodes as one piece.
     const joined = nodes.map((t) => t.textContent).join("\n");
     let anchor = p;
-    for (const match of joined.match(BINARY_RE) ?? []) {
-      const decoded = binaryToText(match);
-      if (!decoded?.trim().length) continue;
-      const dedupeKey = `binary:${decoded}`;
-      if (seenDecoded.has(dedupeKey)) continue;
-      seenDecoded.add(dedupeKey);
-      const box = createTranslationComponent("binary", decoded);
-      anchor.parentNode.insertBefore(box, anchor.nextSibling);
-      anchor = box;
-    }
+    const render = (type, regex, decode) => {
+      for (const match of joined.match(regex) ?? []) {
+        const box = insertDecoded(type, decode(match), anchor, seenDecoded);
+        if (!box) continue;
+        anchor = box;
+        rendered = true;
+      }
+    };
+    render("binary", BINARY_RE, binaryToText);
+    if (!rendered) render("base64", BASE64_RE, base64ToText);
   }
-
-  // =========================================================
-  // ACTIONS PIPELINE
-  // =========================================================
 
   // =========================================================
   // AUTOMODERATOR AUTO-COLLAPSE
@@ -2505,8 +2539,8 @@
     const s = collapseBtn.style;
     s.transition = "none";
     s.right = s.bottom = "auto";
-    s.left = `${Math.min(Math.max(0, e.clientX - drag.offsetX), maxLeft)}px`;
-    s.top = `${Math.min(Math.max(0, e.clientY - drag.offsetY), maxTop)}px`;
+    s.left = `${clamp(e.clientX - drag.offsetX, 0, maxLeft)}px`;
+    s.top = `${clamp(e.clientY - drag.offsetY, 0, maxTop)}px`;
   });
 
   function snapCollapseBar() {
@@ -2515,7 +2549,7 @@
     const vw = document.documentElement.clientWidth;
     const side = rect.left + rect.width / 2 < vw / 2 ? "left" : "right";
     const maxTop = Math.max(gap, window.innerHeight - rect.height - gap);
-    const top = Math.min(Math.max(gap, rect.top), maxTop);
+    const top = clamp(rect.top, gap, maxTop);
     const s = collapseBtn.style;
     s.transition = "left 0.18s ease-out, top 0.18s ease-out";
     s.left = `${side === "left" ? gap : vw - rect.width - gap}px`;
@@ -2587,8 +2621,7 @@
           const q = u.searchParams.get("q");
           if (!q) return;
 
-          if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
-            return;
+          if (!isSearchPath(u.pathname)) return;
 
           const corrected = buildRedditSearchUrl(
             q,
@@ -2638,20 +2671,12 @@
       };
 
       if (lightbox.style.display === "flex") {
+        // Every hotkey is claimed while the lightbox is open.
         const lbNav = { arrowright: 1, d: 1, arrowleft: -1, a: -1 };
-        if (
-          lbNav[key] !== undefined ||
-          key === "escape" ||
-          key === "x" ||
-          key === "w" ||
-          key === "s" ||
-          key === "g"
-        ) {
-          prevent();
-          if (key === "g") toggleGrid();
-          else if (lbNav[key]) navigateGallery(lbNav[key]);
-          else closeLightbox();
-        }
+        prevent();
+        if (key === "g") toggleGrid();
+        else if (lbNav[key]) navigateGallery(lbNav[key]);
+        else closeLightbox();
         return;
       }
 
@@ -2678,9 +2703,7 @@
     });
     window.navigation.addEventListener("navigatesuccess", () => {
       const u = new URL(location.href);
-      if (!u.pathname.endsWith("/search/") && !u.pathname.endsWith("/search"))
-        return;
-      if (!u.searchParams.get("q")) return;
+      if (!isSearchPath(u.pathname) || !u.searchParams.get("q")) return;
 
       if (_lastSearchHref === location.href) return;
       _lastSearchHref = location.href;
