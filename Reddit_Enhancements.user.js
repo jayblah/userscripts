@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name            Reddit Enhancements
-// @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, NATO/Binary decoder, and social search helpers.
+// @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, Binary/Base64 decoder, and social search helpers.
 // @author          JR
-// @version         2.12.4
+// @version         2.13.0
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -39,7 +39,7 @@
   /** Per-mode accent colors for filter/highlight panels. */
   const MODE_ACCENT = { filter: DC.accent, highlight: "#1E88DB" };
 
-  // Containers scanned for NATO/binary content (tighter — paragraph-level bodies).
+  // Containers scanned for binary/base64 content (tighter — paragraph-level bodies).
   const DECODER_SELECTORS = [
     '[data-testid="comment"]',
     "shreddit-comment",
@@ -96,63 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.12.4";
-
-  // =========================================================
-  // CORE TRANSLATION DICTIONARIES
-  // =========================================================
-
-  const NATO_ALPHABET = {
-    alpha: "A",
-    alfa: "A",
-    bravo: "B",
-    charlie: "C",
-    delta: "D",
-    echo: "E",
-    foxtrot: "F",
-    golf: "G",
-    hotel: "H",
-    india: "I",
-    juliet: "J",
-    juliett: "J",
-    kilo: "K",
-    lima: "L",
-    mike: "M",
-    november: "N",
-    oscar: "O",
-    papa: "P",
-    quebec: "Q",
-    romeo: "R",
-    sierra: "S",
-    tango: "T",
-    uniform: "U",
-    victor: "V",
-    whiskey: "W",
-    xray: "X",
-    "x-ray": "X",
-    yankee: "Y",
-    zulu: "Z",
-    zero: "0",
-    one: "1",
-    two: "2",
-    three: "3",
-    four: "4",
-    five: "5",
-    six: "6",
-    seven: "7",
-    eight: "8",
-    nine: "9",
-    space: " ",
-    dot: ".",
-    period: ".",
-    underscore: "_",
-    dash: "-",
-    hyphen: "-",
-    ".": ".",
-    _: "_",
-    "-": "-",
-    " ": " ",
-  };
+  const VERSION = "2.13.0";
 
   const DECODER_PENDING_SEL = DECODER_SELECTORS.map(
     (s) => `${s}:not([pp-decoder-scanned])`,
@@ -1883,22 +1827,8 @@
   }
 
   // =========================================================
-  // NATO / BINARY / BASE64 DECODER
+  // BINARY / BASE64 DECODER
   // =========================================================
-
-  function natoToText(s) {
-    const tokens = s.toLowerCase().split(/[\s,+/]+/);
-    let res = "",
-      count = 0;
-    for (const token of tokens.map((t) => t.trim())) {
-      if (!token) continue;
-      if (NATO_ALPHABET[token] !== undefined) {
-        res += NATO_ALPHABET[token];
-        count++;
-      }
-    }
-    return count >= 3 ? res : null;
-  }
 
   function binaryToText(b) {
     const clean = b.replace(/\s/g, "");
@@ -1993,7 +1923,7 @@
     container.append(
       createElement("div", {
         className: "pp_decoder_label",
-        textContent: { nato: "NATO", binary: "BIN", base64: "B64" }[type],
+        textContent: { binary: "BIN", base64: "B64" }[type],
       }),
       createElement("div", {
         className: "pp_decoder_result",
@@ -2024,13 +1954,6 @@
     return box;
   }
 
-  function processTextNode(node, seenDecoded) {
-    const text = node.textContent;
-    if (!/[a-zA-Z]/.test(text)) return false;
-    const target = node.parentNode.tagName === "P" ? node.parentNode : node;
-    return !!insertDecoded("nato", natoToText(text), target, seenDecoded);
-  }
-
   // `seenDecoded` is shared by every paragraph of one comment.
   function scanParagraph(p, seenDecoded) {
     if (p.hasAttribute("data-decoded")) return;
@@ -2039,17 +1962,12 @@
     const nodes = [];
     let n;
     while ((n = walker.nextNode())) nodes.push(n);
-    // One decoded component per paragraph is enough: NATO, then binary,
-    // then base64; later decoders are skipped once one has rendered.
-    let rendered = false;
-    for (const node of nodes) {
-      if (processTextNode(node, seenDecoded)) rendered = true;
-    }
-    if (rendered) return;
-
     // Binary/base64 are matched over the whole paragraph so a message wrapped
-    // across lines (newlines or <br>, i.e. separate text nodes) decodes as one piece.
+    // across lines (newlines or <br>, i.e. separate text nodes) decodes as one
+    // piece. One decoded component per paragraph is enough: binary first, then
+    // base64 only if binary rendered nothing.
     const joined = nodes.map((t) => t.textContent).join("\n");
+    let rendered = false;
     let anchor = p;
     const render = (type, regex, decode) => {
       for (const match of joined.match(regex) ?? []) {
