@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.6.1
+// @version      2.7.0
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -23,7 +23,7 @@
 
   const APP_THEME = "#3db7c7";
   const APP_DIM = "#b8f7ff";
-  const APP_NAME = "XF View™ 2.6";
+  const APP_NAME = "XF View™ 2.7";
   const APP_SHORT = "XF™";
 
   // ── Gallery mode constants ────────────────────────────────────────────────
@@ -136,7 +136,11 @@
     _stripMode: false, // the strip is what is showing
     _viewFromStrip: false, // the single viewer was opened from the strip
     _stripList: null, // the list the strip DOM was built from
-    _stripObserver: null,
+    _stripObserver: null, // follows the picture across the middle, for the counter
+    _stripEdgeObserver: null, // loads the neighbouring page at either end
+    _stripEdge: null, // { prevUrl, nextUrl, prevDone, nextDone, loading }
+    _stripPageUrls: [], // the thread page each picture in the list came from
+    _stripExtended: false, // pages beyond the live one have been merged into the list
     isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
       .matches,
 
@@ -232,8 +236,11 @@
 
     _setCounter(idx, total) {
       if (!this._el.counterText) return;
-      const currentPage =
-        this._parsePageNum(this._xpageUrl || window.location.href) || 1;
+      const pageUrl =
+        (this._stripMode && this._stripPageUrls[idx]) ||
+        this._xpageUrl ||
+        window.location.href;
+      const currentPage = this._parsePageNum(pageUrl) || 1;
       const maxPage = Math.max(currentPage, this._getMaxPage());
       this._el.counterText.innerHTML =
         `pg.&nbsp; <span class="dim">${currentPage}</span>&nbsp; / &nbsp;${maxPage}` +
@@ -473,20 +480,20 @@
         /* Each picture fits the screen, as in the single viewer: never wider than the
            window or taller than the room between the hints and the counter. */
         .strip-item img {
-          display: block; width: auto; height: auto;
-          max-width: 96vw; max-height: calc(100vh - 150px); object-fit: contain;
+          display: block; height: auto; object-fit: contain;
+          /* Scaled up as well as down to fill the room, but never past 4x the picture's own
+             size, where it would only be a blur. --ar and --nw are set from the picture. */
+          width: min(96vw, calc((100vh - 150px) * var(--ar, 1.5)), calc(var(--nw, 99999) * 4px));
         }
         .strip-n {
           position: absolute; top: 8px; left: 8px; pointer-events: none;
           font-size: 10px; font-weight: 800; color: var(--dim);
           background: rgba(0,0,0,0.65); padding: 2px 8px; border-radius: 10px;
         }
-        .strip-page-btn {
-          flex: 0 0 auto; background: #222; border: 1px solid #333; color: #aaa;
-          font-weight: 700; font-size: 12px; padding: 10px 22px; border-radius: 20px;
-          cursor: pointer; transition: all var(--t);
+        .strip-status {
+          flex: 0 0 auto; min-height: 28px; display: flex; align-items: center;
+          font-size: 11px; font-weight: 800; letter-spacing: 0.5px; color: #666;
         }
-        .strip-page-btn:hover { border-color: var(--theme); color: #fff; background: #2a2a2a; }
         .z-hint, .counter-row { z-index: 2; }
         .z-strip-keys { display: none; }
         #overlay.is-strip .z-hotkeys { display: none; }
@@ -813,6 +820,9 @@
     // ── Media pipeline ────────────────────────────────────────────────────
 
     refreshMediaPipelines() {
+      // The strip has merged neighbouring pages into the image list; the live page's own
+      // list would throw them away.
+      if (this._stripExtended) return;
       const all = this._filterVisible(
         Array.from(document.querySelectorAll(SEL_FULL)),
       );
@@ -1516,14 +1526,6 @@
           this._openStripItem(parseInt(stripItem.dataset.idx, 10));
           return;
         }
-        const stripPageBtn = e.target.closest(".strip-page-btn");
-        if (stripPageBtn) {
-          this._handlePageBoundary(
-            parseInt(stripPageBtn.dataset.dir, 10),
-            MODE.MAIN,
-          );
-          return;
-        }
         const btn = e.target.closest(".btn");
         const btnSs = e.target.closest(".btn-ss");
         const btnSS = e.target.closest("#btn-slideshow");
@@ -1714,7 +1716,15 @@
     // Shows item {idx} of {mode}'s list: as the strip when IMAGES is in strip mode,
     // otherwise in the single viewer.
     _present(mode, idx, dir = 1) {
+      // A page boundary replaced the merged list with another page's.
+      if (this._stripExtended && !this._stripListIsCurrent())
+        this._stripExtended = false;
       if (mode === MODE.MAIN && this._stripMode) return this._renderStrip(idx);
+      // In the single viewer on a merged list, "next page" means the page after this picture's.
+      if (mode === MODE.MAIN && this._stripExtended && this._stripPageUrls[idx]) {
+        this._xpageLocked = true;
+        this._xpageUrl = this._stripPageUrls[idx];
+      }
       const list = this._lists[mode];
       return this._renderMedia(list[idx], idx, list.length, dir);
     },
@@ -1791,6 +1801,7 @@
     },
 
     _resetPageLockAndRender(mode, defaultIdx, fallbackDir = 1) {
+      this._stripExtended = false;
       this._resetPageLock();
       this.refreshMediaPipelines();
       const list = this._lists[mode];
@@ -1898,58 +1909,86 @@
       }
       this._scrollStripTo(focusIdx);
       this._setCounter(focusIdx, list.length);
+      // Only now: watched from the start, the top edge would count as reached.
+      this._observeStripEdges();
+    },
+
+    // One picture of the strip. The thumbnail's proportions hold its place until it loads.
+    _makeStripItem(el, idx, eager) {
+      const item = document.createElement("div");
+      item.className = "strip-item";
+      item.dataset.idx = String(idx);
+
+      const img = new Image();
+      img.alt = "";
+      img.decoding = "async";
+      img.loading = eager ? "eager" : "lazy";
+      const w = el.naturalWidth || parseInt(el.getAttribute("width"), 10) || 0;
+      const h = el.naturalHeight || parseInt(el.getAttribute("height"), 10) || 0;
+      if (w && h) img.style.setProperty("--ar", String(w / h));
+      img.addEventListener("load", () => {
+        if (img.naturalWidth && img.naturalHeight) {
+          img.style.setProperty("--ar", String(img.naturalWidth / img.naturalHeight));
+          img.style.setProperty("--nw", String(img.naturalWidth));
+        }
+        item.style.minWidth = "0";
+        item.style.minHeight = "0";
+      });
+      // A picture that will not load is left out, as the single viewer skips it.
+      img.addEventListener("error", () => {
+        item.style.display = "none";
+      });
+      img.src = this.getFullSrc(el);
+
+      const n = document.createElement("span");
+      n.className = "strip-n";
+      n.textContent = String(idx + 1);
+
+      item.append(img, n);
+      return item;
+    },
+
+    _makeStripStatus(edge) {
+      const d = document.createElement("div");
+      d.className = "strip-status";
+      d.dataset.edge = edge;
+      return d;
+    },
+
+    _setStripStatus(dir, text) {
+      const d = this._el.strip.querySelector(
+        `.strip-status[data-edge="${dir < 0 ? "prev" : "next"}"]`,
+      );
+      if (d) d.textContent = text;
     },
 
     _buildStrip(list, focusIdx) {
       const { strip } = this._el;
       this._stripObserver?.disconnect();
+      this._stripEdgeObserver?.disconnect();
+      this._stripEdgeObserver = null;
       strip.replaceChildren();
       this._stripList = list.slice();
 
-      const pageBtn = (dir, label) => {
-        const b = document.createElement("div");
-        b.className = "strip-page-btn";
-        b.dataset.dir = String(dir);
-        b.setAttribute("role", "button");
-        b.textContent = label;
-        return b;
+      // The live page, or the page the viewer is locked to; the pages either side load
+      // from here as the strip is scrolled to its ends.
+      const base = this._xpageUrl || window.location.href;
+      this._stripExtended = false;
+      this._stripPageUrls = list.map(() => base);
+      this._stripEdge = {
+        prevUrl: base,
+        nextUrl: base,
+        prevDone: false,
+        nextDone: false,
+        loading: false,
       };
-      strip.appendChild(pageBtn(-1, "◀ PREVIOUS PAGE"));
 
+      strip.appendChild(this._makeStripStatus("prev"));
       list.forEach((el, i) => {
-        const item = document.createElement("div");
-        item.className = "strip-item";
-        item.dataset.idx = String(i);
-        const img = new Image();
-        img.alt = "";
-        // Room for the picture before it arrives: the thumbnail's proportions, which the
-        // browser scales to fit the same limits as the picture itself.
-        if (el.naturalWidth && el.naturalHeight) {
-          img.width = el.naturalWidth;
-          img.height = el.naturalHeight;
-        }
-        img.decoding = "async";
         // Only the pictures near where the strip opens load at once.
-        img.loading = Math.abs(i - focusIdx) <= 3 ? "eager" : "lazy";
-        img.addEventListener("load", () => {
-          item.style.minWidth = "0";
-          item.style.minHeight = "0";
-        });
-        // A picture that will not load is left out, as the single viewer skips it.
-        img.addEventListener("error", () => {
-          item.style.display = "none";
-        });
-        img.src = this.getFullSrc(el);
-
-        const n = document.createElement("span");
-        n.className = "strip-n";
-        n.textContent = `${i + 1} / ${list.length}`;
-
-        item.append(img, n);
-        strip.appendChild(item);
+        strip.appendChild(this._makeStripItem(el, i, Math.abs(i - focusIdx) <= 3));
       });
-
-      strip.appendChild(pageBtn(1, "NEXT PAGE ▶"));
+      strip.appendChild(this._makeStripStatus("next"));
 
       // The counter follows whichever picture is across the middle of the screen.
       this._stripObserver = new IntersectionObserver(
@@ -1958,7 +1997,7 @@
             if (!entry.isIntersecting) continue;
             const idx = parseInt(entry.target.dataset.idx, 10);
             this._indices[MODE.MAIN] = idx;
-            this._setCounter(idx, list.length);
+            this._setCounter(idx, this._lists[MODE.MAIN].length);
           }
         },
         { root: strip, rootMargin: "-45% 0px -45% 0px" },
@@ -1966,6 +2005,116 @@
       strip
         .querySelectorAll(".strip-item")
         .forEach((item) => this._stripObserver.observe(item));
+    },
+
+    // Loads the previous or next page's pictures once the strip is scrolled near that end.
+    _observeStripEdges() {
+      if (this._stripEdgeObserver) return;
+      const { strip } = this._el;
+      this._stripEdgeObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            this._stripLoadMore(entry.target.dataset.edge === "prev" ? -1 : 1);
+          }
+        },
+        { root: strip, rootMargin: "600px 0px 600px 0px" },
+      );
+      strip
+        .querySelectorAll(".strip-status")
+        .forEach((d) => this._stripEdgeObserver.observe(d));
+    },
+
+    // Fetches the nearest page in {dir} that has pictures and adds them to that end of the
+    // strip. Stops at the first or last page of the thread.
+    async _stripLoadMore(dir) {
+      const edge = this._stripEdge;
+      if (!edge || edge.loading) return;
+      if (dir < 0 ? edge.prevDone : edge.nextDone) return;
+      edge.loading = true;
+      this._setStripStatus(dir, dir < 0 ? "LOADING PREVIOUS PAGE…" : "LOADING NEXT PAGE…");
+
+      let scanUrl = dir < 0 ? edge.prevUrl : edge.nextUrl;
+      let items = [];
+      let foundUrl = null;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const url = this._getAdjacentPageUrl(dir, scanUrl);
+        if (!url) break;
+        scanUrl = url;
+        const found = await this._fetchPageMedia(url, MODE.MAIN);
+        if (edge !== this._stripEdge) return; // the strip was rebuilt or closed meanwhile
+        if (found.length) {
+          items = found;
+          foundUrl = url;
+          break;
+        }
+      }
+      if (edge !== this._stripEdge) return;
+
+      if (dir < 0) edge.prevUrl = scanUrl;
+      else edge.nextUrl = scanUrl;
+      edge.loading = false;
+
+      if (!items.length) {
+        if (dir < 0) edge.prevDone = true;
+        else edge.nextDone = true;
+        this._setStripStatus(dir, dir < 0 ? "START OF THREAD" : "END OF THREAD");
+        return;
+      }
+      this._setStripStatus(dir, "");
+      this._stripAddItems(items, dir, foundUrl);
+
+      // A short page can leave the end still in range, which the observer reports only
+      // when it changes; look again.
+      const sentinel = this._el.strip.querySelector(
+        `.strip-status[data-edge="${dir < 0 ? "prev" : "next"}"]`,
+      );
+      if (sentinel && this._stripEdgeObserver) {
+        this._stripEdgeObserver.unobserve(sentinel);
+        this._stripEdgeObserver.observe(sentinel);
+      }
+    },
+
+    _stripAddItems(items, dir, pageUrl) {
+      const { strip } = this._el;
+      const list = this._lists[MODE.MAIN];
+      this._stripExtended = true;
+
+      if (dir > 0) {
+        const start = list.length;
+        list.push(...items);
+        this._stripPageUrls.push(...items.map(() => pageUrl));
+        const before = strip.querySelector('.strip-status[data-edge="next"]');
+        items.forEach((el, k) => {
+          const item = this._makeStripItem(el, start + k, false);
+          strip.insertBefore(item, before);
+          this._stripObserver?.observe(item);
+        });
+      } else {
+        const n = items.length;
+        list.unshift(...items);
+        this._stripPageUrls.unshift(...items.map(() => pageUrl));
+        this._indices[MODE.MAIN] += n;
+        const after = strip.querySelector('.strip-status[data-edge="prev"]');
+        // Keep what the reader is looking at where it is while the pictures go in above.
+        const heightBefore = strip.scrollHeight;
+        const topBefore = strip.scrollTop;
+        let anchor = after.nextSibling;
+        items.forEach((el, k) => {
+          const item = this._makeStripItem(el, k, false);
+          strip.insertBefore(item, anchor);
+          this._stripObserver?.observe(item);
+        });
+        // The pictures that were already there are renumbered.
+        strip.querySelectorAll(".strip-item").forEach((item, i) => {
+          item.dataset.idx = String(i);
+          const badge = item.querySelector(".strip-n");
+          if (badge) badge.textContent = String(i + 1);
+        });
+        strip.scrollTop = topBefore + (strip.scrollHeight - heightBefore);
+      }
+      this._stripList = list.slice();
+      this._setCounter(this._indices[MODE.MAIN], list.length);
     },
 
     _scrollStripTo(idx) {
@@ -1985,6 +2134,11 @@
       this._viewFromStrip = true;
       this._el.overlay.classList.remove("is-strip");
       this._indices[MODE.MAIN] = idx;
+      // On a merged list, the viewer's "next page" is the page after this picture's own.
+      if (this._stripExtended && this._stripPageUrls[idx]) {
+        this._xpageLocked = true;
+        this._xpageUrl = this._stripPageUrls[idx];
+      }
       this._renderMedia(list[idx], idx, list.length, 1);
     },
 
@@ -2134,7 +2288,7 @@
     // ── Edge / thread jump ────────────────────────────────────────────────
 
     _jumpToEdge(edge) {
-      if (this._xpageLocked) {
+      if (this._xpageLocked && !this._stripExtended) {
         this._resetPageLock();
         this.refreshMediaPipelines();
       }
@@ -2215,6 +2369,11 @@
       container.replaceChildren();
       this._stripObserver?.disconnect();
       this._stripObserver = null;
+      this._stripEdgeObserver?.disconnect();
+      this._stripEdgeObserver = null;
+      this._stripEdge = null;
+      this._stripExtended = false;
+      this._stripPageUrls = [];
       this._stripList = null;
       this._stripMode = false;
       this._viewFromStrip = false;
