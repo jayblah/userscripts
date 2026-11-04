@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.7.1
+// @version      2.7.2
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -483,9 +483,10 @@
            window or taller than the room between the hints and the counter. */
         .strip-item img {
           display: block; height: auto; object-fit: contain;
-          /* Scaled up as well as down to fill the room, but never past 4x the picture's own
-             size, where it would only be a blur. --ar and --nw are set from the picture. */
-          width: min(96vw, calc((100vh - 150px) * var(--ar, 1.5)), calc(var(--nw, 99999) * 4px));
+          /* Its own size, so nothing is blurred by enlarging it; one that is bigger than the
+             room is shrunk to fit it, width and height together. --ar and --nw are set from
+             the picture once it has loaded. */
+          width: min(96vw, calc((100vh - 150px) * var(--ar, 1.5)), calc(var(--nw, 99999) * 1px));
         }
         .strip-n {
           position: absolute; top: 8px; left: 8px; pointer-events: none;
