@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.5.12
+// @version      2.6.0
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -130,6 +130,13 @@
     // ── State ──────────────────────────────────────────────────────────────
     shadow: null,
     _galleryMode: MODE.MAIN,
+
+    // Image strip: IMAGES mode opens as one vertical scroll of every image on the page;
+    // a click opens the single-image viewer on that image, and Esc returns to the strip.
+    _stripMode: false, // the strip is what is showing
+    _viewFromStrip: false, // the single viewer was opened from the strip
+    _stripList: null, // the list the strip DOM was built from
+    _stripObserver: null,
     isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
       .matches,
 
@@ -447,6 +454,39 @@
         #media-container img.zoomed          { cursor: grab; }
         #media-container img.zoomed.dragging { cursor: grabbing; }
 
+        /* ── Image strip (IMAGES mode) ── */
+        #strip {
+          display: none; position: absolute; inset: 0;
+          flex-direction: column; align-items: center; gap: 14px;
+          padding: 78px 0 90px; box-sizing: border-box;
+          overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
+          scrollbar-width: thin; scrollbar-color: #333 transparent;
+        }
+        #overlay.is-strip { touch-action: pan-y; }
+        #overlay.is-strip #strip { display: flex; }
+        #overlay.is-strip #media-container { display: none; }
+        #overlay.is-strip .slideshow-ctrl { display: none; }
+        .strip-item {
+          position: relative; flex: 0 0 auto; width: min(96vw, 1000px);
+          min-height: 160px; background: #0c0c0c; cursor: zoom-in;
+        }
+        .strip-item img { display: block; width: 100%; height: auto; }
+        .strip-n {
+          position: absolute; top: 8px; left: 8px; pointer-events: none;
+          font-size: 10px; font-weight: 800; color: var(--dim);
+          background: rgba(0,0,0,0.65); padding: 2px 8px; border-radius: 10px;
+        }
+        .strip-page-btn {
+          flex: 0 0 auto; background: #222; border: 1px solid #333; color: #aaa;
+          font-weight: 700; font-size: 12px; padding: 10px 22px; border-radius: 20px;
+          cursor: pointer; transition: all var(--t);
+        }
+        .strip-page-btn:hover { border-color: var(--theme); color: #fff; background: #2a2a2a; }
+        .z-hint, .counter-row { z-index: 2; }
+        .z-strip-keys { display: none; }
+        #overlay.is-strip .z-hotkeys { display: none; }
+        #overlay.is-strip .z-hotkeys.z-strip-keys { display: block; }
+
         /* ── Counter row ── */
         .counter-row {
           position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -603,9 +643,17 @@
               <span class="key">[SPACE]</span> AUTOPLAY ·
               <span class="key">[SCROLL]</span> ZOOM
             </div>
+            <div class="z-hotkeys z-strip-keys">
+              <span class="key">[CLICK]</span> OPEN ·
+              <span class="key">[SCROLL/↑/↓]</span> SCROLL ·
+              <span class="key">[V]</span> VIDEOS ·
+              <span class="key">[A]</span> ALL ·
+              <span class="key">[ESC]</span> EXIT
+            </div>
           </div>
 
           <div id="media-container"></div>
+          <div id="strip"></div>
 
           <div class="counter-row">
             <div class="slideshow-ctrl" id="gv-slideshow-ctrl">
@@ -1261,6 +1309,7 @@
     // ── Touch handling ────────────────────────────────────────────────────
 
     handleTouchStart(e) {
+      if (this._stripMode) return;
       if (e.touches.length === 2) {
         this._isPinching = true;
         this._isPanning = false;
@@ -1296,6 +1345,7 @@
     },
 
     handleTouchMove(e) {
+      if (this._stripMode) return;
       if (e.touches.length === 2 && this._pinchDist !== null) {
         e.preventDefault();
         const [a, b] = e.touches;
@@ -1333,6 +1383,7 @@
     },
 
     handleTouchEnd(e) {
+      if (this._stripMode) return;
       if (this._isPinching) {
         if (e.touches.length === 0) {
           this._isPinching = false;
@@ -1397,6 +1448,7 @@
         panel: s.getElementById("gv-panel"),
         overlay: s.getElementById("overlay"),
         container: s.getElementById("media-container"),
+        strip: s.getElementById("strip"),
         counterText: s.getElementById("gv-counter-text"),
         btnSlideshow: s.getElementById("btn-slideshow"),
         slideshowIcon: s.getElementById("slideshow-icon"),
@@ -1454,13 +1506,28 @@
 
       // Delegated click handler for the entire shadow root
       s.addEventListener("click", (e) => {
+        const stripItem = e.target.closest(".strip-item");
+        if (stripItem) {
+          this._openStripItem(parseInt(stripItem.dataset.idx, 10));
+          return;
+        }
+        const stripPageBtn = e.target.closest(".strip-page-btn");
+        if (stripPageBtn) {
+          this._handlePageBoundary(
+            parseInt(stripPageBtn.dataset.dir, 10),
+            MODE.MAIN,
+          );
+          return;
+        }
         const btn = e.target.closest(".btn");
         const btnSs = e.target.closest(".btn-ss");
         const btnSS = e.target.closest("#btn-slideshow");
         const btnDir = e.target.closest("#btn-slideshow-dir");
         const btnJump = e.target.closest(".btn-jump");
         const onOverlay =
-          e.target.id === "overlay" || e.target.id === "media-container";
+          e.target.id === "overlay" ||
+          e.target.id === "media-container" ||
+          e.target.id === "strip";
         const onMedia = e.target.closest("img, video, iframe");
         const onControls = e.target.closest(".counter-row, .z-hint");
 
@@ -1521,6 +1588,7 @@
       overlay.addEventListener(
         "wheel",
         (e) => {
+          if (this._stripMode) return; // the strip scrolls on its own
           if (
             s.elementFromPoint(e.clientX, e.clientY)?.matches("video, iframe")
           )
@@ -1595,6 +1663,23 @@
       }
       if (!list?.length) return;
 
+      // The strip scrolls; it has no previous/next of its own.
+      if (this._stripMode && mode === MODE.MAIN && dir !== 0) return;
+
+      if (dir === 0) {
+        const open = this._el.overlay.style.display === "flex";
+        // IMAGES while already in the strip: nothing to do.
+        if (open && mode === MODE.MAIN && this._stripMode) return;
+        // IMAGES from the single viewer the strip opened: back to the strip, where it was.
+        if (open && mode === MODE.MAIN && this._viewFromStrip) {
+          this._returnToStrip();
+          return;
+        }
+        // Image mode opens as the strip; the other modes keep the single viewer.
+        this._stripMode = mode === MODE.MAIN;
+        this._viewFromStrip = false;
+      }
+
       if (dir === 0 && !this._xpageLocked) {
         setIdx(this._getFirstUnseenIdx(list));
       }
@@ -1617,13 +1702,16 @@
           : (nextIdx + list.length) % list.length,
       );
 
-      await this._renderMedia(
-        list[this._indices[mode]],
-        this._indices[mode],
-        list.length,
-        numDir,
-      );
+      await this._present(mode, this._indices[mode], numDir);
       if (this._slideshowActive) this._evaluateActiveAutoplayContext();
+    },
+
+    // Shows item {idx} of {mode}'s list: as the strip when IMAGES is in strip mode,
+    // otherwise in the single viewer.
+    _present(mode, idx, dir = 1) {
+      if (mode === MODE.MAIN && this._stripMode) return this._renderStrip(idx);
+      const list = this._lists[mode];
+      return this._renderMedia(list[idx], idx, list.length, dir);
     },
 
     // Flash the relevant panel button red briefly when no media is found.
@@ -1679,12 +1767,7 @@
             this._indices[mode] = dir > 0 ? 0 : items.length - 1;
             this._xpageLocked = true;
             this._xpageUrl = nextUrl;
-            await this._renderMedia(
-              items[this._indices[mode]],
-              this._indices[mode],
-              items.length,
-              dir,
-            );
+            await this._present(mode, this._indices[mode], dir);
           }
           if (this._slideshowActive) this._evaluateActiveAutoplayContext();
           return;
@@ -1708,12 +1791,7 @@
       const list = this._lists[mode];
       if (!list?.length) return;
       this._indices[mode] = defaultIdx === -1 ? list.length - 1 : 0;
-      this._renderMedia(
-        list[this._indices[mode]],
-        this._indices[mode],
-        list.length,
-        fallbackDir,
-      );
+      this._present(mode, this._indices[mode], fallbackDir);
     },
 
     // ── Media rendering ───────────────────────────────────────────────────
@@ -1745,6 +1823,7 @@
       this._resetZoom();
 
       const isVideo = current.tagName !== "IMG";
+      overlay.classList.remove("is-strip");
       overlay.classList.toggle("is-video", isVideo);
 
       if (current.tagName === "IMG") {
@@ -1758,6 +1837,162 @@
 
       this._setCounter(idx, total);
       this._updateSlideshowButton();
+    },
+
+    // ── Image strip ───────────────────────────────────────────────────────
+
+    // Empties the single-viewer container, stopping any video or embed in it.
+    _clearMediaContainer() {
+      const { container } = this._el;
+      const video = container.querySelector("video");
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
+      const iframe = container.querySelector("iframe");
+      if (iframe) iframe.src = "about:blank";
+      container.replaceChildren();
+    },
+
+    _stripListIsCurrent() {
+      const list = this._lists[MODE.MAIN];
+      const built = this._stripList;
+      return (
+        !!built &&
+        built.length === list.length &&
+        built.every((el, i) => el === list[i])
+      );
+    },
+
+    // Shows every image of the current list as one vertical scroll, positioned on
+    // {focusIdx}. A strip already built for this list is only shown and scrolled.
+    async _renderStrip(focusIdx = 0) {
+      const { overlay, strip } = this._el;
+      const list = this._lists[MODE.MAIN];
+
+      overlay.style.display = "flex";
+      document.body.classList.add("gv-noscroll");
+      overlay.focus();
+
+      this._decodeAbort?.abort();
+      this._decodeAbort = null;
+      this._mediaListenerAbort?.abort();
+      this._mediaListenerAbort = null;
+      this._stopSlideshow();
+      this._clearMediaContainer();
+      this._resetZoom();
+
+      this._stripMode = true;
+      overlay.classList.remove("is-video");
+      overlay.classList.add("is-strip");
+      this._indices[MODE.MAIN] = focusIdx;
+
+      if (!this._stripListIsCurrent() || !strip.childElementCount) {
+        this._buildStrip(list, focusIdx);
+      }
+      this._scrollStripTo(focusIdx);
+      this._setCounter(focusIdx, list.length);
+    },
+
+    _buildStrip(list, focusIdx) {
+      const { strip } = this._el;
+      this._stripObserver?.disconnect();
+      strip.replaceChildren();
+      this._stripList = list.slice();
+
+      const pageBtn = (dir, label) => {
+        const b = document.createElement("div");
+        b.className = "strip-page-btn";
+        b.dataset.dir = String(dir);
+        b.setAttribute("role", "button");
+        b.textContent = label;
+        return b;
+      };
+      strip.appendChild(pageBtn(-1, "◀ PREVIOUS PAGE"));
+
+      list.forEach((el, i) => {
+        const item = document.createElement("div");
+        item.className = "strip-item";
+        item.dataset.idx = String(i);
+        // Room for the picture before it arrives, from the thumbnail where it has loaded.
+        if (el.naturalWidth && el.naturalHeight)
+          item.style.aspectRatio = `${el.naturalWidth} / ${el.naturalHeight}`;
+
+        const img = new Image();
+        img.alt = "";
+        img.decoding = "async";
+        // Only the pictures near where the strip opens load at once.
+        img.loading = Math.abs(i - focusIdx) <= 3 ? "eager" : "lazy";
+        img.addEventListener("load", () => {
+          item.style.aspectRatio = "";
+          item.style.minHeight = "0";
+        });
+        // A picture that will not load is left out, as the single viewer skips it.
+        img.addEventListener("error", () => {
+          item.style.display = "none";
+        });
+        img.src = this.getFullSrc(el);
+
+        const n = document.createElement("span");
+        n.className = "strip-n";
+        n.textContent = `${i + 1} / ${list.length}`;
+
+        item.append(img, n);
+        strip.appendChild(item);
+      });
+
+      strip.appendChild(pageBtn(1, "NEXT PAGE ▶"));
+
+      // The counter follows whichever picture is across the middle of the screen.
+      this._stripObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const idx = parseInt(entry.target.dataset.idx, 10);
+            this._indices[MODE.MAIN] = idx;
+            this._setCounter(idx, list.length);
+          }
+        },
+        { root: strip, rootMargin: "-45% 0px -45% 0px" },
+      );
+      strip
+        .querySelectorAll(".strip-item")
+        .forEach((item) => this._stripObserver.observe(item));
+    },
+
+    _scrollStripTo(idx) {
+      const { strip } = this._el;
+      const item = strip.querySelector(`.strip-item[data-idx="${idx}"]`);
+      if (!item) return;
+      // Instant, and by hand: scrollIntoView would also scroll the page behind the overlay.
+      strip.scrollTop = Math.max(0, item.offsetTop - 70);
+    },
+
+    // A click on a strip image: the single viewer on that image, with zoom and slideshow.
+    _openStripItem(idx) {
+      if (isNaN(idx)) return;
+      const list = this._lists[MODE.MAIN];
+      if (!list[idx]) return;
+      this._stripMode = false;
+      this._viewFromStrip = true;
+      this._el.overlay.classList.remove("is-strip");
+      this._indices[MODE.MAIN] = idx;
+      this._renderMedia(list[idx], idx, list.length, 1);
+    },
+
+    // Esc from a single viewer the strip opened: back to the strip, on the image last shown.
+    _returnToStrip() {
+      this._viewFromStrip = false;
+      this._stopSlideshow();
+      return this._renderStrip(this._indices[MODE.MAIN] || 0);
+    },
+
+    _scrollStripBy(fraction) {
+      this._el.strip.scrollBy({
+        top: window.innerHeight * fraction,
+        behavior: "smooth",
+      });
     },
 
     async _renderImage(current, lastDirection) {
@@ -1900,12 +2135,7 @@
       if (!list?.length) return;
       const targetIdx = edge === "first" ? 0 : list.length - 1;
       setIdx(targetIdx);
-      this._renderMedia(
-        list[targetIdx],
-        targetIdx,
-        list.length,
-        edge === "first" ? 1 : -1,
-      );
+      this._present(mode, targetIdx, edge === "first" ? 1 : -1);
       if (this._slideshowActive) this._evaluateActiveAutoplayContext();
     },
 
@@ -1942,12 +2172,7 @@
         this._indices[mode] = edge === "first" ? 0 : items.length - 1;
         this._xpageLocked = true;
         this._xpageUrl = targetUrl;
-        await this._renderMedia(
-          items[this._indices[mode]],
-          this._indices[mode],
-          items.length,
-          edge === "first" ? 1 : -1,
-        );
+        await this._present(mode, this._indices[mode], edge === "first" ? 1 : -1);
         if (this._slideshowActive) this._evaluateActiveAutoplayContext();
       } else {
         this._showCrossPageHint("No media found on destination page.");
@@ -1981,7 +2206,13 @@
       const iframe = container.querySelector("iframe");
       if (iframe) iframe.src = "";
       container.replaceChildren();
-      overlay?.classList.remove("is-video");
+      this._stripObserver?.disconnect();
+      this._stripObserver = null;
+      this._stripList = null;
+      this._stripMode = false;
+      this._viewFromStrip = false;
+      this._el.strip?.replaceChildren();
+      overlay?.classList.remove("is-video", "is-strip");
       overlay.style.display = "none";
       document.body.classList.remove("gv-noscroll");
       window.focus();
@@ -2022,6 +2253,30 @@
 
           if (!isVisible) return;
 
+          // The strip scrolls instead of stepping through images.
+          if (this._stripMode) {
+            const stripKeys = {
+              " ": () => this._scrollStripBy(0.8),
+              pagedown: () => this._scrollStripBy(0.8),
+              pageup: () => this._scrollStripBy(-0.8),
+              arrowdown: () => this._scrollStripBy(0.4),
+              s: () => this._scrollStripBy(0.4),
+              arrowup: () => this._scrollStripBy(-0.4),
+              home: () => this._jumpToEdge("first"),
+              end: () => this._jumpToEdge("last"),
+              escape: () => this.closeGallery(),
+              w: () => this.closeGallery(),
+              v: () => this._navigateGallery(MODE.VIDEO, 0),
+              a: () => this._navigateGallery(MODE.FULL, 0),
+            };
+            if (stripKeys[key]) {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              stripKeys[key]();
+            }
+            return;
+          }
+
           // Overlay-specific hotkeys
           if (e.key === " ") {
             e.preventDefault();
@@ -2042,12 +2297,15 @@
             return;
           }
 
+          // From a single viewer the strip opened, the exit keys go back to the strip.
+          const exit = () =>
+            this._viewFromStrip ? this._returnToStrip() : this.closeGallery();
           const overlayActions = {
-            escape: () => this.closeGallery(),
-            w: () => this.closeGallery(),
-            s: () => this.closeGallery(),
-            arrowup: () => this.closeGallery(),
-            arrowdown: () => this.closeGallery(),
+            escape: exit,
+            w: exit,
+            s: exit,
+            arrowup: exit,
+            arrowdown: exit,
             a: () => this._navigateGallery(this._galleryMode, -1),
             arrowleft: () => this._navigateGallery(this._galleryMode, -1),
             d: () => this._navigateGallery(this._galleryMode, 1),
