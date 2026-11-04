@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.7.0
+// @version      2.7.1
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -139,6 +139,8 @@
     _stripObserver: null, // follows the picture across the middle, for the counter
     _stripEdgeObserver: null, // loads the neighbouring page at either end
     _stripEdge: null, // { prevUrl, nextUrl, prevDone, nextDone, loading }
+    _stripWheelTarget: 0, // where the smoothed wheel scroll is heading
+    _stripWheelRaf: 0, // its animation frame, 0 when idle
     _stripPageUrls: [], // the thread page each picture in the list came from
     _stripExtended: false, // pages beyond the live one have been merged into the list
     isMobile: window.matchMedia("(max-width: 600px) and (pointer: coarse)")
@@ -1595,7 +1597,10 @@
       overlay.addEventListener(
         "wheel",
         (e) => {
-          if (this._stripMode) return; // the strip scrolls on its own
+          if (this._stripMode) {
+            this._onStripWheel(e);
+            return;
+          }
           if (
             s.elementFromPoint(e.clientX, e.clientY)?.matches("video, iframe")
           )
@@ -2117,7 +2122,48 @@
       this._setCounter(this._indices[MODE.MAIN], list.length);
     },
 
+    // Wheel notches in the strip. Each notch jumps a fixed distance, which is choppy over
+    // pictures this tall, so the notches are added up into one target and the strip eases
+    // towards it. A trackpad's small steps are already smooth and are left to the browser.
+    _onStripWheel(e) {
+      if (e.ctrlKey) return; // the browser's own zoom
+      let dy = e.deltaY;
+      if (e.deltaMode === 1) dy *= 40;
+      else if (e.deltaMode === 2) dy *= window.innerHeight;
+      else if (Math.abs(dy) < 50) return;
+
+      e.preventDefault();
+      const { strip } = this._el;
+      const max = strip.scrollHeight - strip.clientHeight;
+      // From the target while a scroll is under way, so quick notches build on each other.
+      const from = this._stripWheelRaf ? this._stripWheelTarget : strip.scrollTop;
+      this._stripWheelTarget = Math.max(0, Math.min(max, from + dy));
+      if (!this._stripWheelRaf) {
+        this._stripWheelRaf = requestAnimationFrame(() => this._stripWheelStep());
+      }
+    },
+
+    _stripWheelStep() {
+      const { strip } = this._el;
+      const diff = this._stripWheelTarget - strip.scrollTop;
+      if (!this._stripMode || Math.abs(diff) < 1) {
+        if (this._stripMode) strip.scrollTop = this._stripWheelTarget;
+        this._stripWheelRaf = 0;
+        return;
+      }
+      // A fifth of the way each frame, and never less than a pixel so it cannot stall.
+      const step = Math.sign(diff) * Math.min(Math.abs(diff), Math.max(1, Math.abs(diff) * 0.2));
+      strip.scrollTop += step;
+      this._stripWheelRaf = requestAnimationFrame(() => this._stripWheelStep());
+    },
+
+    _cancelStripWheel() {
+      if (this._stripWheelRaf) cancelAnimationFrame(this._stripWheelRaf);
+      this._stripWheelRaf = 0;
+    },
+
     _scrollStripTo(idx) {
+      this._cancelStripWheel();
       const { strip } = this._el;
       const item = strip.querySelector(`.strip-item[data-idx="${idx}"]`);
       if (!item) return;
@@ -2150,6 +2196,7 @@
     },
 
     _scrollStripBy(fraction) {
+      this._cancelStripWheel();
       this._el.strip.scrollBy({
         top: window.innerHeight * fraction,
         behavior: "smooth",
@@ -2367,6 +2414,7 @@
       const iframe = container.querySelector("iframe");
       if (iframe) iframe.src = "";
       container.replaceChildren();
+      this._cancelStripWheel();
       this._stripObserver?.disconnect();
       this._stripObserver = null;
       this._stripEdgeObserver?.disconnect();
