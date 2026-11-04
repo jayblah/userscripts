@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.6.0
+// @version      2.6.1
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -23,7 +23,7 @@
 
   const APP_THEME = "#3db7c7";
   const APP_DIM = "#b8f7ff";
-  const APP_NAME = "XF View™ 2.5";
+  const APP_NAME = "XF View™ 2.6";
   const APP_SHORT = "XF™";
 
   // ── Gallery mode constants ────────────────────────────────────────────────
@@ -467,10 +467,15 @@
         #overlay.is-strip #media-container { display: none; }
         #overlay.is-strip .slideshow-ctrl { display: none; }
         .strip-item {
-          position: relative; flex: 0 0 auto; width: min(96vw, 1000px);
-          min-height: 160px; background: #0c0c0c; cursor: zoom-in;
+          position: relative; flex: 0 0 auto;
+          min-width: 160px; min-height: 160px; background: #0c0c0c; cursor: zoom-in;
         }
-        .strip-item img { display: block; width: 100%; height: auto; }
+        /* Each picture fits the screen, as in the single viewer: never wider than the
+           window or taller than the room between the hints and the counter. */
+        .strip-item img {
+          display: block; width: auto; height: auto;
+          max-width: 96vw; max-height: calc(100vh - 150px); object-fit: contain;
+        }
         .strip-n {
           position: absolute; top: 8px; left: 8px; pointer-events: none;
           font-size: 10px; font-weight: 800; color: var(--dim);
@@ -1915,17 +1920,19 @@
         const item = document.createElement("div");
         item.className = "strip-item";
         item.dataset.idx = String(i);
-        // Room for the picture before it arrives, from the thumbnail where it has loaded.
-        if (el.naturalWidth && el.naturalHeight)
-          item.style.aspectRatio = `${el.naturalWidth} / ${el.naturalHeight}`;
-
         const img = new Image();
         img.alt = "";
+        // Room for the picture before it arrives: the thumbnail's proportions, which the
+        // browser scales to fit the same limits as the picture itself.
+        if (el.naturalWidth && el.naturalHeight) {
+          img.width = el.naturalWidth;
+          img.height = el.naturalHeight;
+        }
         img.decoding = "async";
         // Only the pictures near where the strip opens load at once.
         img.loading = Math.abs(i - focusIdx) <= 3 ? "eager" : "lazy";
         img.addEventListener("load", () => {
-          item.style.aspectRatio = "";
+          item.style.minWidth = "0";
           item.style.minHeight = "0";
         });
         // A picture that will not load is left out, as the single viewer skips it.
