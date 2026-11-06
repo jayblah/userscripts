@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, Binary/Base64 decoder, and social search helpers.
 // @author          JR
-// @version         2.13.0
+// @version         2.13.1
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.13.0";
+  const VERSION = "2.13.1";
 
   const DECODER_PENDING_SEL = DECODER_SELECTORS.map(
     (s) => `${s}:not([pp-decoder-scanned])`,
@@ -2186,7 +2186,8 @@
         const src = pickVideoSrc(shredditPlayer);
 
         if (src)
-          addMediaBlocker(shredditPlayer, "inset: 0;", (container) => {
+          // Leave the bottom control bar (mute, seek, etc.) uncovered.
+          addMediaBlocker(shredditPlayer, "top: 0; left: 0; right: 0; bottom: 48px;", (container) => {
             const inline = findVideo(container) ?? videoNear(container);
             openLightbox(
               [pickVideoSrc(shredditPlayer) || src],
