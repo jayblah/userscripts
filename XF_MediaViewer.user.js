@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         XF Media Viewer
-// @version      2.7.2
+// @version      2.7.3
 // @description  Streamlined media viewing experience for XenForo forums. Features mobile & keyboard support, inline expansion, slideshows with dedicated reverse toggle button, automatic broken-image skipping, multi-media pipelines, and title extraction.
 // @author       JR
 // @license      MIT
@@ -57,6 +57,10 @@
 
   // Combined selector reused across pipelines
   const SEL_FULL = `${SEL_IMG}, ${SEL_VID}`;
+
+  // SimpCity serves inline images as name.md.<ext> / name.th.<ext>; the full-size
+  // file is the same name without the marker. Posts use png/gif too, not just jpg.
+  const THUMB_EXT_RE = /\.(md|th)\.(jpe?g|png|webp|gif|avif)$/i;
 
   // ── Settings persistence ──────────────────────────────────────────────────
   const siteKey = IS_F95 ? "f95" : "sc";
@@ -752,7 +756,7 @@
         }
         return img.src;
       }
-      return img.src.replace(/\.(md|th)\.(jpg|webp)$/i, ".$2");
+      return img.src.replace(THUMB_EXT_RE, ".$2");
     },
 
     cleanAttr: (str) => str.replace(/\.(md|th)(?=\.)/, ""),
@@ -764,7 +768,7 @@
       document
         .querySelectorAll(`${SEL_IMG}:not([data-processed-thumb])`)
         .forEach((img) => {
-          if (!IS_F95 && /\.(md|th)\.(jpg|webp)$/i.test(img.src)) {
+          if (!IS_F95 && THUMB_EXT_RE.test(img.src)) {
             if (img.title) img.title = App.cleanAttr(img.title);
             if (img.alt) img.alt = App.cleanAttr(img.alt);
           }
@@ -816,7 +820,11 @@
     _filterVisible(elements) {
       return elements.filter((el) => {
         const r = el.getBoundingClientRect();
-        return r.width > 0 || r.height > 0 || el.tagName === "DIV";
+        // A lazy image that hasn't loaded yet is 0x0 but still laid out; only
+        // display:none ones (no client rects) should be dropped.
+        const pendingLazy =
+          el.tagName === "IMG" && !el.complete && el.getClientRects().length > 0;
+        return r.width > 0 || r.height > 0 || el.tagName === "DIV" || pendingLazy;
       });
     },
 
@@ -2205,20 +2213,30 @@
     },
 
     async _renderImage(current, lastDirection) {
-      const el = new Image();
-      el.src = this.getFullSrc(current);
       const controller = new AbortController();
       this._decodeAbort = controller;
 
-      try {
-        await el.decode();
-      } catch {
-        if (!controller.signal.aborted) {
-          // Image failed to decode — skip it
-          this._decodeAbort = null;
-          const fallbackStep = lastDirection === 0 ? 1 : lastDirection;
-          this._navigateGallery(this._galleryMode, fallbackStep);
+      // Try the derived full-size URL first, then the on-page image in case the
+      // full-size file doesn't exist under the stripped name.
+      const full = this.getFullSrc(current);
+      const candidates = full === current.src ? [full] : [full, current.src];
+      let el = null;
+      for (const src of candidates) {
+        const attempt = new Image();
+        attempt.src = src;
+        try {
+          await attempt.decode();
+          el = attempt;
+          break;
+        } catch {
+          if (controller.signal.aborted) return;
         }
+      }
+      if (!el) {
+        // Image failed to decode — skip it
+        this._decodeAbort = null;
+        const fallbackStep = lastDirection === 0 ? 1 : lastDirection;
+        this._navigateGallery(this._galleryMode, fallbackStep);
         return;
       }
 
