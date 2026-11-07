@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Enhancements
-// @version      1.2
+// @version      1.3
 // @description  Streamlines thread layouts, centers enlarged media, adds structural toggles, and features a sequential, single-tab unread alert walker.
 // @author       JR
 // @license      MIT
@@ -21,7 +21,7 @@
 
   GM_addStyle(`
         /* --- General Layout Improvements --- */
-        .p-body-sidebarCol { display: none !important; }
+        .p-body-sidebarCol, .p-body-sidebar { display: none !important; }
         .p-body-content { flex: 1 1 auto !important; min-width: 0 !important; max-width: 100% !important; }
         .p-body-pageContent { width: 100% !important; max-width: 100% !important; }
         .block--category .block-header { cursor: pointer; user-select: none; display: flex !important; align-items: center; gap: 8px; }
@@ -147,7 +147,12 @@
         );
       }
 
-      if (thumbLink && target) {
+      // Threads without art get a blank "no_image" placeholder; don't enlarge it.
+      const isPlaceholder = !!thumbLink
+        ?.querySelector("img")
+        ?.style.backgroundImage.includes("defaultThumbnailImage");
+
+      if (thumbLink && target && !isPlaceholder) {
         thumbLink.setAttribute("data-gv-thumb", "true");
         target.parentNode.insertBefore(thumbLink, target);
       }
@@ -383,7 +388,13 @@
     btn.appendChild(text);
     btn.addEventListener("click", onWalkClick);
 
-    alertsLink.insertAdjacentElement("afterend", btn);
+    // The alerts link is immediately followed by its dropdown (.menu); place the
+    // button after that so XenForo's trigger/menu sibling pairing stays intact.
+    const alertsMenu = alertsLink.nextElementSibling;
+    (alertsMenu?.matches(".menu") ? alertsMenu : alertsLink).insertAdjacentElement(
+      "afterend",
+      btn,
+    );
     AlertEngine.btn = btn;
     return true;
   }

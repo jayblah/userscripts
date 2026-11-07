@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         SC Leak Finder
-// @version      1.8.1
+// @version      1.8.2
 // @description  Cross-checks profiles on OF, Fansly, IG, TikTok, Fanfix, VSCO, and X against SC.
 // @author       JR
 // @license      MIT
@@ -15,6 +15,7 @@
 // @match        https://twitter.com/*
 // @updateURL    https://raw.githubusercontent.com/jayblah/userscripts/main/SC_LeakFinder.user.js
 // @downloadURL  https://raw.githubusercontent.com/jayblah/userscripts/main/SC_LeakFinder.user.js
+// @connect      simpcity.cr
 // @grant        GM.xmlHttpRequest
 // @grant        GM_addStyle
 // ==/UserScript==
