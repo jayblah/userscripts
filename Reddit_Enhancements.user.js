@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, Binary/Base64 decoder, and social search helpers.
 // @author          JR
-// @version         2.13.2
+// @version         2.13.3
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.13.2";
+  const VERSION = "2.13.3";
 
   const DECODER_PENDING_SEL = DECODER_SELECTORS.map(
     (s) => `${s}:not([pp-decoder-scanned])`,
@@ -2166,7 +2166,7 @@
   // Reddit's own handlers.
   // Media images of a post. Excludes the blurred backdrop copy (role=presentation).
   const MEDIA_IMG_SEL =
-    ':is([slot="post-media-container"] :is(faceplate-img, img), img[data-post-media-primary]):not([role="presentation"])';
+    ':is([slot="post-media-container"] :is(faceplate-img, img), img[data-post-media-primary]):not([role="presentation"]):not(.lightboxed-content *)';
   // Height of the bottom strip left to the video player's own controls.
   const VIDEO_CONTROL_STRIP = 56;
 
@@ -2240,10 +2240,18 @@
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
         post.setAttribute("pp-images-handled", "true");
-        // Fetched on first click (not for every gallery in the feed); a failed
+        // Every page's original-resolution URL is already in the DOM (hidden
+        // .lightboxed-content <img> inside each carousel <li>), so use that and
+        // only fall back to the JSON endpoint if a page is missing. A failed
         // fetch is dropped so the next click retries.
+        const pages = () => [...post.querySelectorAll("gallery-carousel li")];
         let galleryPromise = null;
         const loadUrls = async () => {
+          const lis = pages();
+          const dom = lis
+            .map((li) => li.querySelector(".lightboxed-content img")?.getAttribute("src"))
+            .filter(Boolean);
+          if (lis.length && dom.length === lis.length) return dom;
           galleryPromise ??= fetchGalleryImages(permalink);
           const result = await galleryPromise;
           if (!result) galleryPromise = null;
@@ -2258,12 +2266,17 @@
             const urls = await loadUrls();
             if (!urls?.length) return;
 
-            const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
-            const idx = urls.findIndex((u) =>
-              clickedSrc.includes(
-                u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1],
-              ),
-            );
+            // Position by carousel page; lazy pages have no src yet, so the
+            // old filename match could not tell them apart.
+            let idx = pages().indexOf(imgEl.closest("li"));
+            if (idx === -1 || idx >= urls.length) {
+              const clickedSrc = decodeAmp(getImgSrc(imgEl) || "");
+              idx = urls.findIndex((u) =>
+                clickedSrc.includes(
+                  u.match(/\/([A-Za-z0-9]+)\.(jpg|png|gif|webp)/)?.[1],
+                ),
+              );
+            }
             openLightbox(urls, idx !== -1 ? idx : 0, 0, true);
           });
         });
