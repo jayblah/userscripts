@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, Binary/Base64 decoder, and social search helpers.
 // @author          JR
-// @version         2.13.3
+// @version         2.13.5
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -70,6 +70,7 @@
     "search-telemetry-tracker:has(search-answers-response-container-streaming)",
     "search-answers-response-container-streaming",
     "in-feed-community-recommendations",
+    'aside[aria-label="Discover communities"]',
   ];
 
   // Also hidden/removed by the sweep (see sweepRoot).
@@ -96,7 +97,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.13.3";
+  const VERSION = "2.13.5";
 
   const DECODER_PENDING_SEL = DECODER_SELECTORS.map(
     (s) => `${s}:not([pp-decoder-scanned])`,
@@ -2239,7 +2240,6 @@
         post.hasAttribute("gallery") || post.getAttribute("post-type") === "gallery";
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
-        post.setAttribute("pp-images-handled", "true");
         // Every page's original-resolution URL is already in the DOM (hidden
         // .lightboxed-content <img> inside each carousel <li>), so use that and
         // only fall back to the JSON endpoint if a page is missing. A failed
@@ -2258,7 +2258,7 @@
           return result;
         };
 
-        post.querySelectorAll(MEDIA_IMG_SEL).forEach((imgEl) => {
+        post.querySelectorAll(`${MEDIA_IMG_SEL}:not(.pp_imageViewable)`).forEach((imgEl) => {
           bindViewable(imgEl, async (e) => {
             swallowEvent(e);
             killNativeLightbox();
@@ -2280,6 +2280,11 @@
             openLightbox(urls, idx !== -1 ? idx : 0, 0, true);
           });
         });
+        // Done only once every carousel page is bound; a carousel that hydrates
+        // late is picked up on the next pass instead of being skipped for good.
+        const total = pages().length;
+        if (total && post.querySelectorAll(`${MEDIA_IMG_SEL}.pp_imageViewable`).length >= total)
+          post.setAttribute("pp-images-handled", "true");
         return;
       }
 
