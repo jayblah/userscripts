@@ -2,7 +2,7 @@
 // @name            Reddit Enhancements
 // @description     Nukes Reddit clutter, adds image lightbox/gallery, collapse tools, Binary/Base64 decoder, and social search helpers.
 // @author          JR
-// @version         2.13.1
+// @version         2.13.2
 // @license         MIT
 // @match           *://*.reddit.com/*
 // @updateURL       https://raw.githubusercontent.com/jayblah/userscripts/main/Reddit_Enhancements.user.js
@@ -96,7 +96,7 @@
   const FILTER_STORAGE_KEY = "pp_keyword_filters";
   const HIGHLIGHT_STORAGE_KEY = "pp_keyword_highlights";
   const FILTER_VISIBLE_KEY = "pp_filter_show_state";
-  const VERSION = "2.13.1";
+  const VERSION = "2.13.2";
 
   const DECODER_PENDING_SEL = DECODER_SELECTORS.map(
     (s) => `${s}:not([pp-decoder-scanned])`,
@@ -2096,7 +2096,10 @@
   }
 
   // Click-catching overlay over an inline player/embed that opens the lightbox.
-  function addMediaBlocker(mediaEl, style, onOpen) {
+  // controlStrip > 0 keeps that many px at the bottom of the container clickable
+  // for the player's own controls: the overlay lets pointer events through while
+  // the cursor is in the strip, so it holds whatever the control bar's real height is.
+  function addMediaBlocker(mediaEl, style, onOpen, controlStrip = 0) {
     const container =
       mediaEl.closest('[slot="post-media-container"]') || mediaEl.parentElement;
     if (!container || container.querySelector(".pp-embed-blocker")) return;
@@ -2106,6 +2109,16 @@
       className: "pp-embed-blocker",
       style: `position: absolute; ${style} z-index: 10; cursor: zoom-in; background: transparent;`,
     });
+    if (controlStrip > 0) {
+      const setZone = (e) => {
+        const inStrip = e.clientY > container.getBoundingClientRect().bottom - controlStrip;
+        blocker.style.pointerEvents = inStrip ? "none" : "auto";
+      };
+      container.addEventListener("pointermove", setZone);
+      container.addEventListener("pointerleave", () => {
+        blocker.style.pointerEvents = "auto";
+      });
+    }
     blocker.addEventListener(
       "click",
       (e) => {
@@ -2151,6 +2164,24 @@
 
   // Makes an image open the lightbox on click. Capture phase, so it runs before
   // Reddit's own handlers.
+  // Media images of a post. Excludes the blurred backdrop copy (role=presentation).
+  const MEDIA_IMG_SEL =
+    ':is([slot="post-media-container"] :is(faceplate-img, img), img[data-post-media-primary]):not([role="presentation"])';
+  // Height of the bottom strip left to the video player's own controls.
+  const VIDEO_CONTROL_STRIP = 56;
+
+  // Original-resolution URL for a single-image post: the post's own content link,
+  // else the hidden lightbox <img>, else whatever was clicked (a 640px preview).
+  const fullResSrc = (post, imgEl) => {
+    const href = post.getAttribute("content-href") || "";
+    if (post.getAttribute("post-type") === "image" && /^https:\/\/i\.redd\.it\//.test(href))
+      return href;
+    return (
+      post.querySelector(".lightboxed-content img")?.getAttribute("src") ||
+      getImgSrc(imgEl)
+    );
+  };
+
   const bindViewable = (imgEl, onClick) => {
     imgEl.classList.add("pp_imageViewable");
     imgEl.addEventListener("click", onClick, true);
@@ -2187,19 +2218,25 @@
 
         if (src)
           // Leave the bottom control bar (mute, seek, etc.) uncovered.
-          addMediaBlocker(shredditPlayer, "top: 0; left: 0; right: 0; bottom: 48px;", (container) => {
-            const inline = findVideo(container) ?? videoNear(container);
-            openLightbox(
-              [pickVideoSrc(shredditPlayer) || src],
-              0,
-              inline?.currentTime ?? 0,
-            );
-          });
+          addMediaBlocker(
+            shredditPlayer,
+            "inset: 0;",
+            (container) => {
+              const inline = findVideo(container) ?? videoNear(container);
+              openLightbox(
+                [pickVideoSrc(shredditPlayer) || src],
+                0,
+                inline?.currentTime ?? 0,
+              );
+            },
+            VIDEO_CONTROL_STRIP,
+          );
         return;
       }
 
       // --- 3. HANDLE GALLERIES ---
-      const isGallery = post.hasAttribute("gallery");
+      const isGallery =
+        post.hasAttribute("gallery") || post.getAttribute("post-type") === "gallery";
       const permalink = post.getAttribute("permalink");
       if (isGallery && permalink) {
         post.setAttribute("pp-images-handled", "true");
@@ -2213,7 +2250,7 @@
           return result;
         };
 
-        post.querySelectorAll("faceplate-img, img").forEach((imgEl) => {
+        post.querySelectorAll(MEDIA_IMG_SEL).forEach((imgEl) => {
           bindViewable(imgEl, async (e) => {
             swallowEvent(e);
             killNativeLightbox();
@@ -2234,8 +2271,10 @@
       }
 
       // --- 4. HANDLE SINGLE IMAGES ---
+      // Only the post's media: the credit bar's subreddit icon, community-status
+      // emoji and the blurred backdrop copy must keep their normal behavior.
       const images = post.querySelectorAll(
-        "faceplate-img:not([pp-img-handled]), img:not(.pp_imageViewable)",
+        `${MEDIA_IMG_SEL}:not([pp-img-handled]):not(.pp_imageViewable)`,
       );
       if (!images.length) return;
       images.forEach((imgEl) => {
@@ -2258,7 +2297,7 @@
                   .filter(Boolean),
               ),
             ]
-            : [clickedSrc];
+            : [fullResSrc(post, imgEl)];
           openLightbox(imgs, Math.max(0, imgs.indexOf(clickedSrc)), 0, true);
         });
       });
